@@ -1,0 +1,16 @@
+name: track
+channels:
+  - pytorch
+  - defaults
+  - conda-forge
+  - nvidia
+dependencies:
+  - python>=3.10
+  - pip
+  - pip:
+    - opencv-python
+    - scipy
+    - psutil
+    - piexif
+    - xlsxwriter
+    - git+https://github.com/cribbinsb/stuff.git
