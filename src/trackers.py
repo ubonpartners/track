@@ -162,12 +162,7 @@ class cevo_tracker:
                                         fold_attributes=True)
     
         person_dets=[d for d in out_det if self.class_names[d["class"]]=="person"]
-
-        if self.params["dt"]:
-            dt=(time-self.last_track_time)/0.033 # assume initialized with time step at 30fps
-        else:
-            dt=1
-        output_stracks=self.byte_tracker.update(person_dets, dt)
+        output_stracks=self.byte_tracker.update(person_dets, time)
         
         objects=[]
         for s in output_stracks:

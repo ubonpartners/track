@@ -591,7 +591,6 @@ def display_results(results, columns, sort_key):
 
 def run_one_test(params, pbar=None):
     trackset=TrackSet()
-    print(params)
     trackset_gt=TrackSet(params["ds_path"])
     trackset.import_create(trackset_gt,
                            track_min_interval=params["min_interval"],
@@ -608,10 +607,7 @@ def run_one_test(params, pbar=None):
     del trackset
     del trackset_gt
 
-    entry={#"test":params["test_key"],
-           #"dataset":params["ds_key"],
-           #"config":params["config"],
-           "params":params, 
+    entry={"params":params, 
            "result":result}
     return entry
 

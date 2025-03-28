@@ -42,7 +42,7 @@ class STrack(BaseTrack):
                 stracks[i].mean = mean
                 stracks[i].covariance = cov
 
-    def activate(self, kalman_filter, frame_id):
+    def activate(self, kalman_filter, frame_id, time):
         """Start a new tracklet"""
         self.kalman_filter = kalman_filter
         self.track_id = self.next_id()
@@ -54,9 +54,10 @@ class STrack(BaseTrack):
             self.is_activated = True
         # self.is_activated = True
         self.frame_id = frame_id
+        self.time=time
         self.start_frame = frame_id
 
-    def re_activate(self, new_track, frame_id, new_id=False):
+    def re_activate(self, new_track, frame_id, time, new_id=False):
         self.mean, self.covariance = self.kalman_filter.update(
             self.mean, self.covariance, self.tlwh_to_xyah(new_track.tlwh)
         )
@@ -64,11 +65,12 @@ class STrack(BaseTrack):
         self.state = TrackState.Tracked
         self.is_activated = True
         self.frame_id = frame_id
+        self.time=time
         if new_id:
             self.track_id = self.next_id()
         self.score = new_track.score
 
-    def update(self, new_track, frame_id):
+    def update(self, new_track, frame_id, time):
         """
         Update a matched track
         :type new_track: STrack
@@ -77,6 +79,7 @@ class STrack(BaseTrack):
         :return:
         """
         self.frame_id = frame_id
+        self.time = time
         self.tracklet_len += 1
 
         new_tlwh = new_track.tlwh
@@ -143,20 +146,28 @@ class STrack(BaseTrack):
 
 
 class BYTETracker(object):
-    def __init__(self, args, frame_rate=30):
+    def __init__(self, args, frame_rate=15):
         self.tracked_stracks = []  # type: list[STrack]
         self.lost_stracks = []  # type: list[STrack]
         self.removed_stracks = []  # type: list[STrack]
 
         self.frame_id = 0
         self.args = args
-        self.buffer_size = int(frame_rate / 30.0 * args["track_buffer"])
-        self.max_time_lost = self.buffer_size
+        self.max_time_lost_seconds = args["track_buffer_seconds"]
         self.kalman_filter = KalmanFilter()
+        self.last_time = 0
 
-    def update(self, detections, dt=1.0):#output_results, img_info, img_size):
+    def update(self, detections, time):#output_results, img_info, img_size):
+        
+        #reset time 
+        if self.frame_id==0 or time<=self.last_time:
+            self.last_time=time-0.1
+
+        dt=time-self.last_time
         self.frame_id += 1
-        activated_starcks = []
+        self.last_time = time
+
+        activated_stracks = []
         refind_stracks = []
         lost_stracks = []
         removed_stracks = []
@@ -221,10 +232,10 @@ class BYTETracker(object):
             track = strack_pool[itracked]
             det = detections[idet]
             if track.state == TrackState.Tracked:
-                track.update(detections[idet], self.frame_id)
-                activated_starcks.append(track)
+                track.update(detections[idet], self.frame_id, self.last_time)
+                activated_stracks.append(track)
             else:
-                track.re_activate(det, self.frame_id, new_id=False)
+                track.re_activate(det, self.frame_id, self.last_time, new_id=False)
                 refind_stracks.append(track)
 
         ''' Step 3: Second association, with low score detection boxes'''
@@ -244,10 +255,10 @@ class BYTETracker(object):
             track = r_tracked_stracks[itracked]
             det = detections_second[idet]
             if track.state == TrackState.Tracked:
-                track.update(det, self.frame_id)
-                activated_starcks.append(track)
+                track.update(det, self.frame_id, self.last_time)
+                activated_stracks.append(track)
             else:
-                track.re_activate(det, self.frame_id, new_id=False)
+                track.re_activate(det, self.frame_id, self.last_time, new_id=False)
                 refind_stracks.append(track)
 
         for it in u_track:
@@ -261,10 +272,10 @@ class BYTETracker(object):
         dists = matching.iou_distance(unconfirmed, detections)
         if self.args["fuse_score"]:
             dists = matching.fuse_score(dists, detections)
-        matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=0.7)
+        matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=self.args["match_threshu"])
         for itracked, idet in matches:
-            unconfirmed[itracked].update(detections[idet], self.frame_id)
-            activated_starcks.append(unconfirmed[itracked])
+            unconfirmed[itracked].update(detections[idet], self.frame_id, self.last_time)
+            activated_stracks.append(unconfirmed[itracked])
         for it in u_unconfirmed:
             track = unconfirmed[it]
             track.mark_removed()
@@ -275,18 +286,19 @@ class BYTETracker(object):
             track = detections[inew]
             if track.score < self.args["new_track_thresh"]:
                 continue
-            track.activate(self.kalman_filter, self.frame_id)
-            activated_starcks.append(track)
+            track.activate(self.kalman_filter, self.frame_id, self.last_time)
+            activated_stracks.append(track)
         """ Step 5: Update state"""
         for track in self.lost_stracks:
-            if self.frame_id - track.end_frame > self.max_time_lost:
+            #if self.frame_id - track.end_frame > self.max_time_lost:
+            if self.last_time-track.time > self.max_time_lost_seconds:
                 track.mark_removed()
                 removed_stracks.append(track)
 
         # print('Ramained match {} s'.format(t4-t3))
 
         self.tracked_stracks = [t for t in self.tracked_stracks if t.state == TrackState.Tracked]
-        self.tracked_stracks = joint_stracks(self.tracked_stracks, activated_starcks)
+        self.tracked_stracks = joint_stracks(self.tracked_stracks, activated_stracks)
         self.tracked_stracks = joint_stracks(self.tracked_stracks, refind_stracks)
         self.lost_stracks = sub_stracks(self.lost_stracks, self.tracked_stracks)
         self.lost_stracks.extend(lost_stracks)
