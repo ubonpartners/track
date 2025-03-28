@@ -26,13 +26,13 @@ class Object:
                  pose=None, pose_conf=None, pose_pos=None,
                  attr=None, time=None, detection=None):
         if detection is not None:
-            box=detection["box"]
+            box=copy.copy(detection["box"])
             cl=detection["class"]
             conf=detection["confidence"]
             if "pose_points" in detection:
-                pose=detection["pose_points"]
+                pose=copy.copy(detection["pose_points"])
             if "attrs" in detection:
-                attr=detection["attrs"]
+                attr=copy.copy(detection["attrs"])
 
         self.box=box
         self.num_detections=0
@@ -46,7 +46,7 @@ class Object:
                 self.pose_pos[i][0]=pose[i*3+0]
                 self.pose_pos[i][1]=pose[i*3+1]
                 self.pose_conf[i]=pose[i*3+2]
-                if self.pose_conf[i]>0.05:
+                if False and self.pose_conf[i]>0.05:
                     self.box[0]=min(self.box[0], self.pose_pos[i][0])
                     self.box[1]=min(self.box[1], self.pose_pos[i][1])
                     self.box[2]=max(self.box[2], self.pose_pos[i][0])

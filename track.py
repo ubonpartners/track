@@ -28,58 +28,16 @@ def do_track(video, model):
         #events=display.get_events(10)
         time+=(1.0/fps)
     
-def yolo_track(model, t):
+def test_track(t, config_file):
     trackset_gt=ts.TrackSet(t)
     trackset=ts.TrackSet()
-    if False:
-        params={
-            "match_iou":0.9,
-            "track_high_thresh":0.42,
-            "track_low_thresh":0.1,
-            "new_track_thresh":0.25,
-            "match_thresh":0.875,
-            "nms_iou":0.35
-        }
-        trackset.import_create("ultralytics",
-                            model,
-                            trackset_gt,
-                            track_min_interval=0.159,
-                            config="/mldata/config/track/botsort.yaml",
-                            params=params)
-    else:
-        params={
-            #"immediate_confirm_thresh":0.9,
-            #"track_high_thresh":0.42,
-            #"track_low_thresh":0.1,
-            #"new_track_thresh":0.25,
-            #"match_thresh_high":0.4,
-            #"match_thresh_low":0.2,
-            #"kf_weight":1.0,
-            #"kp_weight":1.0
-            #"nms_iou":0.35,
-            #"track_buffer":30
 
-            "match_thresh_high": 0.4,
-            "match_thresh_low": 0.25,
-            "new_track_thresh": 0.485,
-            "pose_conf": 0.018,
-            "kp_weight": 2.0,
-            "kf_weight": 2.0,
-            "immediate_confirm_thresh": 0.895,
-            "track_high_thresh": 0.44,
-            "track_low_thresh": 0.3,
-            "nms_iou": 0.31
-        }
-        trackset.import_create("nvof",
-                            model,
-                            trackset_gt,
-                            track_min_interval=0.159,
-                            config="/mldata/config/track/nvof.yaml",
-                            params=params,
-                            debug=False)
+    trackset.import_create(trackset_gt,
+                           track_min_interval=0.159,
+                           debug=False,
+                           config_file=config_file)
         
-    match_iou=params["match_iou"] if "match_iou" in params else 0.5
-    metrics, frame_events=ts.compute_metrics(trackset_gt, trackset, frame_metrics=True, match_iou=match_iou)
+    metrics, frame_events=ts.compute_metrics(trackset_gt, trackset, frame_metrics=True)
     print(metrics)
     show_trackset(trackset=trackset, trackset_gt=trackset_gt, frame_events=frame_events)
 
@@ -175,7 +133,7 @@ def show_trackset(trackset=None, trackset_gt=None, frame_events=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='view.py')
-    parser.add_argument('--model', type=str, default='/mldata/weights/yolo11l-attributes-131224.pt', help='model to use')
+    parser.add_argument('--model', type=str, default='/mldata/weights/yolo11l-dpa-131224.pt', help='model to use')
     parser.add_argument('--video', type=str, default='/mldata/video/mall_escalators.264')
     parser.add_argument('--trackset', type=str, default='/mldata/downloaded_datasets/other/MOT20/train/MOT20-01/seqinfo.ini')
     parser.add_argument('--draw', action='store_true', help='overlay graphics')
@@ -184,8 +142,9 @@ if __name__ == '__main__':
     parser.add_argument('--mot', action='store_true', help='make MOT sequences')
     parser.add_argument('--test', type=str, default=None, help='test yaml file')
     parser.add_argument('--search', type=str, default=None, help='search config yaml file')
-    parser.add_argument('--yolo', action='store_true', help='test ultralytics tracker')
-
+    parser.add_argument('--track', action='store_true', help='test tracker')
+    parser.add_argument('--tracker', type=str, default="ultralytics", help='tracker to use, ultralytics, nvof or cevo')
+    parser.add_argument('--config', type=str, default="/mldata/config/track/bytetrack_nofuse.yaml", help="config")
     opt = parser.parse_args()
     if opt.caltech:
         ts.convert_caltech_pedestrian()
@@ -193,8 +152,8 @@ if __name__ == '__main__':
     if opt.mot:
         ts.convert_mot()
         exit()
-    if opt.yolo:
-        yolo_track(opt.model, opt.trackset)
+    if opt.track:
+        test_track(opt.trackset, opt.config)
         exit()
     if opt.search is not None:
         ts.search_track(opt.search)

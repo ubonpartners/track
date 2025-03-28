@@ -173,30 +173,39 @@ class TrackSet:
             self.frame_times.append(f["frame_time"])
 
     def import_create(self,
-                      tracker_type,
-                      model,
                       video,
                       track_min_interval=0.05,
-                      config="botsort.yaml",
                       display="Tracking...",
                       max_duration=10000,
                       pbar=None,
+                      config_file=None,
                       params=None,
                       debug=False):
 
         assert len(self.frame_times)==0
+        
+        param_dict={}
+        if config_file is not None:
+            config=stuff.load_dictionary(config_file)
+            for c in config:
+                param_dict[c]=config[c]
+        if params is not None:
+            for p in params:
+                param_dict[p]=params[p]
 
-        if tracker_type=="ultralytics":
-            tracker=trackers.ultralytics_tracker(model,
-                                                track_min_interval=track_min_interval,
-                                                config_file=config,
-                                                params=params)
+        assert "tracker_type" in param_dict, "tracker type must be specified"
+        
+        if not "model" in param_dict:
+            param_dict["model"]="/mldata/weights/yolo11l-dpa-131224.pt"
+            print(f"WARNING: Model not specified in config; using default model {param_dict['model']}")
+
+        tracker_type=param_dict["tracker_type"]
+        if tracker_type=="bytetrack" or tracker_type=="botsort":
+            tracker=trackers.ultralytics_tracker(param_dict, track_min_interval=track_min_interval)
         elif tracker_type=="nvof":
-            
-            tracker=trackers.nvof_tracker(model,
-                                          track_min_interval=track_min_interval,
-                                          config_file=config,
-                                          params=params)
+            tracker=trackers.nvof_tracker(param_dict, track_min_interval=track_min_interval)
+        elif tracker_type=="cevo":
+            tracker=trackers.cevo_tracker(param_dict, track_min_interval=track_min_interval)
         else:
             print(f"Unkown tracker type {tracker_type}")
             exit()
@@ -253,6 +262,10 @@ class TrackSet:
 
             objects=tracker.track_frame(frame, t)
 
+            #if t>6.4 and t<7.5:
+            #    if objects is not None:
+            #        for o in objects:
+            #            print(f"{t} {o.track_id} {o.box}")
             if debug:
                 display.clear()
                 if objects is not None:
@@ -428,8 +441,12 @@ def compute_metrics(gt, test, max_duration=1000, frame_metrics=False, match_iou=
         frame_index=0
         frame_events=[]
         while t<duration:
-            frame=acc.mot_events.loc[frame_index]
-            frame_events.append({"frame_time":t, "events":frame.to_dict(orient='index')})
+            if frame_index in acc.mot_events.index.get_level_values(0).unique():
+                frame=acc.mot_events.xs(frame_index, level=0) #acc.mot_events.loc[frame_index]
+                frame_events.append({"frame_time":t, "events":frame.to_dict(orient='index')})
+            else:
+                # no events for this frame
+                frame_events.append({"frame_time":t, "events":{}})
             t+=time_incr
             frame_index+=1
     del mh
@@ -457,7 +474,7 @@ def get_avg_scores(results, test, param, group=None):
     t=0.0
     n=0
     for r in results:
-        if r["test"]==test:
+        if r["params"]["test_key"]==test:
             if group is None or ("group" in r and r["group"]==group):
                 if param in r["result"]:
                     if isinstance(r["result"][param], int) or isinstance(r["result"][param], float):
@@ -472,8 +489,8 @@ def get_avg_scores(results, test, param, group=None):
 def display_results(results, columns, sort_key):
     out_sort=[]
     out_txt=[]
-    datasets=[result["dataset"] for result in results]
-    tests=[result["test"] for result in results]
+    datasets=[result["params"]["ds_key"] for result in results]
+    tests=[result["params"]["test_key"] for result in results]
     groups=[result["group"] if "group" in result else None for result in results]
     groups.append(None)
     datasets=list(set(datasets))
@@ -491,10 +508,12 @@ def display_results(results, columns, sort_key):
             for t in tests:
                 filtered=[]
                 for r in results:
-                    if r["test"]==t:
+                    if r["params"]["test_key"]==t:
                         if g is None or ("group" in r and r["group"]==g):
                             filtered.append(r)
-                e={"test":t, "dataset":name, "result":{}}
+                e={"result":{}, "params":{}}
+                e["params"]["ds_key"]=name
+                e["params"]["test_key"]=t
                 er=e["result"]
                 for p in params:
                     er[p]=sum([r["result"][p] for r in filtered])
@@ -519,13 +538,17 @@ def display_results(results, columns, sort_key):
                 continue
             n=f"__mean({g})"
             for t in tests:
-                e={"test":t, "dataset":n, "result":{}}
+                e={"result":{}, "params":{}}
+                e["params"]["ds_key"]=n
+                e["params"]["test_key"]=t
                 for p in params:
                     e["result"][p]=get_avg_scores(results, t, p, g)
                 results2.append(e)
             datasets.append(n)
         for t in tests:
-            e={"test":t, "dataset":"_arithmean", "result":{}}
+            e={"result":{}, "params":{}}
+            e["params"]["ds_key"]="_arithmean"
+            e["params"]["test_key"]=t
             for p in params:
                 e["result"][p]=get_avg_scores(results, t, p)
             results2.append(e)
@@ -534,10 +557,10 @@ def display_results(results, columns, sort_key):
     datasets.sort()
 
     for result in results+results2:
-        ds_index=datasets.index(result["dataset"])
+        ds_index=datasets.index(result["params"]["ds_key"])
         rs,rh=result_string(result["result"], columns)
         rh=" "*63+rh
-        rs=f"{result["dataset"]:30s} {result["test"]:32}"+rs
+        rs=f"{result["params"]["ds_key"]:30s} {result["params"]["test_key"]:32}"+rs
         out_txt.append(rs)
         out_sort.append(result["result"][sort_key]+ds_index*1000)
     print(rh)
@@ -557,8 +580,8 @@ def display_results(results, columns, sort_key):
         cs=c.split(",")
         worksheet.write(0, i+2,  cs[1])
     for i,result in enumerate(results+results2):
-        worksheet.write(i+1, 0, result["dataset"])
-        worksheet.write(i+1, 1, result["test"])
+        worksheet.write(i+1, 0, result["params"]["ds_key"])
+        worksheet.write(i+1, 1, result["params"]["test_key"])
         for j,c in enumerate(columns):
             cs=c.split(",")
             worksheet.write(i+1, j+2,  round(result["result"][cs[0]],3))
@@ -568,28 +591,27 @@ def display_results(results, columns, sort_key):
 
 def run_one_test(params, pbar=None):
     trackset=TrackSet()
+    print(params)
     trackset_gt=TrackSet(params["ds_path"])
-    trackset.import_create(params["test_type"],
-                            params["test_model"],
-                            trackset_gt,
-                            track_min_interval=params["min_interval"],
-                            display=params["display"],
-                            max_duration=params["max_duration"],
-                            config=params["config"],
-                            params=params["params"],
-                            pbar=pbar)
+    trackset.import_create(trackset_gt,
+                           track_min_interval=params["min_interval"],
+                           display=params["display"],
+                           max_duration=params["max_duration"],
+                           config_file=params["config"],
+                           params=params,
+                           pbar=pbar)
 
     match_iou=0.5
-    if params is not None and "params" in params and params["params"] is not None and "match_iou" in params["params"]:
-        match_iou=params["params"]["match_iou"]
+    if params is not None and "match_iou" in params:
+        match_iou=params["match_iou"]
     result=compute_metrics(trackset_gt, trackset, max_duration=params["max_duration"], match_iou=match_iou)
     del trackset
     del trackset_gt
 
-    entry={"test":params["test_key"],
-           "dataset":params["ds_key"],
-           "config":params["config"],
-           "params":params["params"], 
+    entry={#"test":params["test_key"],
+           #"dataset":params["ds_key"],
+           #"config":params["config"],
+           "params":params, 
            "result":result}
     return entry
 
@@ -651,13 +673,7 @@ def test_track(config, split=None):
         for test_key in tests:
             result=None
             for r in cached_results:
-                if r["test"]==test_key and r["dataset"]==ds_key:
-                    c1=r["config"] if "config" in r else None
-                    p1=r["params"] if "params" in r else None
-                    c2=tests[test_key]["config"] if "config" in tests[test_key] else None
-                    p2=tests[test_key]["params"] if "params" in tests[test_key] else None
-                    if c1!=c2 or p1!=p2:
-                        continue
+                if r["params"]["test_key"]==test_key and r["params"]["ds_key"]==ds_key:
                     if "regenerate" in datasets[ds_key] and datasets[ds_key]["regenerate"]==True:
                         continue
                     if "regenerate" in tests[test_key] and tests[test_key]["regenerate"]==True:
@@ -666,19 +682,27 @@ def test_track(config, split=None):
             if result is None:
                 
                 test=tests[test_key]
-                max_duration=1000
-                if "max_duration" in test:
-                    max_duration=test["max_duration"]
-                params={"ds_path":dataset["path"],
-                        "test_type":test["type"],
-                        "test_model":test["model"],
-                        "min_interval":test["min_interval"],
-                        "display":f"{len(tests_to_run):02d}: "+ds_key+"/"+test_key,
-                        "max_duration":max_duration,
-                        "config":test["config"],
-                        "ds_key":ds_key,
-                        "params":test["params"] if "params" in test else None,
-                        "test_key":test_key}
+                params={}
+                for p in test:
+                    params[p]=test[p]
+                if not "max_duration" in params:
+                    params["max_duration"]=1000
+
+                params["ds_path"]=dataset["path"]
+                params["display"]=f"{len(tests_to_run):02d}: "+ds_key+"/"+test_key
+                params["ds_key"]=ds_key
+                params["test_key"]=test_key
+
+                #params={"ds_path":dataset["path"],
+                #        "test_type":test["type"],
+                #        "test_model":test["model"],
+                #        "min_interval":test["min_interval"],
+                #        "display":f"{len(tests_to_run):02d}: "+ds_key+"/"+test_key,
+                #        "max_duration":max_duration,
+                #        "config":test["config"],
+                #        "ds_key":ds_key,
+                #        "params":test["params"] if "params" in test else None,
+                #        "test_key":test_key}
                 
                 tests_to_run.append(params)
             else:
@@ -716,16 +740,13 @@ def test_track(config, split=None):
                 exit()
 
             cache=True
-            if "no_cache" in config["datasets"][entry["dataset"]]:
-                if config["datasets"][entry["dataset"]]["no_cache"]==True:
+            ds_key=entry["params"]["ds_key"]
+            if "no_cache" in config["datasets"][ds_key]:
+                if config["datasets"][ds_key]["no_cache"]==True:
                     cache=False
             if cache is True and resultfile is not None:
                 cached_results.append(entry)
-                if os.path.isfile(resultfile+".tmp"):
-                    stuff.rm(resultfile+".tmp")
-                with open(resultfile+".tmp", 'wb') as handle:
-                    pickle.dump(cached_results, handle, protocol=pickle.HIGHEST_PROTOCOL)
-                stuff.rename(resultfile+".tmp", resultfile) # atomic, replaces existing file
+                stuff.save_atomic_pickle(cached_results, resultfile)
             output_results.append(entry)
 
         for _ in range(num_workers):
@@ -735,8 +756,8 @@ def test_track(config, split=None):
             p.join()
     
     for o in output_results:
-        if "group" in config["datasets"][o["dataset"]]:
-            o["group"]=config["datasets"][o["dataset"]]["group"]
+        if "group" in config["datasets"][o["params"]["ds_key"]]:
+            o["group"]=config["datasets"][o["params"]["ds_key"]]["group"]
 
     results2=display_results(output_results, columns, config["sort_key"])
     elapsed=time.time()-start_time
@@ -751,17 +772,15 @@ def search_test(config, params, param_vec, param_min, param_max, all_results, sp
     result_test_opt_key=config["result_test_opt_key"]
     result_dataset_opt_key=config["result_dataset_opt_key"]
     result_dataset_opt_param=config["result_dataset_opt_param"]
-
-    if not "params" in config["tests"][result_test_opt_key]:
-        config["tests"][result_test_opt_key]["params"]={}    
+  
     for i,p in enumerate(params):
-        config["tests"][result_test_opt_key]["params"][p]=param_vec_clipped[i]
+        config["tests"][result_test_opt_key][p]=param_vec_clipped[i]
 
     results=test_track(config, split=split)
     val=None
     full_result=None
     for r in results:
-        if r["test"]==result_test_opt_key and r["dataset"]==result_dataset_opt_key:
+        if r["params"]["test_key"]==result_test_opt_key and r["params"]["ds_key"]==result_dataset_opt_key:
             val=r["result"][result_dataset_opt_param]
             full_result=r["result"]
     if split=="train":
@@ -801,7 +820,7 @@ def search_track(yaml_file):
         if "initial" in config["search_params"][p]:
             param_initial[i]=float(config["search_params"][p]["initial"])
             search_log(logfile, f"Setting parameter {p} initial value to {param_initial[i]} from search config")
-        assert param_initial[i] is not None
+        assert param_initial[i] is not None, f"Parameter {p} missing intial value"
         param_step.append(float(config["search_params"][p]["step"]))
         param_min.append(float(config["search_params"][p]["min"]))
         param_max.append(float(config["search_params"][p]["max"]))
@@ -812,6 +831,12 @@ def search_track(yaml_file):
     vec_best=copy.copy(param_initial)
     val_best=val
     step_multiplier=4
+    final_multiplier=0.5
+    if "initial_mult" in config:
+        step_multiplier=config["initial_mult"]
+    if "final_mult" in config:
+        final_multiplier=config["final_mult"]
+    search_log(logfile, f"Starting step multiplier set to {step_multiplier}")
     iter_count=0
     param_index=0
     last_improvement_iter=0
@@ -873,7 +898,7 @@ def search_track(yaml_file):
             step_multiplier*=0.5
             last_improvement_iter=iter_count
             search_log(logfile, f"Iter {iter_count:04d} ---- reducing multiplier to {step_multiplier}----")
-            if step_multiplier<0.5:
+            if step_multiplier<final_multiplier:
                 print("All done!")
                 exit()
 

@@ -4,45 +4,27 @@ import os
 import tempfile
 import yaml
 import stuff
+import src.bytetrack.byte_tracker as bt
+import  src.bytetrack.basetrack as basetrack
 
 class ultralytics_tracker:
 
-    def __init__(self, model, track_min_interval, config_file=None, params=None):
+    def __init__(self, params, track_min_interval):
         self.tmp_file=None
-        self.yolo = ultralytics.YOLO(model)
+        self.yolo = ultralytics.YOLO(params["model"])
         self.track_min_interval=track_min_interval
         self.class_names=[self.yolo.names[i] for i in range(len(self.yolo.names))]
         self.last_track_time=-1000
         self.nms_iou=0.5
-        self.config={}
-        self.config_file=config_file
         self.params=params
 
-        #print("model",model)
-        #print("track_min_interval",track_min_interval)
-        #print("config",config_file)
-        #print("Params",params)
-
-        if os.path.exists(config_file) and params is not None:
-            self.config=stuff.load_dictionary(config_file)
-            fd, self.tmp_file=tempfile.mkstemp(dir="/tmp", prefix="yolo_config", suffix=".yaml")
-            os.close(fd)
-            for p in params:
-                self.config[p]=params[p]
-            with open(self.tmp_file, 'w') as outfile:
-                yaml.dump(self.config, outfile, default_flow_style=False)
-            self.config_file=self.tmp_file
-        elif params is not None:
-            print("Params only works if a config file specified")
-            exit()
-
-        if "nms_iou" in self.config:
-            self.nms_iou=self.config["nms_iou"]
+        fd, self.tmp_config_file=tempfile.mkstemp(dir="/tmp", prefix="yolo_config", suffix=".yaml")
+        os.close(fd)
+        with open(self.tmp_config_file, 'w') as outfile:
+            yaml.dump(self.params, outfile, default_flow_style=False)
 
     def __del__(self):
-        if hasattr(self, 'tmp_file'):
-            if self.tmp_file is not None:
-                os.remove(self.tmp_file)
+        os.remove(self.tmp_config_file)
 
     def track_frame(self, img, t):
         do_track=t-self.last_track_time>=self.track_min_interval
@@ -54,49 +36,41 @@ class ultralytics_tracker:
                                       classes=[0],
                                       verbose=False,
                                       rect=True,
-                                      conf=0.05,
-                                      iou=self.nms_iou,
+                                      conf=self.params["track_low_thresh"],
+                                      iou=self.params["nms_iou"],
                                       half=True,
                                       max_det=600,
-                                      tracker=self.config_file)
-
+                                      tracker=self.tmp_config_file)
+            
             out_det=stuff.yolo_results_to_dets(results[0],
-                                            det_thr=0.05,
+                                            det_thr=self.params["track_low_thresh"],
                                             yolo_class_names=self.class_names,
                                             class_names=self.class_names,
                                             face_kp=True,
                                             pose_kp=True,
                                             params=self.params)
+            
+            person_dets=[d for d in out_det if self.class_names[d["class"]]=="person"]
             objects=[]
-            for d in out_det:
-                if d["class"]==0:
-                    o=tu.Object(detection=d, time=t)
-                    if d["id"] is not None:
-                        o.track_id=d["id"]
-                        objects.append(o)
+            for d in person_dets:
+                o=tu.Object(detection=d, time=t)
+                if d["id"] is not None:
+
+                    o.track_id=d["id"]
+                    objects.append(o)
 
             self.last_track_time=t
         return objects
     
 class nvof_tracker:
     
-    def __init__(self, model, track_min_interval, config_file=None, params=None):
-        self.yolo = ultralytics.YOLO(model)
+    def __init__(self, params, track_min_interval):
+        self.yolo = ultralytics.YOLO(params["model"])
         self.track_min_interval=track_min_interval
         self.class_names=[self.yolo.names[i] for i in range(len(self.yolo.names))]
         self.last_track_time=-1000
-        
-        if config_file is not None:
-            self.config=stuff.load_dictionary(config_file)
-            self.params={}
-            for c in self.config:
-                self.params[c]=self.config[c]
-        if params is not None:
-            for p in params:
-                self.params[p]=params[p]
         self.motiontracker=tu.MotionTracker(params=self.params)
         self.objecttracker=tu.ObjectTracker(params=self.params)
-
         self.attributes=[]
         for c in self.class_names:
             if c.startswith("person_"):
@@ -147,4 +121,72 @@ class nvof_tracker:
             ret=self.objecttracker.update_predict(self.motiontracker, detection_roi, time)
             return ret
         return None
+    
+class cevo_tracker:
+    
+    def __init__(self, params, track_min_interval):
+        
+        self.params=params
+        self.yolo = ultralytics.YOLO(self.params["model"])
+        self.track_min_interval=track_min_interval
+        self.class_names=[self.yolo.names[i] for i in range(len(self.yolo.names))]
+        self.byte_tracker=bt.BYTETracker(self.params)
+        self.last_track_time=-1000
+        self.attributes=[]
+        for c in self.class_names:
+            if c.startswith("person_"):
+                self.attributes.append("person:"+c[len("person_"):])
+
+    def track_frame(self, frame, time):
+        do_track=time-self.last_track_time>=self.track_min_interval
+        if do_track==False:
+            return None
+
+        result=self.yolo(frame,
+                         classes=[0],
+                         imgsz=640,
+                         half=True,
+                         conf=self.params["track_low_thresh"],
+                         iou=self.params["nms_iou"],
+                         max_det=600,
+                         verbose=False,
+                         rect=True)
+
+        out_det=stuff.yolo_results_to_dets(result[0],
+                                        det_thr=self.params["track_low_thresh"],
+                                        yolo_class_names=self.class_names,
+                                        class_names=self.class_names,
+                                        attributes=self.attributes,
+                                        face_kp=True,
+                                        pose_kp=True,
+                                        fold_attributes=True)
+    
+        person_dets=[d for d in out_det if self.class_names[d["class"]]=="person"]
+
+        if self.params["dt"]:
+            dt=(time-self.last_track_time)/0.033 # assume initialized with time step at 30fps
+        else:
+            dt=1
+        output_stracks=self.byte_tracker.update(person_dets, dt)
+        
+        objects=[]
+        for s in output_stracks:
+            #b=s.tlbr
+            b = s.mean[:4].copy()
+            b[2] *= b[3]
+
+            box=[stuff.clip01(b[0]-0.5*b[2]), 
+                 stuff.clip01(b[1]-0.5*b[3]), 
+                 stuff.clip01(b[0]+0.5*b[2]), 
+                 stuff.clip01(b[1]+0.5*b[3])]
+            d={"box":box, "class":0, "confidence":1.0}
+            o=tu.Object(detection=d, time=time)
+            o.track_id=s.track_id
+            objects.append(o)
+       
+        self.last_track_time=time    
+        return objects
+
+
+
 

@@ -13,4 +13,5 @@ dependencies:
     - psutil
     - piexif
     - xlsxwriter
-    - git+https://github.com/cribbinsb/stuff.git
+    - git+https://github.com/ubonpartners/stuff.git
+    - git+https://github.com/ubonpartners/ultralytics.git@multilabel
