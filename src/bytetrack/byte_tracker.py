@@ -157,7 +157,7 @@ class BYTETracker(object):
         self.kalman_filter = KalmanFilter()
         self.last_time = 0
 
-    def update(self, detections, time):#output_results, img_info, img_size):
+    def update(self, bboxes, scores, time):#output_results, img_info, img_size):
         
         #reset time 
         if self.frame_id==0 or time<=self.last_time:
@@ -171,12 +171,7 @@ class BYTETracker(object):
         refind_stracks = []
         lost_stracks = []
         removed_stracks = []
-
-        scores=[]
-        bboxes=[]
-        for d in detections:
-            bboxes.append(d["box"])
-            scores.append(d["confidence"])
+        
         scores=np.array(scores)
         bboxes=np.array(bboxes)
 

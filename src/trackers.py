@@ -4,6 +4,7 @@ import os
 import tempfile
 import yaml
 import stuff
+import copy
 import src.bytetrack.byte_tracker as bt
 import  src.bytetrack.basetrack as basetrack
 
@@ -15,9 +16,8 @@ class ultralytics_tracker:
         self.track_min_interval=track_min_interval
         self.class_names=[self.yolo.names[i] for i in range(len(self.yolo.names))]
         self.last_track_time=-1000
-        self.nms_iou=0.5
         self.params=params
-
+        self.person_class_index=self.class_names.index("person")
         fd, self.tmp_config_file=tempfile.mkstemp(dir="/tmp", prefix="yolo_config", suffix=".yaml")
         os.close(fd)
         with open(self.tmp_config_file, 'w') as outfile:
@@ -33,7 +33,7 @@ class ultralytics_tracker:
             results = self.yolo.track(img,
                                       imgsz=640,
                                       persist=True,
-                                      classes=[0],
+                                      classes=[self.person_class_index],
                                       verbose=False,
                                       rect=True,
                                       conf=self.params["track_low_thresh"],
@@ -50,7 +50,7 @@ class ultralytics_tracker:
                                             pose_kp=True,
                                             params=self.params)
             
-            person_dets=[d for d in out_det if self.class_names[d["class"]]=="person"]
+            person_dets=[d for d in out_det if d["class"]==self.person_class_index]
             objects=[]
             for d in person_dets:
                 o=tu.Object(detection=d, time=t)
@@ -72,6 +72,7 @@ class nvof_tracker:
         self.motiontracker=tu.MotionTracker(params=self.params)
         self.objecttracker=tu.ObjectTracker(params=self.params)
         self.attributes=[]
+        self.person_class_index=self.class_names.index("person")
         for c in self.class_names:
             if c.startswith("person_"):
                 self.attributes.append("person:"+c[len("person_"):])
@@ -113,7 +114,7 @@ class nvof_tracker:
                                             fold_attributes=True)
             
             for d in out_det:
-                if d["class"]==0:
+                if d["class"]==self.person_class_index:
                     o=tu.Object(detection=d, time=time)
                     self.objecttracker.add_object(roi, o)
             self.last_track_time=time
@@ -133,6 +134,7 @@ class cevo_tracker:
         self.byte_tracker=bt.BYTETracker(self.params)
         self.last_track_time=-1000
         self.attributes=[]
+        self.person_class_index=self.class_names.index("person")
         for c in self.class_names:
             if c.startswith("person_"):
                 self.attributes.append("person:"+c[len("person_"):])
@@ -143,7 +145,7 @@ class cevo_tracker:
             return None
 
         result=self.yolo(frame,
-                         classes=[0],
+                         classes=[self.person_class_index],
                          imgsz=640,
                          half=True,
                          conf=self.params["track_low_thresh"],
@@ -151,6 +153,9 @@ class cevo_tracker:
                          max_det=600,
                          verbose=False,
                          rect=True)
+        
+        h=result[0].orig_shape[0]
+        w=result[0].orig_shape[1]
 
         out_det=stuff.yolo_results_to_dets(result[0],
                                         det_thr=self.params["track_low_thresh"],
@@ -161,20 +166,31 @@ class cevo_tracker:
                                         pose_kp=True,
                                         fold_attributes=True)
     
-        person_dets=[d for d in out_det if self.class_names[d["class"]]=="person"]
-        output_stracks=self.byte_tracker.update(person_dets, time)
+        person_dets=[d for d in out_det if d["class"]==self.person_class_index]
+
+        scores=[]
+        bboxes=[]
+        for d in person_dets:
+            box=copy.copy(d["box"])
+            box[0]*=w
+            box[1]*=h
+            box[2]*=w
+            box[3]*=h
+            bboxes.append(box)
+            scores.append(d["confidence"])
+
+        output_stracks=self.byte_tracker.update(bboxes, scores, time)
         
         objects=[]
         for s in output_stracks:
-            #b=s.tlbr
             b = s.mean[:4].copy()
             b[2] *= b[3]
 
-            box=[stuff.clip01(b[0]-0.5*b[2]), 
-                 stuff.clip01(b[1]-0.5*b[3]), 
-                 stuff.clip01(b[0]+0.5*b[2]), 
-                 stuff.clip01(b[1]+0.5*b[3])]
-            d={"box":box, "class":0, "confidence":1.0}
+            box=[stuff.clip01((b[0]-0.5*b[2])/w), 
+                 stuff.clip01((b[1]-0.5*b[3])/h), 
+                 stuff.clip01((b[0]+0.5*b[2])/w), 
+                 stuff.clip01((b[1]+0.5*b[3])/h)]
+            d={"box":box, "class":self.person_class_index, "confidence":1.0}
             o=tu.Object(detection=d, time=time)
             o.track_id=s.track_id
             objects.append(o)

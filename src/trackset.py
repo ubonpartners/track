@@ -365,6 +365,7 @@ def mot_obj(obj, w, h):
     return [obj.track_id, ol, ot, ow, oh]
 
 def compute_metrics(gt, test, max_duration=1000, frame_metrics=False, match_iou=0.5):
+    assert match_iou<0.7 and match_iou>0.3, f"stupid match_iou {match_iou}"
     duration=min(max_duration, max(gt.duration_seconds(), test.duration_seconds()))
     t=0
     img_w=gt.metadata["width"]
