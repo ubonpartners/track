@@ -157,7 +157,7 @@ class BYTETracker(object):
         self.kalman_filter = KalmanFilter()
         self.last_time = 0
 
-    def update(self, bboxes, scores, time):#output_results, img_info, img_size):
+    def update(self, bboxes, scores, time):
         
         #reset time 
         if self.frame_id==0 or time<=self.last_time:
@@ -214,6 +214,7 @@ class BYTETracker(object):
 
         ''' Step 2: First association, with high score detection boxes'''
         strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
+        
         # Predict the current location with KF
         STrack.multi_predict(strack_pool, dt)
         dists = matching.iou_distance(strack_pool, detections)
@@ -243,8 +244,7 @@ class BYTETracker(object):
             detections_second = []
         r_tracked_stracks = [strack_pool[i] for i in u_track if strack_pool[i].state == TrackState.Tracked]
         dists = matching.iou_distance(r_tracked_stracks, detections_second)
-        first = [track.tlbr for track in r_tracked_stracks]
-        second= [track.tlbr for track in detections_second]
+
         matches, u_track, u_detection_second = matching.linear_assignment(dists, thresh=self.args["match_thresh2"])
         for itracked, idet in matches:
             track = r_tracked_stracks[itracked]

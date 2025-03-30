@@ -1,0 +1,409 @@
+
+import os
+import numpy as np
+import motmetrics as mm
+import pickle
+import time
+from tqdm.auto import tqdm
+import traceback
+import stuff
+import xlsxwriter
+import datetime
+from multiprocessing import Process, Queue
+import src.trackset as ts
+
+def mot_obj(obj, w, h):
+    ol=int(obj.box[0]*w)
+    ot=int(obj.box[1]*h)
+    ow=int((obj.box[2]-obj.box[0])*w)
+    oh=int((obj.box[3]-obj.box[1])*h)
+    return [obj.track_id, ol, ot, ow, oh]
+
+def compute_metrics(gt, test, max_duration=1000, frame_metrics=False, match_iou=0.5, cl=["person"]):
+    assert match_iou<0.7 and match_iou>0.3, f"stupid match_iou {match_iou}"
+    duration=min(max_duration, max(gt.duration_seconds(), test.duration_seconds()))
+    t=0
+    img_w=gt.metadata["width"]
+    img_h=gt.metadata["height"]
+    cl=gt.metadata["classes"]
+
+    # run evaluation at the framerate of the original video
+    time_incr=1.0/gt.metadata["frame_rate"]
+    acc = mm.MOTAccumulator(auto_id=True)
+    while t<duration:
+        # get GT and Test objects at time
+        # this interpolates objects if there is no frame at that time
+        gt_obj=gt.objects_at_time(t)
+        gt_obj=[o for o in gt_obj if gt.metadata["classes"][o.cl] in cl]
+        test_obj=test.objects_at_time(t)
+        test_obj=[o for o in test_obj if test.metadata["classes"][o.cl] in cl]
+        if test_obj is None or gt_obj is None:
+            break
+        gt_dets=[mot_obj(g, img_w, img_h) for g in gt_obj]
+        t_dets=[mot_obj(t, img_w, img_h) for t in test_obj]
+        gt_dets=np.array(gt_dets)
+        t_dets=np.array(t_dets)
+        C=[[]]
+        if len(gt_dets)>0 and len(t_dets)>0:
+            C = mm.distances.iou_matrix(gt_dets[:,1:], t_dets[:,1:], \
+                                max_iou=match_iou) # format: gt, t
+
+        acc.update(gt_dets[:,0].astype('int').tolist() if len(gt_dets)>0 else [], \
+                   t_dets[:,0].astype('int').tolist() if len(t_dets)>0 else [], C)
+        t+=time_incr
+
+    mh = mm.metrics.create()
+
+    summary = mh.compute(acc, metrics=['num_frames', 'idf1', 'idp', 'idr', \
+                                    'recall', 'precision', 'num_objects', \
+                                    'mostly_tracked', 'partially_tracked', \
+                                    'mostly_lost', 'num_false_positives', \
+                                    'num_misses', 'num_switches', \
+                                    'num_fragmentations', 'mota', 'motp', \
+                                    'num_unique_objects', 'num_matches', \
+                                    'idfp', 'idfn', 'idtp'], \
+                        name='acc')
+    
+    metrics_dict=summary.loc['acc'].to_dict()
+
+    # add some extra metrics like
+    # 'fp_tracks' - number of detected track IDs that correspond to no GT
+    # some _frac metric which is the fraction of the corresponding metric of all objects
+
+    df = acc.mot_events  # This is a typical name for the DataFrame of match events
+    # Filter rows that are actual matches (i.e. 'Type' == 'MATCH')
+    matches_df = df[df['Type'] == 'MATCH']
+    # Get the predicted IDs that *ever* matched
+    matched_hids = matches_df['HId'].unique()
+    # Get *all* predicted IDs that appeared in the results
+    all_hids = df['HId'].dropna().unique()  # Drop NaNs since some rows might not have an HId
+    # The set of false-positive track IDs are those not in `matched_hids`
+    false_positive_track_ids = set(all_hids) - set(matched_hids)
+    # Finally
+    num_false_positive_tracks = len(false_positive_track_ids)
+    metrics_dict["fp_tracks"]=num_false_positive_tracks
+
+    all_gt_ids = df['OId'].dropna().unique()
+    matched_gt_ids = df.loc[df['Type'] == 'MATCH', 'OId'].unique()
+    completely_lost_gt_ids = set(all_gt_ids) - set(matched_gt_ids)
+    num_never_detected=len(completely_lost_gt_ids)
+    metrics_dict["match_iou"]=match_iou
+    metrics_dict["missed"]=num_never_detected
+    metrics_dict["mostly_lost2"]=metrics_dict["mostly_lost"]-num_never_detected
+    metrics_dict["mostly_tracked_frac"]=metrics_dict
+    for m in ["mostly_tracked", "partially_tracked", "mostly_lost2", "missed", "fp_tracks"]:
+        metrics_dict[m+"_frac"]=metrics_dict[m]/(metrics_dict["num_unique_objects"]+1e-7)
+    
+    # optionally extract per-frame MOT metrics
+    if frame_metrics:
+        t=0
+        frame_index=0
+        frame_events=[]
+        while t<duration:
+            if frame_index in acc.mot_events.index.get_level_values(0).unique():
+                frame=acc.mot_events.xs(frame_index, level=0) #acc.mot_events.loc[frame_index]
+                frame_events.append({"frame_time":t, "events":frame.to_dict(orient='index')})
+            else:
+                # no events for this frame
+                frame_events.append({"frame_time":t, "events":{}})
+            t+=time_incr
+            frame_index+=1
+    del mh
+    del acc
+    if frame_metrics:
+        return metrics_dict, frame_events
+    return metrics_dict
+
+def result_string(result, columns):
+    rh=""
+    rs=""
+    for c in columns:
+        cs=c.split(",")
+        key=cs[0]
+        hd=cs[1]
+        fmt=cs[2]
+        if key in result:
+            rs+=(f"{fmt.format(result[key])}")
+            rh+=hd
+        else:
+            print(f"{key}: Key not found in dictionary")
+    return rs,rh
+
+def get_avg_scores(results, test, param, group=None):
+    t=0.0
+    n=0
+    for r in results:
+        if r["params"]["test_key"]==test:
+            if group is None or ("group" in r and r["group"]==group):
+                if param in r["result"]:
+                    if isinstance(r["result"][param], int) or isinstance(r["result"][param], float):
+                        t+=r["result"][param]
+                        n=n+1
+    if n>0:
+        t=t/n
+        return t
+    else:
+        return 0
+    
+def display_results(results, columns, sort_key):
+    out_sort=[]
+    out_txt=[]
+    datasets=[result["params"]["ds_key"] for result in results]
+    tests=[result["params"]["test_key"] for result in results]
+    groups=[result["group"] if "group" in result else None for result in results]
+    groups.append(None)
+    datasets=list(set(datasets))
+    tests=list(set(tests))
+    groups=list(set(groups))
+    paramset=set([])
+    for r in results:
+        paramset=paramset.union(set(r["result"].keys()))
+    params=list(paramset)
+
+    results2=[]
+    if len(datasets)>1:
+        for g in groups:
+            name="_overall" if g is None else f"__ovr{g}"
+            for t in tests:
+                filtered=[]
+                for r in results:
+                    if r["params"]["test_key"]==t:
+                        if g is None or ("group" in r and r["group"]==g):
+                            filtered.append(r)
+                e={"result":{}, "params":{}}
+                e["params"]["ds_key"]=name
+                e["params"]["test_key"]=t
+                er=e["result"]
+                for p in params:
+                    er[p]=sum([r["result"][p] for r in filtered])
+                weighted_motp_sum=0
+                for r in filtered:
+                    weighted_motp_sum += r['result']['motp']*r['result']['idtp']
+                er["idf1"]= (2 * er["idtp"]) / (2 * er["idtp"] + er["idfp"] + er["idfn"]+1e-7)
+                er['mota']= 1 - (er['num_false_positives'] + er['num_misses'] + er['num_switches']) / er['num_objects']
+                er['motp']=weighted_motp_sum/er['idtp']
+                er['mostly_tracked_frac']/=len(filtered)
+                er['partially_tracked_frac']/=len(filtered)
+                er['mostly_lost2_frac']/=len(filtered)
+                er['missed_frac']/=len(filtered)
+                er['fp_tracks_frac']/=len(filtered)
+                #er['mota']=er['mota']/er['num_objects']
+                #er['motp']=er['motp']/er['num_objects']
+                results2.append(e)
+            datasets.append(name)
+
+        for g in groups:
+            if g is None:
+                continue
+            n=f"__mean({g})"
+            for t in tests:
+                e={"result":{}, "params":{}}
+                e["params"]["ds_key"]=n
+                e["params"]["test_key"]=t
+                for p in params:
+                    e["result"][p]=get_avg_scores(results, t, p, g)
+                results2.append(e)
+            datasets.append(n)
+        for t in tests:
+            e={"result":{}, "params":{}}
+            e["params"]["ds_key"]="_arithmean"
+            e["params"]["test_key"]=t
+            for p in params:
+                e["result"][p]=get_avg_scores(results, t, p)
+            results2.append(e)
+        datasets.append("_arithmean")
+
+    datasets.sort()
+
+    for result in results+results2:
+        ds_index=datasets.index(result["params"]["ds_key"])
+        rs,rh=result_string(result["result"], columns)
+        rh=" "*63+rh
+        rs=f"{result["params"]["ds_key"]:30s} {result["params"]["test_key"]:32}"+rs
+        out_txt.append(rs)
+        out_sort.append(result["result"][sort_key]+ds_index*1000)
+    print(rh)
+    Z = [x for _,x in sorted(zip(out_sort, out_txt), reverse = True)]
+    for z in Z:
+        print(z)
+
+    result_location="/mldata/results/track"
+    directory=os.path.join(result_location, datetime.date.today().strftime('%Y-%m-%d'))
+    stuff.makedir(directory)
+    out_file=os.path.join(directory, "results_spreadsheet.xlsx")
+    workbook = xlsxwriter.Workbook(out_file)
+    worksheet = workbook.add_worksheet()
+    worksheet.set_column(0, 0, 20)
+    worksheet.set_column(1, 1, 30)
+    for i,c in enumerate(columns):
+        cs=c.split(",")
+        worksheet.write(0, i+2,  cs[1])
+    for i,result in enumerate(results+results2):
+        worksheet.write(i+1, 0, result["params"]["ds_key"])
+        worksheet.write(i+1, 1, result["params"]["test_key"])
+        for j,c in enumerate(columns):
+            cs=c.split(",")
+            worksheet.write(i+1, j+2,  round(result["result"][cs[0]],3))
+    workbook.close()
+
+    return results2
+
+def run_one_test(params, pbar=None):
+    trackset=ts.TrackSet()
+    trackset_gt=ts.TrackSet(params["ds_path"])
+    trackset.import_create(trackset_gt,
+                           track_min_interval=params["min_interval"],
+                           display=params["display"],
+                           max_duration=params["max_duration"],
+                           config_file=params["config"],
+                           params=params,
+                           pbar=pbar)
+
+    match_iou=0.5
+    if params is not None and "match_iou" in params:
+        match_iou=params["match_iou"]
+    result=compute_metrics(trackset_gt, trackset, max_duration=params["max_duration"], match_iou=match_iou)
+    del trackset
+    del trackset_gt
+
+    entry={"params":params, 
+           "result":result}
+    return entry
+
+def worker_fn(work_queue, result_queue, quit_queue, progress_position):
+    pbar=tqdm(total=100,
+              desc=f"{progress_position:02d}: {'Starting....':31s}",
+              colour="#cc"+f"{1010*(progress_position+1)}",
+              position=progress_position+1,
+              leave=True)
+    while True:
+        try:
+            # Get a job from the work queue
+            work_item = work_queue.get(timeout=15)  # Adjust timeout as needed
+            if work_item is None:
+                # None indicates no more jobs
+                break
+            # Perform the task
+            result = run_one_test(work_item, pbar=pbar)
+            # Put the result in the results queue
+            result_queue.put(result)
+        except Exception as e:
+            error_info = traceback.format_exc()
+            result_queue.put({"exception":error_info})
+            # Break the loop if queue is empty and timeout occurs
+            break
+
+    pbar.set_description(f"{progress_position:02d}: {'Done':31s}")
+    pbar.refresh()
+    # wait to be told to exit (stops pbar getting messed up)
+    _ = quit_queue.get(timeout=600)
+
+def track_test(config, split=None):
+    
+    if isinstance(config, str):
+        config=stuff.load_dictionary(config)
+    
+    resultfile=None
+    if "results_cache_file" in config:
+        resultfile=config["results_cache_file"]
+    num_workers=config["num_workers"]
+    cached_results=[]
+    if resultfile is not None and os.path.isfile(resultfile):
+        with open(resultfile, 'rb') as handle:
+            cached_results = pickle.load(handle)
+    
+    datasets=config["datasets"]
+    tests=config["tests"]
+    columns=config["columns"]
+    output_results=[]
+
+    tests_to_run=[]
+
+    for _,ds_key in enumerate(datasets):
+        dataset=datasets[ds_key]
+        if split is not None:
+            if "split" in dataset:
+                if dataset["split"]!=split:
+                    continue
+        for test_key in tests:
+            result=None
+            for r in cached_results:
+                if r["params"]["test_key"]==test_key and r["params"]["ds_key"]==ds_key:
+                    if "regenerate" in datasets[ds_key] and datasets[ds_key]["regenerate"]==True:
+                        continue
+                    if "regenerate" in tests[test_key] and tests[test_key]["regenerate"]==True:
+                        continue
+                    result=r
+            if result is None:
+                
+                test=tests[test_key]
+                params={}
+                for p in test:
+                    params[p]=test[p]
+                if not "max_duration" in params:
+                    params["max_duration"]=1000
+
+                params["ds_path"]=dataset["path"]
+                params["display"]=f"{len(tests_to_run):02d}: "+ds_key+"/"+test_key
+                params["ds_key"]=ds_key
+                params["test_key"]=test_key
+                
+                tests_to_run.append(params)
+            else:
+                output_results.append(result)
+    
+    print(f"Running {len(tests_to_run)} tests...")
+    with tqdm(total=len(tests_to_run),
+              desc="search",
+              colour="#0000ff",
+              position=0,
+              leave=True) as pbar:
+        start_time=time.time()
+        work_queue = Queue()
+        result_queue = Queue()
+        quit_queue = Queue()
+        for item in tests_to_run:
+            work_queue.put(item)
+        for _ in range(num_workers):
+            work_queue.put(None)
+
+        workers = []
+        for i in range(num_workers):
+            p = Process(target=worker_fn, args=(work_queue, result_queue, quit_queue, i))
+            p.start()
+            workers.append(p)
+
+        num_results_got=0
+        while num_results_got<len(tests_to_run):
+            entry=result_queue.get(timeout=600)
+            num_results_got+=1
+            pbar.update(1)
+            #print(f"!!Completed {num_results_got} tests of {len(tests_to_run)}")
+            if "exception" in entry:
+                print(f"Process exception {entry['exception']}")
+                exit()
+
+            cache=True
+            ds_key=entry["params"]["ds_key"]
+            if "no_cache" in config["datasets"][ds_key]:
+                if config["datasets"][ds_key]["no_cache"]==True:
+                    cache=False
+            if cache is True and resultfile is not None:
+                cached_results.append(entry)
+                stuff.save_atomic_pickle(cached_results, resultfile)
+            output_results.append(entry)
+
+        for _ in range(num_workers):
+            quit_queue.put(None)
+
+        for p in workers:
+            p.join()
+    
+    for o in output_results:
+        if "group" in config["datasets"][o["params"]["ds_key"]]:
+            o["group"]=config["datasets"][o["params"]["ds_key"]]["group"]
+
+    results2=display_results(output_results, columns, config["sort_key"])
+    elapsed=time.time()-start_time
+    print(f"All done: Evaluated {len(tests_to_run)} tests in {stuff.timestr(elapsed)}")
+    return results2

@@ -6,19 +6,11 @@ import numpy as np
 import bisect
 import src.track_util as tu
 import src.trackers as trackers
-import motmetrics as mm
-import ultralytics
-import pickle
-import time
-from datetime import datetime
-import copy
 from tqdm.auto import tqdm
 import yaml
 import json
-import traceback
 import stuff
-import xlsxwriter
-from multiprocessing import Process, Queue
+import math
 
 class TrackSet:
     def __init__(self, path=None):
@@ -193,22 +185,7 @@ class TrackSet:
             for p in params:
                 param_dict[p]=params[p]
 
-        assert "tracker_type" in param_dict, "tracker type must be specified"
-        
-        if not "model" in param_dict:
-            param_dict["model"]="/mldata/weights/yolo11l-dpa-131224.pt"
-            print(f"WARNING: Model not specified in config; using default model {param_dict['model']}")
-
-        tracker_type=param_dict["tracker_type"]
-        if tracker_type=="bytetrack" or tracker_type=="botsort":
-            tracker=trackers.ultralytics_tracker(param_dict, track_min_interval=track_min_interval)
-        elif tracker_type=="nvof":
-            tracker=trackers.nvof_tracker(param_dict, track_min_interval=track_min_interval)
-        elif tracker_type=="cevo":
-            tracker=trackers.cevo_tracker(param_dict, track_min_interval=track_min_interval)
-        else:
-            print(f"Unkown tracker type {tracker_type}")
-            exit()
+        tracker=trackers.create_tracker(param_dict, track_min_interval=track_min_interval)
 
         cap=None
 
@@ -313,7 +290,7 @@ class TrackSet:
                 "frame_rate": frame_rate,
                 "width": frame_width,
                 "height": frame_height,
-                "classes": ["person", "vehicle"],
+                "classes": ["person", "vehicle", "other"],
             }
         
         for frame_id in range(1, seq_length):
@@ -337,11 +314,25 @@ class TrackSet:
                 y1 = round(bb_top / frame_height,4)
                 x2 = round((bb_left + bb_width) / frame_width,4)
                 y2 = round((bb_top + bb_height) / frame_height,4)
-
+                
+                #1 Pedestrian
+                #2 Person on vehicle
+                #3 Car
+                #4 Bicycle
+                #5 Motorbike
+                #6 Non motorized vehicle
+                #7 Static person
+                #8 Distractor
+                #9 Occluder
+                #10 Occluder on the ground
+                #11 Occluder full
+                #12 Reflection
                 if cl==1 or cl==7:
                     out_cl=0
-                else:
+                elif cl==3 or cl==4 or cl==5 or cl==6:
                     out_cl=1
+                else:
+                    out_cl=2
 
                 objects[track_id] = {"box": [x1, y1, x2, y2], "class":out_cl, "conf":confidence}
 
@@ -356,548 +347,101 @@ class TrackSet:
         for f in self.frames:
             self.frame_times.append(f["frame_time"])
 
+def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["person"]):
+    if isinstance(trackset, str):
+        trackset=ts.TrackSet(trackset)
+    if isinstance(trackset_gt, str):
+        trackset_gt=ts.TrackSet(trackset_gt)
 
-def mot_obj(obj, w, h):
-    ol=int(obj.box[0]*w)
-    ot=int(obj.box[1]*h)
-    ow=int((obj.box[2]-obj.box[0])*w)
-    oh=int((obj.box[3]-obj.box[1])*h)
-    return [obj.track_id, ol, ot, ow, oh]
-
-def compute_metrics(gt, test, max_duration=1000, frame_metrics=False, match_iou=0.5):
-    assert match_iou<0.7 and match_iou>0.3, f"stupid match_iou {match_iou}"
-    duration=min(max_duration, max(gt.duration_seconds(), test.duration_seconds()))
+    trackset_base=trackset_gt if trackset_gt is not None else trackset
+    duration=trackset_base.duration_seconds()
     t=0
-    img_w=gt.metadata["width"]
-    img_h=gt.metadata["height"]
-    # run evaluation at the framerate of the original video
-    time_incr=1.0/gt.metadata["frame_rate"]
-    acc = mm.MOTAccumulator(auto_id=True)
-    while t<duration:
-        # get GT and Test objects at time
-        # this interpolates objects if there is no frame at that time
-        gt_obj=gt.objects_at_time(t)
-        gt_obj=[o for o in gt_obj if o.cl==0] # FIXME: person only for now
-        test_obj=test.objects_at_time(t)
-        if test_obj is None or gt_obj is None:
-            break
-        gt_dets=[mot_obj(g, img_w, img_h) for g in gt_obj]
-        t_dets=[mot_obj(t, img_w, img_h) for t in test_obj]
-        gt_dets=np.array(gt_dets)
-        t_dets=np.array(t_dets)
-        C=[[]]
-        if len(gt_dets)>0 and len(t_dets)>0:
-            C = mm.distances.iou_matrix(gt_dets[:,1:], t_dets[:,1:], \
-                                max_iou=match_iou) # format: gt, t
+    paused=True
+    show_gts=True
+    show_det=True
 
-        acc.update(gt_dets[:,0].astype('int').tolist() if len(gt_dets)>0 else [], \
-                   t_dets[:,0].astype('int').tolist() if len(t_dets)>0 else [], C)
-        t+=time_incr
+    display=stuff.Display(width=1280, height=720)
+    selected_ids=[]
 
-    mh = mm.metrics.create()
+    while(t<duration):
+        display.clear()
 
-    summary = mh.compute(acc, metrics=['num_frames', 'idf1', 'idp', 'idr', \
-                                    'recall', 'precision', 'num_objects', \
-                                    'mostly_tracked', 'partially_tracked', \
-                                    'mostly_lost', 'num_false_positives', \
-                                    'num_misses', 'num_switches', \
-                                    'num_fragmentations', 'mota', 'motp', \
-                                    'num_unique_objects', 'num_matches', \
-                                    'idfp', 'idfn', 'idtp'], \
-                        name='acc')
-    
-    metrics_dict=summary.loc['acc'].to_dict()
+        img=trackset_base.img_at_time(t)
 
-    # add some extra metrics like
-    # 'fp_tracks' - number of detected track IDs that correspond to no GT
-    # some _frac metric which is the fraction of the corresponding metric of all objects
+        events={}
+        if frame_events:
+            best_diff=100000
+            best_index=0
+            for i, e in enumerate(frame_events):
+                diff=abs(e["frame_time"]-t)
+                if diff<best_diff:
+                    best_diff=diff
+                    best_index=i
+            events=frame_events[best_index]["events"]
 
-    df = acc.mot_events  # This is a typical name for the DataFrame of match events
-    # Filter rows that are actual matches (i.e. 'Type' == 'MATCH')
-    matches_df = df[df['Type'] == 'MATCH']
-    # Get the predicted IDs that *ever* matched
-    matched_hids = matches_df['HId'].unique()
-    # Get *all* predicted IDs that appeared in the results
-    all_hids = df['HId'].dropna().unique()  # Drop NaNs since some rows might not have an HId
-    # The set of false-positive track IDs are those not in `matched_hids`
-    false_positive_track_ids = set(all_hids) - set(matched_hids)
-    # Finally
-    num_false_positive_tracks = len(false_positive_track_ids)
-    metrics_dict["fp_tracks"]=num_false_positive_tracks
-
-    all_gt_ids = df['OId'].dropna().unique()
-    matched_gt_ids = df.loc[df['Type'] == 'MATCH', 'OId'].unique()
-    completely_lost_gt_ids = set(all_gt_ids) - set(matched_gt_ids)
-    num_never_detected=len(completely_lost_gt_ids)
-    metrics_dict["match_iou"]=match_iou
-    metrics_dict["missed"]=num_never_detected
-    metrics_dict["mostly_lost2"]=metrics_dict["mostly_lost"]-num_never_detected
-    metrics_dict["mostly_tracked_frac"]=metrics_dict
-    for m in ["mostly_tracked", "partially_tracked", "mostly_lost2", "missed", "fp_tracks"]:
-        metrics_dict[m+"_frac"]=metrics_dict[m]/(metrics_dict["num_unique_objects"]+1e-7)
-    
-    # optionally extract per-frame MOT metrics
-    if frame_metrics:
-        t=0
-        frame_index=0
-        frame_events=[]
-        while t<duration:
-            if frame_index in acc.mot_events.index.get_level_values(0).unique():
-                frame=acc.mot_events.xs(frame_index, level=0) #acc.mot_events.loc[frame_index]
-                frame_events.append({"frame_time":t, "events":frame.to_dict(orient='index')})
-            else:
-                # no events for this frame
-                frame_events.append({"frame_time":t, "events":{}})
-            t+=time_incr
-            frame_index+=1
-    del mh
-    del acc
-    if frame_metrics:
-        return metrics_dict, frame_events
-    return metrics_dict
-
-def result_string(result, columns):
-    rh=""
-    rs=""
-    for c in columns:
-        cs=c.split(",")
-        key=cs[0]
-        hd=cs[1]
-        fmt=cs[2]
-        if key in result:
-            rs+=(f"{fmt.format(result[key])}")
-            rh+=hd
-        else:
-            print(f"{key}: Key not found in dictionary")
-    return rs,rh
-
-def get_avg_scores(results, test, param, group=None):
-    t=0.0
-    n=0
-    for r in results:
-        if r["params"]["test_key"]==test:
-            if group is None or ("group" in r and r["group"]==group):
-                if param in r["result"]:
-                    if isinstance(r["result"][param], int) or isinstance(r["result"][param], float):
-                        t+=r["result"][param]
-                        n=n+1
-    if n>0:
-        t=t/n
-        return t
-    else:
-        return 0
-    
-def display_results(results, columns, sort_key):
-    out_sort=[]
-    out_txt=[]
-    datasets=[result["params"]["ds_key"] for result in results]
-    tests=[result["params"]["test_key"] for result in results]
-    groups=[result["group"] if "group" in result else None for result in results]
-    groups.append(None)
-    datasets=list(set(datasets))
-    tests=list(set(tests))
-    groups=list(set(groups))
-    paramset=set([])
-    for r in results:
-        paramset=paramset.union(set(r["result"].keys()))
-    params=list(paramset)
-
-    results2=[]
-    if len(datasets)>1:
-        for g in groups:
-            name="_overall" if g is None else f"__ovr{g}"
-            for t in tests:
-                filtered=[]
-                for r in results:
-                    if r["params"]["test_key"]==t:
-                        if g is None or ("group" in r and r["group"]==g):
-                            filtered.append(r)
-                e={"result":{}, "params":{}}
-                e["params"]["ds_key"]=name
-                e["params"]["test_key"]=t
-                er=e["result"]
-                for p in params:
-                    er[p]=sum([r["result"][p] for r in filtered])
-                weighted_motp_sum=0
-                for r in filtered:
-                    weighted_motp_sum += r['result']['motp']*r['result']['idtp']
-                er["idf1"]= (2 * er["idtp"]) / (2 * er["idtp"] + er["idfp"] + er["idfn"]+1e-7)
-                er['mota']= 1 - (er['num_false_positives'] + er['num_misses'] + er['num_switches']) / er['num_objects']
-                er['motp']=weighted_motp_sum/er['idtp']
-                er['mostly_tracked_frac']/=len(filtered)
-                er['partially_tracked_frac']/=len(filtered)
-                er['mostly_lost2_frac']/=len(filtered)
-                er['missed_frac']/=len(filtered)
-                er['fp_tracks_frac']/=len(filtered)
-                #er['mota']=er['mota']/er['num_objects']
-                #er['motp']=er['motp']/er['num_objects']
-                results2.append(e)
-            datasets.append(name)
-
-        for g in groups:
-            if g is None:
-                continue
-            n=f"__mean({g})"
-            for t in tests:
-                e={"result":{}, "params":{}}
-                e["params"]["ds_key"]=n
-                e["params"]["test_key"]=t
-                for p in params:
-                    e["result"][p]=get_avg_scores(results, t, p, g)
-                results2.append(e)
-            datasets.append(n)
-        for t in tests:
-            e={"result":{}, "params":{}}
-            e["params"]["ds_key"]="_arithmean"
-            e["params"]["test_key"]=t
-            for p in params:
-                e["result"][p]=get_avg_scores(results, t, p)
-            results2.append(e)
-        datasets.append("_arithmean")
-
-    datasets.sort()
-
-    for result in results+results2:
-        ds_index=datasets.index(result["params"]["ds_key"])
-        rs,rh=result_string(result["result"], columns)
-        rh=" "*63+rh
-        rs=f"{result["params"]["ds_key"]:30s} {result["params"]["test_key"]:32}"+rs
-        out_txt.append(rs)
-        out_sort.append(result["result"][sort_key]+ds_index*1000)
-    print(rh)
-    Z = [x for _,x in sorted(zip(out_sort, out_txt), reverse = True)]
-    for z in Z:
-        print(z)
-
-    result_location="/mldata/results/track"
-    directory=os.path.join(result_location, datetime.today().strftime('%Y-%m-%d'))
-    stuff.makedir(directory)
-    out_file=os.path.join(directory, "results_spreadsheet.xlsx")
-    workbook = xlsxwriter.Workbook(out_file)
-    worksheet = workbook.add_worksheet()
-    worksheet.set_column(0, 0, 20)
-    worksheet.set_column(1, 1, 30)
-    for i,c in enumerate(columns):
-        cs=c.split(",")
-        worksheet.write(0, i+2,  cs[1])
-    for i,result in enumerate(results+results2):
-        worksheet.write(i+1, 0, result["params"]["ds_key"])
-        worksheet.write(i+1, 1, result["params"]["test_key"])
-        for j,c in enumerate(columns):
-            cs=c.split(",")
-            worksheet.write(i+1, j+2,  round(result["result"][cs[0]],3))
-    workbook.close()
-
-    return results2
-
-def run_one_test(params, pbar=None):
-    trackset=TrackSet()
-    trackset_gt=TrackSet(params["ds_path"])
-    trackset.import_create(trackset_gt,
-                           track_min_interval=params["min_interval"],
-                           display=params["display"],
-                           max_duration=params["max_duration"],
-                           config_file=params["config"],
-                           params=params,
-                           pbar=pbar)
-
-    match_iou=0.5
-    if params is not None and "match_iou" in params:
-        match_iou=params["match_iou"]
-    result=compute_metrics(trackset_gt, trackset, max_duration=params["max_duration"], match_iou=match_iou)
-    del trackset
-    del trackset_gt
-
-    entry={"params":params, 
-           "result":result}
-    return entry
-
-def worker_fn(work_queue, result_queue, quit_queue, progress_position):
-    pbar=tqdm(total=100,
-              desc=f"{progress_position:02d}: {'Starting....':31s}",
-              colour="#cc"+f"{1010*(progress_position+1)}",
-              position=progress_position+1,
-              leave=True)
-    while True:
-        try:
-            # Get a job from the work queue
-            work_item = work_queue.get(timeout=15)  # Adjust timeout as needed
-            if work_item is None:
-                # None indicates no more jobs
-                break
-            # Perform the task
-            result = run_one_test(work_item, pbar=pbar)
-            # Put the result in the results queue
-            result_queue.put(result)
-        except Exception as e:
-            error_info = traceback.format_exc()
-            result_queue.put({"exception":error_info})
-            # Break the loop if queue is empty and timeout occurs
-            break
-
-    pbar.set_description(f"{progress_position:02d}: {'Done':31s}")
-    pbar.refresh()
-    # wait to be told to exit (stops pbar getting messed up)
-    _ = quit_queue.get(timeout=600)
-
-def test_track(config, split=None):
-    
-    if isinstance(config, str):
-        config=stuff.load_dictionary(config)
-    
-    resultfile=None
-    if "results_cache_file" in config:
-        resultfile=config["results_cache_file"]
-    num_workers=config["num_workers"]
-    cached_results=[]
-    if resultfile is not None and os.path.isfile(resultfile):
-        with open(resultfile, 'rb') as handle:
-            cached_results = pickle.load(handle)
-    
-    datasets=config["datasets"]
-    tests=config["tests"]
-    columns=config["columns"]
-    output_results=[]
-
-    tests_to_run=[]
-
-    for _,ds_key in enumerate(datasets):
-        dataset=datasets[ds_key]
-        if split is not None:
-            if "split" in dataset:
-                if dataset["split"]!=split:
+        if trackset_gt and show_gts:
+            objs_gt=trackset_gt.objects_at_time(t)
+            for o in objs_gt:
+                obj_cl=trackset_gt.metadata["classes"][o.cl]
+                if not obj_cl in cl:
                     continue
-        for test_key in tests:
-            result=None
-            for r in cached_results:
-                if r["params"]["test_key"]==test_key and r["params"]["ds_key"]==ds_key:
-                    if "regenerate" in datasets[ds_key] and datasets[ds_key]["regenerate"]==True:
+                a=255 if o.track_id in selected_ids else 48
+                clr=(a,0,0,0)
+                thickness=2
+                for e in events:
+                    if math.isnan(events[e]["OId"]):
                         continue
-                    if "regenerate" in tests[test_key] and tests[test_key]["regenerate"]==True:
+                    if int(events[e]["OId"])==o.track_id:
+                        if events[e]["Type"]=="SWITCH":
+                            clr=(a,0,128,128)
+                        elif events[e]["Type"]=="MATCH":
+                            clr=(a,0,128,0)
+                        elif events[e]["Type"]=="MISS":
+                            clr=(a,0,0,128)
+                            thickness=4
+                o.draw(display, clr=clr, thickness=thickness)
+
+        if trackset and show_det:
+            objs=trackset.objects_at_time(t)
+            for o in objs:
+                obj_cl=trackset.metadata["classes"][o.cl]
+                if not obj_cl in cl:
+                    continue
+                a=255 if o.track_id in selected_ids else 48
+                clr=(a,255,255,255)
+                thickness=2
+                for e in events:
+                    if math.isnan(events[e]["HId"]):
                         continue
-                    result=r
-            if result is None:
-                
-                test=tests[test_key]
-                params={}
-                for p in test:
-                    params[p]=test[p]
-                if not "max_duration" in params:
-                    params["max_duration"]=1000
+                    if int(events[e]["HId"])==o.track_id:
+                        if events[e]["Type"]=="SWITCH":
+                            clr=(a,0,255,255)
+                        elif events[e]["Type"]=="MATCH":
+                            clr=(a,0,255,0)
+                        elif events[e]["Type"]=="FP":
+                            clr=(a,0,0,255)
+                            thickness=4
+                o.draw(display, clr=clr, thickness=thickness)
 
-                params["ds_path"]=dataset["path"]
-                params["display"]=f"{len(tests_to_run):02d}: "+ds_key+"/"+test_key
-                params["ds_key"]=ds_key
-                params["test_key"]=test_key
-
-                #params={"ds_path":dataset["path"],
-                #        "test_type":test["type"],
-                #        "test_model":test["model"],
-                #        "min_interval":test["min_interval"],
-                #        "display":f"{len(tests_to_run):02d}: "+ds_key+"/"+test_key,
-                #        "max_duration":max_duration,
-                #        "config":test["config"],
-                #        "ds_key":ds_key,
-                #        "params":test["params"] if "params" in test else None,
-                #        "test_key":test_key}
-                
-                tests_to_run.append(params)
-            else:
-                output_results.append(result)
-    
-    print(f"Running {len(tests_to_run)} tests...")
-    with tqdm(total=len(tests_to_run),
-              desc="search",
-              colour="#0000ff",
-              position=0,
-              leave=True) as pbar:
-        start_time=time.time()
-        work_queue = Queue()
-        result_queue = Queue()
-        quit_queue = Queue()
-        for item in tests_to_run:
-            work_queue.put(item)
-        for _ in range(num_workers):
-            work_queue.put(None)
-
-        workers = []
-        for i in range(num_workers):
-            p = Process(target=worker_fn, args=(work_queue, result_queue, quit_queue, i))
-            p.start()
-            workers.append(p)
-
-        num_results_got=0
-        while num_results_got<len(tests_to_run):
-            entry=result_queue.get(timeout=600)
-            num_results_got+=1
-            pbar.update(1)
-            #print(f"!!Completed {num_results_got} tests of {len(tests_to_run)}")
-            if "exception" in entry:
-                print(f"Process exception {entry['exception']}")
-                exit()
-
-            cache=True
-            ds_key=entry["params"]["ds_key"]
-            if "no_cache" in config["datasets"][ds_key]:
-                if config["datasets"][ds_key]["no_cache"]==True:
-                    cache=False
-            if cache is True and resultfile is not None:
-                cached_results.append(entry)
-                stuff.save_atomic_pickle(cached_results, resultfile)
-            output_results.append(entry)
-
-        for _ in range(num_workers):
-            quit_queue.put(None)
-
-        for p in workers:
-            p.join()
-    
-    for o in output_results:
-        if "group" in config["datasets"][o["params"]["ds_key"]]:
-            o["group"]=config["datasets"][o["params"]["ds_key"]]["group"]
-
-    results2=display_results(output_results, columns, config["sort_key"])
-    elapsed=time.time()-start_time
-    print(f"All done: Evaluated {len(tests_to_run)} tests in {stuff.timestr(elapsed)}")
-    return results2
-
-def search_test(config, params, param_vec, param_min, param_max, all_results, split="train"):
-    param_vec_clipped=max(min(param_vec, param_max), param_min)
-    if split=="train" and tuple(param_vec_clipped) in all_results:
-        return all_results[tuple(param_vec_clipped)]["score"], None
-    
-    result_test_opt_key=config["result_test_opt_key"]
-    result_dataset_opt_key=config["result_dataset_opt_key"]
-    result_dataset_opt_param=config["result_dataset_opt_param"]
-  
-    for i,p in enumerate(params):
-        config["tests"][result_test_opt_key][p]=param_vec_clipped[i]
-
-    results=test_track(config, split=split)
-    val=None
-    full_result=None
-    for r in results:
-        if r["params"]["test_key"]==result_test_opt_key and r["params"]["ds_key"]==result_dataset_opt_key:
-            val=r["result"][result_dataset_opt_param]
-            full_result=r["result"]
-    if split=="train":
-        all_results[tuple(param_vec_clipped)]={"score":val, "param_vec":param_vec_clipped}
-    for r in full_result:
-        full_result[r]=round(full_result[r],3)
-    return val,full_result
-
-def search_log(logfile, x):
-    logfile.write(datetime.now().strftime('%Y-%m-%d %H:%M:%S')+": ")
-    logfile.write(x+"\n")
-    logfile.flush()
-
-def search_track(yaml_file):
-    config=stuff.load_dictionary(yaml_file)
-    result_log_file=config["result_log_file"]
-    logfile=open(result_log_file, "w")
-    param_names=[]
-    param_initial=[]
-    param_step=[]
-    param_min=[]
-    param_max=[]
-
-    results={}
-
-    for p in config["search_params"]:
-        param_names.append(p)
-        param_initial.append(None)
-    
-    test_dict=stuff.load_dictionary(config["tests"]["search_config"]["config"])
-    for p in test_dict:
-        if p in param_names:
-            param_initial[param_names.index(p)]=test_dict[p]
-            search_log(logfile, f"Setting parameter {p} initial value to {test_dict[p]} from base config")
-
-    for i,p in enumerate(config["search_params"]):
-        if "initial" in config["search_params"][p]:
-            param_initial[i]=float(config["search_params"][p]["initial"])
-            search_log(logfile, f"Setting parameter {p} initial value to {param_initial[i]} from search config")
-        assert param_initial[i] is not None, f"Parameter {p} missing intial value"
-        param_step.append(float(config["search_params"][p]["step"]))
-        param_min.append(float(config["search_params"][p]["min"]))
-        param_max.append(float(config["search_params"][p]["max"]))
-
-    search_log(logfile, "Search params:"+str(param_names))
-
-    val, best_full_result=search_test(config, param_names, param_initial, param_min, param_max, results, split="train")
-    vec_best=copy.copy(param_initial)
-    val_best=val
-    step_multiplier=4
-    final_multiplier=0.5
-    if "initial_mult" in config:
-        step_multiplier=config["initial_mult"]
-    if "final_mult" in config:
-        final_multiplier=config["final_mult"]
-    search_log(logfile, f"Starting step multiplier set to {step_multiplier}")
-    iter_count=0
-    param_index=0
-    last_improvement_iter=0
-    improvements_since_validate=0
-    last_validate_iter=0
-    successive_improvements=0
-    search_log(logfile, f"Iter {iter_count:04d} intial {val_best:0.4f} with vector {vec_best}")
-    search_log(logfile, f"... best full result {best_full_result}\n")
-
-    while True:
-        index = param_index % len(param_names)
-
-        do_val=improvements_since_validate>0 and iter_count>=last_validate_iter+4
-        if do_val or iter_count==0:
-            valval, full_result_val=search_test(config, param_names, vec_best, param_min, 
-                                                param_max, results, split="val")
-            search_log(logfile, "======================================================")
-            search_log(logfile, f"Iter {iter_count:04d}  **VALIDATE** {valval:0.4f} with vector {vec_best}")
-            search_log(logfile, f"... best full result {full_result_val}\n")
-            for i,_ in enumerate(vec_best):
-                search_log(logfile, f"    {param_names[i]}: {vec_best[i]}")
-            search_log(logfile, "======================================================")
-            improvements_since_validate=0
-            last_validate_iter=iter_count
-
-        vec_up=copy.copy(vec_best)
-        vec_down=copy.copy(vec_best)
-        vec_up[index]+=step_multiplier*param_step[index]
-        vec_up=[round(v,3) for v in vec_up]
-        vec_down[index]-=step_multiplier*param_step[index]
-        vec_down=[round(v,3) for v in vec_down]
-        val_up,full_result_up=search_test(config, param_names, vec_up, param_min, param_max, results, split="train")
-        val_down,full_result_down=search_test(config, param_names, vec_down, param_min, param_max, results, split="train")
-        if val_up>val_best:
-            val_best=val_up
-            vec_best=vec_up
-            best_full_result=full_result_up
-            last_improvement_iter=iter_count
-        if val_down>val_best:
-            val_best=val_down
-            vec_best=vec_down
-            best_full_result=full_result_down
-            last_improvement_iter=iter_count
-        if last_improvement_iter==iter_count:
-            search_log(logfile, f"Iter {iter_count:04d} mult: {step_multiplier} param {param_names[index]} new best {val_best:0.4f} with vector {vec_best} total {len(results)} results")
-            search_log(logfile, f"... best full result {best_full_result}\n\n")
-            successive_improvements+=1
-            improvements_since_validate+=1
-            if successive_improvements>=2:
-                successive_improvements=0
-                param_index+=1
-        else:
-            search_log(logfile, f"...param {param_names[index]} no improvement")
-            successive_improvements=0
-            param_index+=1
-
-        iter_count+=1
-        if iter_count>last_improvement_iter+len(param_names)+1:
-            step_multiplier*=0.5
-            last_improvement_iter=iter_count
-            search_log(logfile, f"Iter {iter_count:04d} ---- reducing multiplier to {step_multiplier}----")
-            if step_multiplier<final_multiplier:
-                print("All done!")
-                exit()
+        display.show(img, title=f"time={t:5.2f}")
+        events=display.get_events(10)
+        for e in events:
+            if 'selected' in e:
+                selected_ids=[]
+                for box in e['selected']:
+                    selected_ids.append(box['context'])
+            if e['key']=='g':
+                show_gts=not show_gts
+            if e['key']=='d':
+                show_det=not show_det
+            if e['key']==' ':
+                paused=not paused
+            if e['key']=='.':
+                t+=0.033
+            if e['key']==',':
+                t-=0.033
+        if paused is False:
+            t+=0.033
 
 def extract_frames_from_seq(seq_file, output_video):
     cap = cv2.VideoCapture(seq_file)

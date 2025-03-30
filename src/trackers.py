@@ -6,7 +6,7 @@ import yaml
 import stuff
 import copy
 import src.bytetrack.byte_tracker as bt
-import  src.bytetrack.basetrack as basetrack
+import src.utrack.utracker as ut
 
 class ultralytics_tracker:
 
@@ -36,14 +36,14 @@ class ultralytics_tracker:
                                       classes=[self.person_class_index],
                                       verbose=False,
                                       rect=True,
-                                      conf=self.params["track_low_thresh"],
-                                      iou=self.params["nms_iou"],
+                                      conf=max(0.01, min(0.95, self.params["track_low_thresh"])),
+                                      iou=max(0.01, min(0.95, self.params["nms_iou"])),
                                       half=True,
                                       max_det=600,
                                       tracker=self.tmp_config_file)
             
             out_det=stuff.yolo_results_to_dets(results[0],
-                                            det_thr=self.params["track_low_thresh"],
+                                            det_thr=max(0.01, min(0.95, self.params["track_low_thresh"])),
                                             yolo_class_names=self.class_names,
                                             class_names=self.class_names,
                                             face_kp=True,
@@ -62,66 +62,6 @@ class ultralytics_tracker:
             self.last_track_time=t
         return objects
     
-class nvof_tracker:
-    
-    def __init__(self, params, track_min_interval):
-        self.yolo = ultralytics.YOLO(params["model"])
-        self.track_min_interval=track_min_interval
-        self.class_names=[self.yolo.names[i] for i in range(len(self.yolo.names))]
-        self.last_track_time=-1000
-        self.motiontracker=tu.MotionTracker(params=self.params)
-        self.objecttracker=tu.ObjectTracker(params=self.params)
-        self.attributes=[]
-        self.person_class_index=self.class_names.index("person")
-        for c in self.class_names:
-            if c.startswith("person_"):
-                self.attributes.append("person:"+c[len("person_"):])
-
-    def track_frame(self, frame, time):
-        do_track=time-self.last_track_time>=self.track_min_interval
-        
-        objects=None
-        result=None
-        detection_roi=None
-        self.motiontracker.add_frame(frame, time)
-        roi=[0,0,1.0,1.0] #motiontracker.get_roi(100)
-        if stuff.coord.box_a(roi)>0.005 and do_track:
-            roi=[0,0,1.0,1.0]#motiontracker.get_roi(80)
-            detection_roi=roi
-            h,w,_=frame.shape
-            roi_l=int(roi[0]*w)
-            roi_r=int(roi[2]*w)
-            roi_t=int(roi[1]*h)
-            roi_b=int(roi[3]*h)
-            self.motiontracker.set_roi_detected(roi)
-            #print(roi_l,roi_t,roi_r,roi_b)
-            img_roi=frame[roi_t:roi_b, roi_l:roi_r]
-            result=self.yolo(img_roi,
-                             half=True,
-                             conf=0.05,
-                             iou=self.params["nms_iou"],
-                             max_det=600,
-                             verbose=False,
-                             rect=True)
-
-            out_det=stuff.yolo_results_to_dets(result[0],
-                                            det_thr=0.1,
-                                            yolo_class_names=self.class_names,
-                                            class_names=self.class_names,
-                                            attributes=self.attributes,
-                                            face_kp=True,
-                                            pose_kp=True,
-                                            fold_attributes=True)
-            
-            for d in out_det:
-                if d["class"]==self.person_class_index:
-                    o=tu.Object(detection=d, time=time)
-                    self.objecttracker.add_object(roi, o)
-            self.last_track_time=time
-
-            ret=self.objecttracker.update_predict(self.motiontracker, detection_roi, time)
-            return ret
-        return None
     
 class cevo_tracker:
     
@@ -198,6 +138,23 @@ class cevo_tracker:
         self.last_track_time=time    
         return objects
 
+def create_tracker(param_dict, track_min_interval):
+    assert "tracker_type" in param_dict, "tracker type must be specified"
+        
+    if not "model" in param_dict:
+        param_dict["model"]="/mldata/weights/yolo11l-dpa-131224.pt"
+        print(f"WARNING: Model not specified in config; using default model {param_dict['model']}")
 
+    tracker_type=param_dict["tracker_type"]
+    if tracker_type=="bytetrack" or tracker_type=="botsort":
+        tracker=ultralytics_tracker(param_dict, track_min_interval=track_min_interval)
+    elif tracker_type=="utrack":
+        tracker=ut.utracker(param_dict, track_min_interval=track_min_interval)
+    elif tracker_type=="cevo":
+        tracker=cevo_tracker(param_dict, track_min_interval=track_min_interval)
+    else:
+        print(f"Unkown tracker type {tracker_type}")
+        exit()
+    return tracker
 
 

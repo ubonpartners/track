@@ -183,8 +183,6 @@ class KalmanBoxTracker2:
 # print("Updated (xyxy):", updated_xyxy)
 #
 
-
-
 import numpy as np
 import scipy.linalg
 
