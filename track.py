@@ -4,18 +4,18 @@ import src.track_test as track_test
 import src.track_search as track_search
 import argparse
     
-def test_track(t, config_file):
+def test_track(t, config_file, output=None):
     trackset_gt=ts.TrackSet(t)
     trackset=ts.TrackSet()
 
     trackset.import_create(trackset_gt,
-                           track_min_interval=0.159,
+                           track_min_interval=-1,
                            debug=False,
                            config_file=config_file)
         
     metrics, frame_events=track_test.compute_metrics(trackset_gt, trackset, frame_metrics=True)
     print(metrics)
-    ts.display_trackset(trackset=trackset, trackset_gt=trackset_gt, frame_events=frame_events)
+    ts.display_trackset(trackset=trackset, trackset_gt=trackset_gt, frame_events=frame_events, output=output)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='view.py')
@@ -27,6 +27,7 @@ if __name__ == '__main__':
     parser.add_argument('--search', type=str, default=None, help='search config yaml file')
     parser.add_argument('--track', action='store_true', help='test tracker')
     parser.add_argument('--config', type=str, default="/mldata/config/track/bytetrack_nofuse.yaml", help="config")
+    parser.add_argument('--output', type=str, default=None, help='output mp4 name')
     opt = parser.parse_args()
     if opt.caltech:
         ts.convert_caltech_pedestrian()
@@ -35,7 +36,7 @@ if __name__ == '__main__':
         ts.convert_mot()
         exit()
     if opt.track:
-        test_track(opt.trackset, opt.config)
+        test_track(opt.trackset, opt.config, output=opt.output)
         exit()
     if opt.search is not None:
         track_search.search_track(opt.search)

@@ -5,8 +5,6 @@ import src.track_util as tu
 import src.utrack.motion_track as motion_track
 import stuff
 
-from scipy.io import loadmat
-
 class UTracker_ObjectTracker:
     def __init__(self, params=None):
         self.params=params

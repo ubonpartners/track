@@ -19,7 +19,7 @@ def mot_obj(obj, w, h):
     oh=int((obj.box[3]-obj.box[1])*h)
     return [obj.track_id, ol, ot, ow, oh]
 
-def compute_metrics(gt, test, max_duration=1000, frame_metrics=False, match_iou=0.5, cl=["person"]):
+def compute_metrics(gt, test, max_duration=1000, frame_metrics=False, match_iou=0.5, classes_to_test=["person"]):
     assert match_iou<0.7 and match_iou>0.3, f"stupid match_iou {match_iou}"
     duration=min(max_duration, max(gt.duration_seconds(), test.duration_seconds()))
     t=0
@@ -30,11 +30,13 @@ def compute_metrics(gt, test, max_duration=1000, frame_metrics=False, match_iou=
     # run evaluation at the framerate of the original video
     time_incr=1.0/gt.metadata["frame_rate"]
     acc = mm.MOTAccumulator(auto_id=True)
+    tot=0
     while t<duration:
         # get GT and Test objects at time
         # this interpolates objects if there is no frame at that time
         gt_obj=gt.objects_at_time(t)
-        gt_obj=[o for o in gt_obj if gt.metadata["classes"][o.cl] in cl]
+        tot+=len(gt_obj)
+        gt_obj=[o for o in gt_obj if gt.metadata["classes"][o.cl] in classes_to_test]
         test_obj=test.objects_at_time(t)
         test_obj=[o for o in test_obj if test.metadata["classes"][o.cl] in cl]
         if test_obj is None or gt_obj is None:
@@ -87,6 +89,7 @@ def compute_metrics(gt, test, max_duration=1000, frame_metrics=False, match_iou=
     matched_gt_ids = df.loc[df['Type'] == 'MATCH', 'OId'].unique()
     completely_lost_gt_ids = set(all_gt_ids) - set(matched_gt_ids)
     num_never_detected=len(completely_lost_gt_ids)
+    metrics_dict["tracked_frames"]=len(test.frames)
     metrics_dict["match_iou"]=match_iou
     metrics_dict["missed"]=num_never_detected
     metrics_dict["mostly_lost2"]=metrics_dict["mostly_lost"]-num_never_detected

@@ -52,7 +52,7 @@ class TrackSet:
         obj.track_id=track_id
         return obj
         
-    def objects_at_time(self, t):
+    def objects_at_time(self, t, min_conf=0.0001):
         index=self.frame_index_at_time(t)
         if index is None:
             return None
@@ -85,6 +85,7 @@ class TrackSet:
             for track_id in p1_only:
                 obj=self.get_Object(indexp1, track_id)
                 ret.append(obj)
+        ret=[o for o in ret if o.confidence>=min_conf]
         return ret
     
     def img_path_at_time(self, t, nearest=True):
@@ -347,7 +348,7 @@ class TrackSet:
         for f in self.frames:
             self.frame_times.append(f["frame_time"])
 
-def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["person"]):
+def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["person"], output=None):
     if isinstance(trackset, str):
         trackset=ts.TrackSet(trackset)
     if isinstance(trackset_gt, str):
@@ -360,7 +361,7 @@ def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["pe
     show_gts=True
     show_det=True
 
-    display=stuff.Display(width=1280, height=720)
+    display=stuff.Display(width=1280, height=720, output=output)
     selected_ids=[]
 
     while(t<duration):
@@ -442,6 +443,7 @@ def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["pe
                 t-=0.033
         if paused is False:
             t+=0.033
+    display.close()
 
 def extract_frames_from_seq(seq_file, output_video):
     cap = cv2.VideoCapture(seq_file)

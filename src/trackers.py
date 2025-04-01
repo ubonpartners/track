@@ -75,12 +75,21 @@ class cevo_tracker:
         self.last_track_time=-1000
         self.attributes=[]
         self.person_class_index=self.class_names.index("person")
+        self.frames_skipped_count=0
         for c in self.class_names:
             if c.startswith("person_"):
                 self.attributes.append("person:"+c[len("person_"):])
 
     def track_frame(self, frame, time):
-        do_track=time-self.last_track_time>=self.track_min_interval
+        
+        if self.track_min_interval>=0:
+            do_track=time-self.last_track_time>=self.track_min_interval
+        else:
+            do_track=self.frames_skipped_count+1>=(-self.track_min_interval)
+            if do_track:
+                self.frames_skipped_count=0
+            else:
+                self.frames_skipped_count+=1
         if do_track==False:
             return None
 
