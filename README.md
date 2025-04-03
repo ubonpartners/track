@@ -70,7 +70,7 @@ python track.py --search <search_yaml>
 This project (including the weights) is dual-licensed under:
 
 - **AGPL** for **non-commercial use only**
-- The **Ubon Cooperative License**
+- The **[Ubon Cooperative License](https://github.com/ubonpartners/license/blob/main/LICENSE)**
 
 Please reach out with questions:  
 📬 [bernandocribbenza@gmail.com](mailto:bernandocribbenza@gmail.com?subject=yolo-dpa%20question&body=Your-code-is-rubbish!)
