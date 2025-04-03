@@ -3,7 +3,12 @@ import copy
 import stuff
 import src.track_test as track_test
 
-def search_test(config, params, param_vec, param_min, param_max, all_results, split="train"):
+def search_log(logfile, x):
+    logfile.write(datetime.now().strftime('%Y-%m-%d %H:%M:%S')+": ")
+    logfile.write(x+"\n")
+    logfile.flush()
+
+def search_test(config, params, param_vec, param_min, param_max, all_results, split="train", logfile=None):
     
     param_vec_clipped = [max(min(v, max_v), min_v) for v, min_v, max_v in zip(param_vec, param_min, param_max)]
     
@@ -20,7 +25,7 @@ def search_test(config, params, param_vec, param_min, param_max, all_results, sp
         if param_vec_clipped[i]<0:
             print(f"WARNING: negative parameter {i} {param_vec_clipped[i]} {param_min[i]}-{param_max[i]}")
         config["tests"][result_test_opt_key][p]=param_vec_clipped[i]
-
+    search_log(logfile, f"..... testing {param_vec_clipped}")
     results=track_test.track_test(config, split=split)
     
     val=None
@@ -34,11 +39,6 @@ def search_test(config, params, param_vec, param_min, param_max, all_results, sp
     for r in full_result:
         full_result[r]=round(full_result[r],3)
     return val,full_result
-
-def search_log(logfile, x):
-    logfile.write(datetime.now().strftime('%Y-%m-%d %H:%M:%S')+": ")
-    logfile.write(x+"\n")
-    logfile.flush()
 
 def search_track(yaml_file):
     config=stuff.load_dictionary(yaml_file)
@@ -87,7 +87,7 @@ def search_track(yaml_file):
 
     search_log(logfile, "Search params:"+str(param_names))
 
-    val, best_full_result=search_test(config, param_names, param_initial, param_min, param_max, results, split=train_split)
+    val, best_full_result=search_test(config, param_names, param_initial, param_min, param_max, results, split=train_split, logfile=logfile)
     vec_best=copy.copy(param_initial)
     val_best=val
     
@@ -107,7 +107,7 @@ def search_track(yaml_file):
         if train_split is not None:
             if do_val or iter_count==0:
                 valval, full_result_val=search_test(config, param_names, vec_best, param_min, 
-                                                    param_max, results, split="val")
+                                                    param_max, results, split="val", logfile=logfile)
                 search_log(logfile, "======================================================")
                 search_log(logfile, f"Iter {iter_count:04d}  **VALIDATE** {valval:0.4f} with vector {vec_best}")
                 search_log(logfile, f"... best full result {full_result_val}\n")
@@ -123,8 +123,8 @@ def search_track(yaml_file):
         vec_up=[round(v,3) for v in vec_up]
         vec_down[index]-=step_multiplier*param_step[index]
         vec_down=[round(v,3) for v in vec_down]
-        val_up,full_result_up=search_test(config, param_names, vec_up, param_min, param_max, results, split=train_split)
-        val_down,full_result_down=search_test(config, param_names, vec_down, param_min, param_max, results, split=train_split)
+        val_up,full_result_up=search_test(config, param_names, vec_up, param_min, param_max, results, split=train_split, logfile=logfile)
+        val_down,full_result_down=search_test(config, param_names, vec_down, param_min, param_max, results, split=train_split, logfile=logfile)
         if val_up>val_best:
             val_best=val_up
             vec_best=vec_up
@@ -144,7 +144,7 @@ def search_track(yaml_file):
                 successive_improvements=0
                 param_index+=1
         else:
-            search_log(logfile, f"...param {param_names[index]} no improvement")
+            search_log(logfile, f"...param {param_names[index]} no improvement  best:{val_best:0.4f} u:{val_up:0.4f} d:{val_down:0.4f}")
             successive_improvements=0
             param_index+=1
 
