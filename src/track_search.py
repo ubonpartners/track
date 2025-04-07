@@ -87,9 +87,8 @@ def search_track(yaml_file):
 
     search_log(logfile, "Search params:"+str(param_names))
 
-    val, best_full_result=search_test(config, param_names, param_initial, param_min, param_max, results, split=train_split, logfile=logfile)
+    score_best, best_full_result=search_test(config, param_names, param_initial, param_min, param_max, results, split=train_split, logfile=logfile)
     vec_best=copy.copy(param_initial)
-    val_best=val
     
     iter_count=0
     param_index=0
@@ -97,8 +96,8 @@ def search_track(yaml_file):
     improvements_since_validate=0
     last_validate_iter=0
     successive_improvements=0
-    search_log(logfile, f"Iter {iter_count:04d} intial {val_best:0.4f} with vector {vec_best}")
-    search_log(logfile, f"... best full result {best_full_result}\n")
+    search_log(logfile, f"Iter {iter_count:04d} intial score {score_best:0.4f} at vector {vec_best}")
+    search_log(logfile, f"---> Best score is {track_test.summary_string(best_full_result)}")
 
     while True:
         index = param_index % len(param_names)
@@ -106,11 +105,11 @@ def search_track(yaml_file):
         do_val=improvements_since_validate>0 and iter_count>=last_validate_iter+4
         if train_split is not None:
             if do_val or iter_count==0:
-                valval, full_result_val=search_test(config, param_names, vec_best, param_min, 
+                validate_score, full_result_val=search_test(config, param_names, vec_best, param_min, 
                                                     param_max, results, split="val", logfile=logfile)
                 search_log(logfile, "======================================================")
-                search_log(logfile, f"Iter {iter_count:04d}  **VALIDATE** {valval:0.4f} with vector {vec_best}")
-                search_log(logfile, f"... best full result {full_result_val}\n")
+                search_log(logfile, f"Iter {iter_count:04d}  **VALIDATE** score {validate_score:0.4f} at vector {vec_best}")
+                search_log(logfile, f"... full result {full_result_val}\n")
                 for i,_ in enumerate(vec_best):
                     search_log(logfile, f"    {param_names[i]}: {vec_best[i]}")
                 search_log(logfile, "======================================================")
@@ -123,30 +122,31 @@ def search_track(yaml_file):
         vec_up=[round(v,3) for v in vec_up]
         vec_down[index]-=step_multiplier*param_step[index]
         vec_down=[round(v,3) for v in vec_down]
-        val_up,full_result_up=search_test(config, param_names, vec_up, param_min, param_max, results, split=train_split, logfile=logfile)
-        val_down,full_result_down=search_test(config, param_names, vec_down, param_min, param_max, results, split=train_split, logfile=logfile)
-        if val_up>val_best:
-            val_best=val_up
+        score_up,full_result_up=search_test(config, param_names, vec_up, param_min, param_max, results, split=train_split, logfile=logfile)
+        score_down,full_result_down=search_test(config, param_names, vec_down, param_min, param_max, results, split=train_split, logfile=logfile)
+        if score_up>score_best:
+            score_best=score_up
             vec_best=vec_up
             best_full_result=full_result_up
             last_improvement_iter=iter_count
-        if val_down>val_best:
-            val_best=val_down
+        if score_down>score_best:
+            score_best=score_down
             vec_best=vec_down
             best_full_result=full_result_down
             last_improvement_iter=iter_count
         if last_improvement_iter==iter_count:
-            search_log(logfile, f"Iter {iter_count:04d} mult: {step_multiplier} param {param_names[index]} new best {val_best:0.4f} with vector {vec_best} total {len(results)} results")
-            search_log(logfile, f"... best full result {best_full_result}\n\n")
+            search_log(logfile, f"Iter {iter_count:04d} mult: {step_multiplier} param {param_names[index]} new score_best: {score_best:0.4f} at vector {vec_best} total {len(results)} results")
             successive_improvements+=1
             improvements_since_validate+=1
             if successive_improvements>=2:
                 successive_improvements=0
                 param_index+=1
         else:
-            search_log(logfile, f"...param {param_names[index]} no improvement  best:{val_best:0.4f} u:{val_up:0.4f} d:{val_down:0.4f}")
+            search_log(logfile, f"...param {param_names[index]} no improvement  score_best:{score_best:0.4f} score_u:{score_up:0.4f} score_d:{score_down:0.4f}")
             successive_improvements=0
             param_index+=1
+
+        search_log(logfile, f"---> Best score is {track_test.summary_string(best_full_result)}")
 
         iter_count+=1
         if iter_count>last_improvement_iter+len(param_names)+1:

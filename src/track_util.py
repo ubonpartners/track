@@ -5,17 +5,24 @@ import copy
 import stuff
 
 def object_interpolate(a, b, frac):
-    a2=copy.deepcopy(a)
-    stuff.interpolate(a2.box, b.box, frac)
-    a2.conf=stuff.interpolate(a2.confidence, b.confidence, frac)
-    assert(a.num_pose==b.num_pose)
-    for i in range(a.num_pose):
-        if a2.pose_conf[i]>0 and b.pose_conf[i]>0:
-            stuff.interpolate(a2.pose_pos[i], b.pose_pos[i], frac)
-            a2.pose_conf[i]=stuff.interpolate(a2.pose_conf[i], b.pose_conf[i], frac)
-        else:
-            a2.pose_conf[i]=0
-    return a2
+    if True:
+        box=stuff.interpolate2(a.box, b.box, frac)
+        conf=stuff.interpolate2(a.confidence, b.confidence, frac)
+        pose_pos=[stuff.interpolate2(a.pose_pos[i], b.pose_pos[i], frac) for i in range(len(a.pose_pos))]
+        pose_conf=[a.pose_conf[i]*b.pose_conf[i] for i in range(len(a.pose_conf))]
+        return Object(box=box, cl=a.cl, conf=conf, pose_conf=pose_conf, pose_pos=pose_pos)
+    else:
+        a2=copy.deepcopy(a)
+        stuff.interpolate(a2.box, b.box, frac)
+        a2.conf=stuff.interpolate(a2.confidence, b.confidence, frac)
+        assert(a.num_pose==b.num_pose)
+        for i in range(a.num_pose):
+            if a2.pose_conf[i]>0 and b.pose_conf[i]>0:
+                stuff.interpolate(a2.pose_pos[i], b.pose_pos[i], frac)
+                a2.pose_conf[i]=stuff.interpolate(a2.pose_conf[i], b.pose_conf[i], frac)
+            else:
+                a2.pose_conf[i]=0
+        return a2
 
 class Object:
     def __init__(self, box=None, cl=None, conf=None, 

@@ -19,8 +19,27 @@ def mot_obj(obj, w, h):
     oh=int((obj.box[3]-obj.box[1])*h)
     return [obj.track_id, ol, ot, ow, oh]
 
-def compute_metrics(gt, test, max_duration=1000, frame_metrics=False, match_iou=0.5, classes_to_test=["person"]):
-    assert match_iou<0.7 and match_iou>0.3, f"stupid match_iou {match_iou}"
+def fitness_score(r):
+    return r["mota"]-0.0005*r["fp_tracks"]-0.0*r["fp_tracks_frac"]-0.002*r["fp_per_frame"]
+
+def summary_string(r):
+    s=f" MOTA:{r['mota']:6.5f}"
+    s+=f" Fit:{r['fitness']:6.5f}"
+    s+=f" FPpf:{r['fp_per_frame']:5.2f}"
+    s+=f" FPTf:{r['fp_tracks_frac']:5.3f}"
+    s+=f" FNPo:{r['fn_per_obj']:5.3f}"
+    s+=f" FPTr:{r['fp_tracks']}"
+    s+=f" SWPo:{r['switch_per_obj']:5.3f}"
+    s+=f" FRPo:{r['frag_per_obj']:5.3f}"
+    return s
+
+def compute_metrics(gt, test, 
+                    max_duration=1000, 
+                    frame_metrics=False, 
+                    match_iou=0.45, 
+                    classes_to_test=["person"],
+                    eval_rate_divisor=1):
+    assert match_iou<0.9 and match_iou>0.1, f"stupid match_iou {match_iou}"
     duration=min(max_duration, max(gt.duration_seconds(), test.duration_seconds()))
     t=0
     img_w=gt.metadata["width"]
@@ -28,7 +47,7 @@ def compute_metrics(gt, test, max_duration=1000, frame_metrics=False, match_iou=
     cl=gt.metadata["classes"]
 
     # run evaluation at the framerate of the original video
-    time_incr=1.0/gt.metadata["frame_rate"]
+    time_incr=(1.0/gt.metadata["frame_rate"])*eval_rate_divisor
     acc = mm.MOTAccumulator(auto_id=True)
     tot=0
     while t<duration:
@@ -96,6 +115,11 @@ def compute_metrics(gt, test, max_duration=1000, frame_metrics=False, match_iou=
     metrics_dict["mostly_tracked_frac"]=metrics_dict
     for m in ["mostly_tracked", "partially_tracked", "mostly_lost2", "missed", "fp_tracks"]:
         metrics_dict[m+"_frac"]=metrics_dict[m]/(metrics_dict["num_unique_objects"]+1e-7)
+    metrics_dict["fp_per_frame"]=metrics_dict["num_false_positives"]/(metrics_dict["num_frames"]+1e-7) # false positive dets per frame
+    metrics_dict["fn_per_obj"]=metrics_dict["num_misses"]/(metrics_dict["num_objects"]+1e-7) # num false negative dets per real object GT det
+    metrics_dict["switch_per_obj"]=metrics_dict["num_switches"]/(metrics_dict["num_unique_objects"]+1e-7) # num switches per unique object
+    metrics_dict["frag_per_obj"]=metrics_dict["num_fragmentations"]/(metrics_dict["num_unique_objects"]+1e-7)
+    metrics_dict["fitness"]=fitness_score(metrics_dict)
     
     # optionally extract per-frame MOT metrics
     if frame_metrics:
@@ -178,7 +202,8 @@ def display_results(results, columns, sort_key):
                 e["params"]["test_key"]=t
                 er=e["result"]
                 for p in params:
-                    er[p]=sum([r["result"][p] for r in filtered])
+                    if p not in ["fitness","fp_per_frame","fn_per_obj","switch_per_obj","frag_per_obj"]:
+                        er[p]=sum([r["result"][p] for r in filtered])
                 weighted_motp_sum=0
                 for r in filtered:
                     weighted_motp_sum += r['result']['motp']*r['result']['idtp']
@@ -190,6 +215,12 @@ def display_results(results, columns, sort_key):
                 er['mostly_lost2_frac']/=len(filtered)
                 er['missed_frac']/=len(filtered)
                 er['fp_tracks_frac']/=len(filtered)
+                er["fp_per_frame"]=er["num_false_positives"]/(er["num_frames"]+1e-7) # false positive dets per frame
+                er["fn_per_obj"]=er["num_misses"]/(er["num_objects"]+1e-7) # num false negative dets per real object GT det
+                er["switch_per_obj"]=er["num_switches"]/(er["num_unique_objects"]+1e-7) # num switches per unique object
+                er["frag_per_obj"]=er["num_fragmentations"]/(er["num_unique_objects"]+1e-7)
+                er['fitness']=fitness_score(er)
+
                 #er['mota']=er['mota']/er['num_objects']
                 #er['motp']=er['motp']/er['num_objects']
                 results2.append(e)
@@ -261,11 +292,16 @@ def run_one_test(params, pbar=None):
                            config_file=params["config"],
                            params=params,
                            pbar=pbar)
-
-    match_iou=0.5
-    if params is not None and "match_iou" in params:
+    match_iou=0.45
+    if "match_iou" in params:
         match_iou=params["match_iou"]
-    result=compute_metrics(trackset_gt, trackset, max_duration=params["max_duration"], match_iou=match_iou)
+    eval_rate_divisor=1
+    if "eval_rate_divisor" in params:
+        eval_rate_divisor=params["eval_rate_divisor"]
+    result=compute_metrics(trackset_gt, trackset, 
+                           max_duration=params["max_duration"], 
+                           match_iou=match_iou,
+                           eval_rate_divisor=eval_rate_divisor)
     del trackset
     del trackset_gt
 

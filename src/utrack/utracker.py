@@ -28,21 +28,14 @@ def lost_object_match_score(self, other, context):
     return box_score
 
 def object_match_score(self, other, context):
-    min_conf=context["min_conf"]
     kf_weight=context["kf_weight"]
     kp_weight=context["kp_weight"]
     box_weight=1.0
 
-    if self is None:
-        return 0
-    if other is None:
-        return 0
-
-    if self.adjusted_confidence<min_conf:
-        return 0
-    
     box_score=stuff.coord.box_iou(self.box, other.box)
     kf_score=stuff.coord.box_iou(self.box, other.predicted_box)
+    if box_score+kf_score==0:
+        return 0
 
     if other.observations<2:
         kf_weight=0
@@ -107,10 +100,12 @@ class UTracker_ObjectTracker:
             o.predicted_box=o.kf.predict(time)
 
         for o in self.tracked_objects:
+            o.matched=False
             o.time=time
 
         pose_conf=self.params["pose_conf"]
         for o in detected_objects:
+            o.matched=False
             o.adjusted_confidence=o.confidence+pose_conf*sum(o.pose_conf)
             o.track_state=TrackState.New
             o.observations=1
@@ -119,24 +114,37 @@ class UTracker_ObjectTracker:
 
         # match new objects to existing objects
         output_objects=[]
-        for match_pass in [0,1]:
-            min_conf=self.params["track_high_thresh"] if match_pass==0 else self.params["track_low_thresh"]
-            match_thr=self.params["match_thresh_high"] if match_pass==0 else self.params["match_thresh_low"]
-            mfn_context={"min_conf":min_conf,
-                         "kf_weight":self.params["kf_weight"], 
+        for match_pass in [0,1,2]:
+            mfn_context={"kf_weight":self.params["kf_weight"], 
                          "kp_weight":self.params["kp_weight"],
                          "kp_distance_scale":self.params["kp_distance_scale"],
-                         "fuse_scores":self.params["fuse_scores"],
-                         "match_thr":match_thr}
-            new_ind, old_ind, scores=stuff.match_lsa(detected_objects, self.tracked_objects, mfn=object_match_score, mfn_context=mfn_context)
+                         "fuse_scores":self.params["fuse_scores"]}
             
+            if match_pass==0:
+                mfn_context["det_select"]=lambda o : o.adjusted_confidence>self.params["track_initial_thresh"]
+                mfn_context["tracked_select"]=lambda o : o.track_state!=TrackState.Lost
+                mfn_context["match_thr"]=self.params["match_thresh_initial"]
+            elif match_pass==1:
+                mfn_context["det_select"]=lambda o : o.adjusted_confidence>self.params["track_high_thresh"]
+                mfn_context["tracked_select"]=lambda o : True
+                mfn_context["match_thr"]=self.params["match_thresh_high"]
+            elif match_pass==2:
+                mfn_context["det_select"]=lambda o : o.adjusted_confidence>self.params["track_low_thresh"]
+                mfn_context["tracked_select"]=lambda o : True
+                mfn_context["match_thr"]=self.params["match_thresh_low"]
+
+            det_filtered=[o for o in detected_objects if o.matched==False and mfn_context["det_select"](o)]
+            tracked_filtered=[o for o in self.tracked_objects if o.matched==False and mfn_context["tracked_select"](o)]
+
+            new_ind, old_ind, scores=stuff.match_lsa(det_filtered, tracked_filtered, mfn=object_match_score, mfn_context=mfn_context)
+            #print(f"{match_pass} {len(det_filtered)} {len(tracked_filtered)}")
             num_matches=len(new_ind)
             self.log(f"...Time {time:8.3f} : ROI {roi} {num_matches} matches")
 
             for i in range(num_matches):
                 if scores[i]>0:
-                    new_obj=detected_objects[new_ind[i]]
-                    old_obj=self.tracked_objects[old_ind[i]]
+                    new_obj=det_filtered[new_ind[i]]
+                    old_obj=tracked_filtered[old_ind[i]]
                     self.log(f" ({match_pass}) Match to old obj {old_obj.track_id} score {scores[i]:0.3f} conf {new_obj.confidence:0.2f}")
                     new_obj.num_detections=old_obj.num_detections+1
                     new_obj.attr=[max(x,y)*0.9+min(x,y)*0.1 for x,y in zip(new_obj.attr, old_obj.attr)]
@@ -147,7 +155,7 @@ class UTracker_ObjectTracker:
                     old_obj.kf=None
                     new_obj.num_missed=0
                     new_obj.last_detect_time=time
-                    if (match_pass==0):
+                    if (match_pass==0) or (match_pass==1):
                         new_obj.track_state=TrackState.Tracked
                     elif old_obj.track_state==TrackState.Lost:
                         new_obj.track_state=TrackState.Tracked
@@ -156,13 +164,13 @@ class UTracker_ObjectTracker:
                     new_obj.predicted_box=old_obj.predicted_box
                     new_obj.deleted=False
                     output_objects.append(new_obj)
-                    self.tracked_objects[old_ind[i]]=None
-                    detected_objects[new_ind[i]]=None
+                    tracked_filtered[old_ind[i]].matched=True
+                    det_filtered[new_ind[i]].matched=True
 
         # deal with new objects that don't match any existing objects
 
         for i,obj in enumerate(detected_objects):
-            if obj is None:
+            if obj.matched==True:
                 continue
             if obj.adjusted_confidence>self.params["new_track_thresh"]:
                 obj.track_id=self.next_track_id
@@ -174,18 +182,17 @@ class UTracker_ObjectTracker:
                 obj.deleted=False
                 self.next_track_id+=1
                 output_objects.append(obj)
-                detected_objects[i]=None
 
         # determine which objects to delete
         for i,obj in enumerate(self.tracked_objects):
-            if obj is None:
+            if obj.matched==True:
                 continue
             if roi is not None:
                 obj.num_missed+=1
             time_since_detection=time-obj.last_detect_time
             
             keep=time_since_detection<max_miss_time
-            keep=keep and (obj.num_missed==0 or obj.track_state==TrackState.Tracked)
+            keep=keep and (obj.num_missed<10 or obj.track_state==TrackState.Tracked)
 
             if keep:
                 output_objects.append(obj)

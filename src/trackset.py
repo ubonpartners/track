@@ -61,23 +61,46 @@ class TrackSet:
         indexp1=index+1 if index+1<len(self.frames) else index
         framep1=self.frames[index+1] if index+1<len(self.frames) else frame
 
+        frac=(t-frame["frame_time"])/(framep1["frame_time"]-frame["frame_time"]+1e-7)
+        frac=min(1.0, max(0.0, frac))
+
         s1=set(frame["objects"].keys())
         s2=set(framep1["objects"].keys())
+
+        ret=[]
+
+        # if we are very close to an actual frame time, just return those objects
+
+        if frac>0.99:
+            for track_id in s2:
+                obj=self.get_Object(indexp1, track_id)
+                ret.append(obj)
+            ret=[o for o in ret if o.confidence>=min_conf]
+            return ret
+        
+        if frac<0.01:
+            for track_id in s1:
+                obj=self.get_Object(index, track_id)
+                ret.append(obj)
+            ret=[o for o in ret if o.confidence>=min_conf]
+            return ret
+        
+        # ok, we are between two frames
+        # we interpolate the objects that are in both frames
+        # for the ones that are not we return the ones from the frame we are closes to
 
         common_obj=list(s1.intersection(s2))
         f_only=list(s1-s2)
         p1_only=list(s2-s1)
-        frac=(t-frame["frame_time"])/(framep1["frame_time"]-frame["frame_time"]+1e-7)
-        frac=min(1.0, max(0.0, frac))
-        ret=[]
+        
         for track_id in common_obj:
             obj=self.get_Object(index, track_id)
             objp1=self.get_Object(indexp1, track_id)
             obj=tu.object_interpolate(obj, objp1, frac)
             obj.track_id=track_id
             ret.append(obj)
-
-        if frac<0.5:
+            
+        if frac<=0.5:
             for track_id in f_only:
                 obj=self.get_Object(index, track_id)
                 ret.append(obj)

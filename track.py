@@ -3,19 +3,26 @@ import src.trackers as trackers
 import src.track_test as track_test
 import src.track_search as track_search
 import argparse
-    
+import time
+
 def test_track(t, config_file, output=None):
     trackset_gt=ts.TrackSet(t)
     trackset=ts.TrackSet()
-
+    start_time=time.time()
     trackset.import_create(trackset_gt,
-                           track_min_interval=-1,
+                           track_min_interval=0.159, #-1,
                            debug=False,
                            config_file=config_file)
-        
-    metrics, frame_events=track_test.compute_metrics(trackset_gt, trackset, frame_metrics=True)
+    import_time=time.time()
+    metrics, frame_events=track_test.compute_metrics(trackset_gt, trackset, frame_metrics=True, eval_rate_divisor=1)
+    metrics_time=time.time()
+    elapsed_import=import_time-start_time
+    elapsed_metrics=metrics_time-import_time
     print(metrics)
-    ts.display_trackset(trackset=trackset, trackset_gt=trackset_gt, frame_events=frame_events, output=output)
+    print("--Summary--")
+    print(track_test.summary_string(metrics)+f"  Import: {elapsed_import:.2f}s Metrics: {elapsed_metrics:.2f}s")
+    if False:
+        ts.display_trackset(trackset=trackset, trackset_gt=trackset_gt, frame_events=frame_events, output=output)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='view.py')
