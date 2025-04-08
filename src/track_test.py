@@ -1,5 +1,7 @@
 
 import os
+import copy
+import math
 import numpy as np
 import motmetrics as mm
 import pickle
@@ -57,6 +59,7 @@ def compute_metrics(gt, test,
         tot+=len(gt_obj)
         gt_obj=[o for o in gt_obj if gt.metadata["classes"][o.cl] in classes_to_test]
         test_obj=test.objects_at_time(t)
+        assert test_obj is not None
         test_obj=[o for o in test_obj if test.metadata["classes"][o.cl] in cl]
         if test_obj is None or gt_obj is None:
             break
@@ -109,6 +112,8 @@ def compute_metrics(gt, test,
     completely_lost_gt_ids = set(all_gt_ids) - set(matched_gt_ids)
     num_never_detected=len(completely_lost_gt_ids)
     metrics_dict["tracked_frames"]=len(test.frames)
+    metrics_dict["tracked_time"]=duration
+    metrics_dict["tracked_fps"]=len(test.frames)/duration
     metrics_dict["match_iou"]=match_iou
     metrics_dict["missed"]=num_never_detected
     metrics_dict["mostly_lost2"]=metrics_dict["mostly_lost"]-num_never_detected
@@ -205,6 +210,7 @@ def display_results(results, columns, sort_key):
                     if p not in ["fitness","fp_per_frame","fn_per_obj","switch_per_obj","frag_per_obj"]:
                         er[p]=sum([r["result"][p] for r in filtered])
                 weighted_motp_sum=0
+
                 for r in filtered:
                     weighted_motp_sum += r['result']['motp']*r['result']['idtp']
                 er["idf1"]= (2 * er["idtp"]) / (2 * er["idtp"] + er["idfp"] + er["idfn"]+1e-7)
@@ -219,8 +225,11 @@ def display_results(results, columns, sort_key):
                 er["fn_per_obj"]=er["num_misses"]/(er["num_objects"]+1e-7) # num false negative dets per real object GT det
                 er["switch_per_obj"]=er["num_switches"]/(er["num_unique_objects"]+1e-7) # num switches per unique object
                 er["frag_per_obj"]=er["num_fragmentations"]/(er["num_unique_objects"]+1e-7)
+                er['tracked_frames']/=len(filtered)
+                er['tracked_time']/=len(filtered)
+                er['tracked_fps']/=len(filtered)
                 er['fitness']=fitness_score(er)
-
+                
                 #er['mota']=er['mota']/er['num_objects']
                 #er['motp']=er['motp']/er['num_objects']
                 results2.append(e)
@@ -253,7 +262,7 @@ def display_results(results, columns, sort_key):
         ds_index=datasets.index(result["params"]["ds_key"])
         rs,rh=result_string(result["result"], columns)
         rh=" "*63+rh
-        rs=f"{result["params"]["ds_key"]:30s} {result["params"]["test_key"]:32}"+rs
+        rs=f"{result['params']['ds_key']:30s} {result['params']['test_key']:32}"+rs
         out_txt.append(rs)
         out_sort.append(result["result"][sort_key]+ds_index*1000)
     print(rh)
@@ -277,7 +286,13 @@ def display_results(results, columns, sort_key):
         worksheet.write(i+1, 1, result["params"]["test_key"])
         for j,c in enumerate(columns):
             cs=c.split(",")
-            worksheet.write(i+1, j+2,  round(result["result"][cs[0]],3))
+            val = result["result"][cs[0]]
+            if math.isinf(val):
+                worksheet.write(i+1, j+2, "INF")
+            elif math.isnan(val):
+                worksheet.write(i+1, j+2, "NAN")
+            else:
+                worksheet.write(i+1, j+2, round(val, 3))
     workbook.close()
 
     return results2
@@ -341,6 +356,19 @@ def track_test(config, split=None):
     
     if isinstance(config, str):
         config=stuff.load_dictionary(config)
+
+    if "framerates" in config:
+        expanded_tests={}
+        for t in config["tests"]:
+            c=config["tests"][t]
+            if "min_interval" in c:
+                expanded_tests[t]=c
+                continue
+            for f in config["framerates"]:
+                t_fr=copy.deepcopy(c)
+                t_fr["min_interval"]=1/(f+0.01)
+                expanded_tests[t+f", {f}fps"]=t_fr
+        config["tests"]=expanded_tests
     
     resultfile=None
     if "results_cache_file" in config:

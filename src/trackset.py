@@ -99,7 +99,6 @@ class TrackSet:
             obj=tu.object_interpolate(obj, objp1, frac)
             obj.track_id=track_id
             ret.append(obj)
-            
         if frac<=0.5:
             for track_id in f_only:
                 obj=self.get_Object(index, track_id)
@@ -330,7 +329,7 @@ class TrackSet:
                 bb_top = float(obj[3])
                 bb_width = float(obj[4])
                 bb_height = float(obj[5])
-                confidence = round(float(obj[6]),4)
+                confidence = 1 #round(float(obj[6]),4)
                 cl = int(obj[7])
 
                 # Convert bounding box to xyxy format in normalized coordinates
@@ -338,7 +337,7 @@ class TrackSet:
                 y1 = round(bb_top / frame_height,4)
                 x2 = round((bb_left + bb_width) / frame_width,4)
                 y2 = round((bb_top + bb_height) / frame_height,4)
-                
+
                 #1 Pedestrian
                 #2 Person on vehicle
                 #3 Car
@@ -351,7 +350,7 @@ class TrackSet:
                 #10 Occluder on the ground
                 #11 Occluder full
                 #12 Reflection
-                if cl==1 or cl==7:
+                if cl==1 or cl==7 or cl==2:
                     out_cl=0
                 elif cl==3 or cl==4 or cl==5 or cl==6:
                     out_cl=1
@@ -444,7 +443,7 @@ def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["pe
                             clr=(a,0,255,0)
                         elif events[e]["Type"]=="FP":
                             clr=(a,0,0,255)
-                            thickness=4
+                            thickness=-1 #4
                 o.draw(display, clr=clr, thickness=thickness)
 
         display.show(img, title=f"time={t:5.2f}")
@@ -578,15 +577,17 @@ def convert_caltech_pedestrian():
             print(f"Output YAML saved to: {output_yaml}")
 
 def convert_mot():
+    output_folder="/mldata/tracking/mot"
     folders=["/mldata/downloaded_datasets/other/MOT20/train",
              "/mldata/downloaded_datasets/other/MOT17/train"]
-    
+    stuff.makedir(output_folder+"/annotation/")
+    stuff.makedir(output_folder+"/video/")
     for f in folders:
         seqs=os.listdir(f)
         for s in seqs:
             input_path=f+"/"+s+"/seqinfo.ini"
-            output_path="/mldata/tracking/mot/annotation/"+s+".json"
-            output_video_path="/mldata/tracking/mot/video/"+s+".mp4"
+            output_path=output_folder+"/annotation/"+s+".json"
+            output_video_path=output_folder+"/video/"+s+".mp4"
             print("Processing",f,s,"....")
             ts=TrackSet(input_path)
             ts.export_yaml(output_path, output_video_path)

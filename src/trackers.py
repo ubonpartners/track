@@ -151,7 +151,7 @@ def create_tracker(param_dict, track_min_interval):
     assert "tracker_type" in param_dict, "tracker type must be specified"
         
     if not "model" in param_dict:
-        param_dict["model"]="/mldata/weights/yolo11l-dpa-131224.pt"
+        param_dict["model"]="/mldata/weights/good/yolo11l-dpa-131224.pt"
         print(f"WARNING: Model not specified in config; using default model {param_dict['model']}")
 
     tracker_type=param_dict["tracker_type"]

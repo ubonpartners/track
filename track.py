@@ -5,7 +5,7 @@ import src.track_search as track_search
 import argparse
 import time
 
-def test_track(t, config_file, output=None):
+def test_track(t, config_file, display=False, output=None):
     trackset_gt=ts.TrackSet(t)
     trackset=ts.TrackSet()
     start_time=time.time()
@@ -21,7 +21,7 @@ def test_track(t, config_file, output=None):
     print(metrics)
     print("--Summary--")
     print(track_test.summary_string(metrics)+f"  Import: {elapsed_import:.2f}s Metrics: {elapsed_metrics:.2f}s")
-    if False:
+    if display:
         ts.display_trackset(trackset=trackset, trackset_gt=trackset_gt, frame_events=frame_events, output=output)
 
 if __name__ == '__main__':
@@ -32,7 +32,8 @@ if __name__ == '__main__':
     parser.add_argument('--mot', action='store_true', help='make MOT sequences')
     parser.add_argument('--test', type=str, default=None, help='test yaml file')
     parser.add_argument('--search', type=str, default=None, help='search config yaml file')
-    parser.add_argument('--track', action='store_true', help='test tracker')
+    parser.add_argument('--track', action='store_true', help='test tracker on a single sequence')
+    parser.add_argument('--display', action='store_true', help='visualise results')
     parser.add_argument('--config', type=str, default="/mldata/config/track/bytetrack_nofuse.yaml", help="config")
     parser.add_argument('--output', type=str, default=None, help='output mp4 name')
     opt = parser.parse_args()
@@ -43,7 +44,7 @@ if __name__ == '__main__':
         ts.convert_mot()
         exit()
     if opt.track:
-        test_track(opt.trackset, opt.config, output=opt.output)
+        test_track(opt.trackset, opt.config, display=opt.display, output=opt.output)
         exit()
     if opt.search is not None:
         track_search.search_track(opt.search)
