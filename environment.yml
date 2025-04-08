@@ -1,4 +1,4 @@
-name: track2
+name: track
 channels:
   - pytorch
   - defaults
