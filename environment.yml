@@ -1,4 +1,4 @@
-name: track
+name: track2
 channels:
   - pytorch
   - defaults
@@ -6,12 +6,24 @@ channels:
   - nvidia
 dependencies:
   - python>=3.10
+  - pytorch>=2.4.0
+  - pytorch-cuda>=12.4
+  - torchvision>=0.8
+  - torchaudio
+  - tqdm
+  - pandas
+  - matplotlib
   - pip
   - pip:
     - opencv-python
     - scipy
+    - requests
+    - lap
     - psutil
+    - cython_bbox
     - piexif
     - xlsxwriter
+    - xmltodict
+    - pyyaml
     - git+https://github.com/ubonpartners/stuff.git
     - git+https://github.com/ubonpartners/ultralytics.git@multilabel
