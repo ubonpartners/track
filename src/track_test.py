@@ -457,6 +457,8 @@ def track_test(config, split=None):
                     cache=False
             if cache is True and resultfile is not None:
                 cached_results.append(entry)
+                dname = os.path.dirname(resultfile)
+                os.makedirs(dname, exist_ok=True)
                 stuff.save_atomic_pickle(cached_results, resultfile)
             output_results.append(entry)
 

@@ -26,5 +26,9 @@ dependencies:
     - xlsxwriter
     - xmltodict
     - pyyaml
+    - lapx
+    - cython_bbox
+    - motmetrics
+    - numpy=1.26.4
     - git+https://github.com/ubonpartners/stuff.git
     - git+https://github.com/ubonpartners/ultralytics.git@multilabel
