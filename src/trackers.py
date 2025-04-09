@@ -24,7 +24,10 @@ class ultralytics_tracker:
             yaml.dump(self.params, outfile, default_flow_style=False)
 
     def __del__(self):
-        os.remove(self.tmp_config_file)
+        try:
+            os.remove(self.tmp_config_file)
+        except Exception as e:
+            print("ERROR :: ", "ultralytics_tracker", e)
 
     def track_frame(self, img, t):
         do_track=t-self.last_track_time>=self.track_min_interval
