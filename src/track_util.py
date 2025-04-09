@@ -27,7 +27,7 @@ def object_interpolate(a, b, frac):
 class Object:
     def __init__(self, box=None, cl=None, conf=None, 
                  pose=None, pose_conf=None, pose_pos=None,
-                 attr=None, time=None, detection=None):
+                 attr=None, time=None, detection=None, expand_by_pose=False):
         if detection is not None:
             box=copy.copy(detection["box"])
             cl=detection["class"]
@@ -49,7 +49,7 @@ class Object:
                 self.pose_pos[i][0]=pose[i*3+0]
                 self.pose_pos[i][1]=pose[i*3+1]
                 self.pose_conf[i]=pose[i*3+2]
-                if False and self.pose_conf[i]>0.05:
+                if expand_by_pose and self.pose_conf[i]>0.05:
                     self.box[0]=min(self.box[0], self.pose_pos[i][0])
                     self.box[1]=min(self.box[1], self.pose_pos[i][1])
                     self.box[2]=max(self.box[2], self.pose_pos[i][0])

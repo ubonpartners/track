@@ -444,6 +444,7 @@ def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["pe
                         elif events[e]["Type"]=="FP":
                             clr=(a,0,0,255)
                             thickness=-1 #4
+                            print(f"FP {o.track_id}")
                 o.draw(display, clr=clr, thickness=thickness)
 
         display.show(img, title=f"time={t:5.2f}")

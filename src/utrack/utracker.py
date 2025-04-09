@@ -277,7 +277,7 @@ class utracker:
                              rect=True)
 
             out_det=stuff.yolo_results_to_dets(result[0],
-                                            det_thr=0.1,
+                                            det_thr=0.05,
                                             yolo_class_names=self.class_names,
                                             class_names=self.class_names,
                                             attributes=self.attributes,
@@ -288,7 +288,7 @@ class utracker:
             detected_objects=[]
             for d in out_det:
                 if d["class"]==self.person_class_index:
-                    o=tu.Object(detection=d, time=time)
+                    o=tu.Object(detection=d, time=time, expand_by_pose=True)
                     o.time=time
                     stuff.coord.unmap_roi_box(roi, o.box)
                     for pt in o.pose_pos:
