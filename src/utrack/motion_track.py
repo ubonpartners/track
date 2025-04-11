@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import src.utrack.kalman as kalman
 import stuff
+import copy
 
 class MotionTracker:
     def __init__(self, params=None):
@@ -32,32 +33,34 @@ class MotionTracker:
         dy=self.motion_array[iy][ix][1]
         return dx,dy
 
-    def predict_point(self, pt):
+    def predict_point(self, pt, t):
+        assert t==self.last_frame_time
         dx,dy=self.predict_delta(pt)
-        pt[0]=stuff.coord.clip01(pt[0]-dx)
-        pt[1]=stuff.coord.clip01(pt[1]-dy)
+        return [stuff.coord.clip01(pt[0]-dx), stuff.coord.clip01(pt[1]-dy)]
 
-    def predict_box(self, box):
+    def predict_box(self, box, t):
+        assert t==self.last_frame_time
         dxs=0
         dys=0
-        for i,k in enumerate([[0.5, 0.5], [0.25, 0.5], [0.75,0.5], [0.25, 0.5], [0.75, 0.5]]):
+        for i,k in enumerate([[0.5, 0.5], [0.35, 0.5], [0.65,0.5], [0.35, 0.5], [0.65, 0.5]]):
             xf=k[0]
-            yf=k[0]
+            yf=k[1]
             pt=[box[0]*xf+box[2]*(1-xf), box[1]*yf+box[3]*(1-yf)]
             dx,dy=self.predict_delta(pt)
-            s=4 if k==0 else 1
+            s=4 if i==0 else 1
             dxs+=dx*s
             dys+=dy*s
         dxs/=8
         dys/=8
-        box[0]=stuff.coord.clip01(box[0]-dxs)
-        box[1]=stuff.coord.clip01(box[1]-dys)
-        box[2]=stuff.coord.clip01(box[2]-dxs)
-        box[3]=stuff.coord.clip01(box[3]-dys)
+        return [stuff.coord.clip01(box[0]-dxs),
+                stuff.coord.clip01(box[1]-dys),
+                stuff.coord.clip01(box[2]-dxs),
+                stuff.coord.clip01(box[3]-dys)]
 
     def add_frame(self, img, time):
         img_height, img_width, _ = img.shape
-        scalef=min(640/img_height, 640/img_width)
+        self.last_frame_time=time
+        scalef=min(320/img_height, 320/img_width)
         scale_w=int(img_width*scalef)
         scale_h=int(img_height*scalef)
         scale_w=4*((scale_w+3)//4)
@@ -65,17 +68,12 @@ class MotionTracker:
 
         if scale_w!=self.width or scale_h!=self.height:
             #print(f"MotionTracker : resize to {scale_w} x {scale_h}")
-            if True:
-                self.nvof = cv2.cuda_NvidiaOpticalFlow_2_0.create(imageSize=[scale_w, scale_h],
+            self.nvof = cv2.cuda_NvidiaOpticalFlow_2_0.create(imageSize=[scale_w, scale_h],
                                                               enableCostBuffer=True,
-                                                              enableTemporalHints=True,
+                                                              enableTemporalHints=False,
                                                               perfPreset=cv2.cuda.NvidiaOpticalFlow_2_0_NV_OF_PERF_LEVEL_MEDIUM,
-                                                              outputGridSize=cv2.cuda.NvidiaOpticalFlow_2_0_NV_OF_OUTPUT_VECTOR_GRID_SIZE_4)
-            else:
-                self.nvof = cv2.cuda_NvidiaOpticalFlow_1_0.create(imageSize=[scale_w, scale_h],
-                                                              enableCostBuffer=True,
-                                                              enableTemporalHints=True,
-                                                              perfPreset=cv2.cuda.NvidiaOpticalFlow_1_0_NV_OF_PERF_LEVEL_FAST)
+                                                              outputGridSize=cv2.cuda.NvidiaOpticalFlow_2_0_NV_OF_OUTPUT_VECTOR_GRID_SIZE_4,
+                                                              hintGridSize=cv2.cuda.NvidiaOpticalFlow_2_0_NV_OF_HINT_VECTOR_GRID_SIZE_4)
                     
             self.grid_size=self.nvof.getGridSize()
             self.last_frame=None
@@ -85,20 +83,21 @@ class MotionTracker:
             self.flow=None
             self.nvof_w=int(scale_w/self.grid_size)
             self.nvof_h=int(scale_h/self.grid_size)
-            self.accumulated_delta=np.ones((self.nvof_h, self.nvof_w), dtype=int)*1000
+            self.hint_buffer=np.zeros((self.nvof_h, self.nvof_w, 2), dtype=np.int16)
+            self.accumulated_delta=np.ones((self.nvof_h, self.nvof_w), dtype=int)*1#1000
 
         img_scaled=cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), (self.width, self.height))
 
         if self.num_frames!=0:
-            self.flow = self.nvof.calc(img_scaled, self.last_frame, None)
+            self.flow = self.nvof.calc(img_scaled, self.last_frame, None, hint=self.hint_buffer)
             delta=self.flow[1]
-            delta=np.maximum(0, (delta//20)-5)
+            delta=np.maximum(0, delta-5)
             self.accumulated_delta+=delta
-            #print(delta)
-            #print(self.accumulated_delta)
             self.motion_array = self.flow[0].astype(np.float32)
             self.motion_array[..., 0]*=(1.0/(32*self.width))
             self.motion_array[..., 1]*=(1.0/(32*self.height))
+            self.accumulated_delta+= (100 * np.abs(self.motion_array[..., 0])).astype(self.accumulated_delta.dtype)
+            self.accumulated_delta+= (100 * np.abs(self.motion_array[..., 1])).astype(self.accumulated_delta.dtype)
 
         self.last_frame=img_scaled
         self.num_frames+=1
@@ -119,6 +118,10 @@ class MotionTracker:
         b=int(self.nvof_h*roi[3]+0.99)
         #print("CLEAR ",roi, l,r,t,b)
         self.accumulated_delta[t:b, l:r]=0
+
+    def get_debug(self):
+        return {"motion_track": {"type": "motion_track", "data":{"motion_array":copy.copy(self.motion_array), "delta_array":copy.copy(self.accumulated_delta)}}}
+            
 
     def draw(self, img):
         if self.flow is None:
@@ -157,3 +160,23 @@ class MotionTracker:
         overlay=cv2.resize(overlay, (img_w, img_h))
         img2=cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0)
         return img2
+    
+def motiontracker_test():
+    img=cv2.imread("/mldata/image/arrest2.jpg")
+    img_h, img_w, _=img.shape
+    mt=MotionTracker()
+    images=[]
+    w=256
+    h=256
+    for x in [0, 4, 8]:
+        images.append(img[100:(100+h), (100+x):(100+x+w)])
+    mt.add_frame(images[0], 0)
+    mt.add_frame(images[2], 1)
+    box=[0.4,0.4,0.6,0.6]
+    out_box=mt.predict_box(box, 1)
+    
+    print(out_box)
+    print((out_box[0]-box[0])*w)
+    print((out_box[1]-box[1])*h)
+    print((out_box[2]-box[2])*w)
+    print((out_box[3]-box[3])*h)

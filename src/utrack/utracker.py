@@ -1,4 +1,4 @@
-
+import copy
 import ultralytics
 import src.utrack.kalman as kalman
 import src.track_util as tu
@@ -27,61 +27,72 @@ def lost_object_match_score(self, other, context):
         return 0
     return box_score
 
-def object_match_score(self, other, context):
+def object_match_score(new_obj, tracked_obj, context):
     kf_weight=context["kf_weight"]
     kp_weight=context["kp_weight"]
-    box_weight=1.0
+    of_weight=1.0
 
-    box_score=stuff.coord.box_iou(self.box, other.box)
-    kf_score=stuff.coord.box_iou(self.box, other.predicted_box)
-    if box_score+kf_score==0:
+    of_score=stuff.coord.box_iou(new_obj.box, tracked_obj.of_predicted_box)
+    kf_score=stuff.coord.box_iou(new_obj.box, tracked_obj.kf_predicted_box)
+    if of_score+kf_score==0:
         return 0
 
-    if other.observations<2:
+    if tracked_obj.observations<2:
         kf_weight=0
-    else: #other.observations<3:
-        f=min(0.1, 1/other.observations)
+    else: #tracked_obj.observations<3:
+        f=min(0.1, 1/tracked_obj.observations)
         kf_weight*=(1-f)
-        box_weight*=f
-    #print(other.observations)
+        of_weight*=f
+    #print(tracked_obj.observations)
 
     kp_score=None
-    if True and len(self.pose_pos)==17 and len(other.pose_pos)==17 and (box_score+kf_score)!=0:
+    if True and len(new_obj.pose_pos)==17 and len(tracked_obj.pose_pos)==17 and (of_score+kf_score)!=0:
         scales=[0.026, 0.025, 0.025, 0.035, 0.035, 0.079, 0.079, 0.072, 0.072, 0.062, 0.062, 0.107, 0.107, 0.087, 0.087, 0.089, 0.089]
         scales=[x*2 for x in scales] # scale=2*sigma
-        ss=0.5*(stuff.coord.box_a(self.box)+stuff.coord.box_a(other.box))*0.53 # approximation of shape area from box area
+        ss=0.5*(stuff.coord.box_a(new_obj.box)+stuff.coord.box_a(tracked_obj.of_predicted_box))*0.53 # approximation of shape area from box area
         ss*=(context["kp_distance_scale"]*context["kp_distance_scale"])
         num=0
         denom=0
-        for i,_ in enumerate(self.pose_pos):
-            if self.pose_conf[i]>0.0 and other.pose_conf[i]>0.0: # is point labelled
-                dx=self.pose_pos[i][0]-other.pose_pos[i][0]
-                dy=self.pose_pos[i][1]-other.pose_pos[i][1]
+        for i,_ in enumerate(new_obj.pose_pos):
+            if new_obj.pose_conf[i]>0.0 and tracked_obj.pose_conf[i]>0.0: # is point labelled
+                dx=new_obj.pose_pos[i][0]-tracked_obj.of_predicted_pose_pos[i][0]
+                dy=new_obj.pose_pos[i][1]-tracked_obj.of_predicted_pose_pos[i][1]
                 num+=math.exp(-(dx*dx+dy*dy)/(2.0*ss*scales[i]*scales[i]+1e-7))
                 denom+=1.0
         if denom>4:
             kp_score=num/(denom+1e-7)
 
     #if kp_score is not None:
-    #    print(f"{self.track_id} {other.track_id}  box:{box_score:0.2f} kp:{kp_score:0.3f},{denom} kf:{kf_score:0.2f}")
+    #    print(f"{new_obj.track_id} {tracked_obj.track_id}  box:{box_score:0.2f} kp:{kp_score:0.3f},{denom} kf:{kf_score:0.2f}")
     
     if kp_score is None:
-        score=(box_score*box_weight+kf_score*kf_weight)/(box_weight+kf_weight)
+        score=(of_score*of_weight+kf_score*kf_weight)/(of_weight+kf_weight)
     else:
-        score=(box_score*box_weight+kf_score*kf_weight+kp_score*kp_weight)/(box_weight+kf_weight+kp_weight)
+        score=(of_score*of_weight+kf_score*kf_weight+kp_score*kp_weight)/(of_weight+kf_weight+kp_weight)
     if score<context["match_thr"]:
         return 0
     
-    score=score*math.pow(self.confidence, context["fuse_scores"])
+    score=score*math.pow(new_obj.confidence, context["fuse_scores"])
     return score
 
-class UTracker_ObjectTracker:
-    def __init__(self, params=None):
+class utracker:
+    def __init__(self, params, track_min_interval):
         self.params=params
+        self.yolo = ultralytics.YOLO(params["model"])
+        self.track_min_interval=track_min_interval
+        self.class_names=[self.yolo.names[i] for i in range(len(self.yolo.names))]
+        self.last_track_time=-1000
+        self.motiontracker=motion_track.MotionTracker(params=self.params)
+        self.attributes=[]
+        self.person_class_index=self.class_names.index("person")
+        for c in self.class_names:
+            if c.startswith("person_"):
+                self.attributes.append("person:"+c[len("person_"):])
         self.tracked_objects=[]
         self.next_track_id=1
         self.print_log=False
-
+        self.debug_enable=False
+    
     def log(self, txt):
         if self.print_log:
             print(txt)
@@ -89,15 +100,31 @@ class UTracker_ObjectTracker:
     def reset(self):
         self.tracked_objects=[]
 
+    def predict_tracked_object_positions(self, motiontracker, time):
+        for o in self.tracked_objects:
+            o.of_predicted_box=motiontracker.predict_box(o.box, time)
+            o.of_predicted_pose_pos=[0]*o.num_pose
+            for i in range(o.num_pose):
+                o.of_predicted_pose_pos[i]=motiontracker.predict_point(o.pose_pos[i], time)
+
+        for o in self.tracked_objects:
+            o.kf_predicted_box=o.kf.predict(time)
+
+        debug_kf_prediction={}
+        debug_of_prediction={}
+        if self.debug_enable:
+            for o in self.tracked_objects:
+                debug_kf_prediction[o.track_id]={"from":copy.copy(o.box), "to":copy.copy(o.kf_predicted_box)}
+                debug_of_prediction[o.track_id]={"from":copy.copy(o.box), 
+                                                 "to":copy.copy(o.of_predicted_box),
+                                                 "pose_from":copy.copy(o.pose_pos),
+                                                 "pose_to":copy.copy(o.of_predicted_pose_pos),
+                                                 "pose_conf":copy.copy(o.pose_conf)}
+            self.debug|={"kf_predictions":{"type":"box_prediction", "data":debug_kf_prediction}}
+            self.debug|={"of_prediction":{"type":"box_prediction", "data":debug_of_prediction}}
+
     def update_predict(self, detected_objects, motiontracker, roi, time):
-
         self.log(f"Update-predict {len(self.tracked_objects)} old objects {len(detected_objects)} new objects")
-        
-        for o in self.tracked_objects:
-            o.update_predict(motiontracker)
-
-        for o in self.tracked_objects:
-            o.predicted_box=o.kf.predict(time)
 
         for o in self.tracked_objects:
             o.matched=False
@@ -161,7 +188,7 @@ class UTracker_ObjectTracker:
                         new_obj.track_state=TrackState.Tracked
                     else:
                         new_obj.track_state=old_obj.track_state
-                    new_obj.predicted_box=old_obj.predicted_box
+                    new_obj.kf_predicted_box=old_obj.kf_predicted_box
                     new_obj.deleted=False
                     output_objects.append(new_obj)
                     tracked_filtered[old_ind[i]].matched=True
@@ -204,7 +231,7 @@ class UTracker_ObjectTracker:
         self.tracked_objects=output_objects
         
         if roi is None:
-            return None
+            return None, None
         
         # determine "lost" objects"
         for o in self.tracked_objects:
@@ -230,72 +257,73 @@ class UTracker_ObjectTracker:
 
         return ret_objects
 
-    def draw(self, img):
-        for o in self.tracked_objects:
-            o.draw(img)
+    def track_frame(self, frame, time, debug_enable=False):
+        self.debug_enable=debug_enable
+        self.debug={}
 
-class utracker:
-    def __init__(self, params, track_min_interval):
-        self.params=params
-        self.yolo = ultralytics.YOLO(params["model"])
-        self.track_min_interval=track_min_interval
-        self.class_names=[self.yolo.names[i] for i in range(len(self.yolo.names))]
-        self.last_track_time=-1000
-        self.motiontracker=motion_track.MotionTracker(params=self.params)
-        self.objecttracker=UTracker_ObjectTracker(params=self.params)
-        self.attributes=[]
-        self.person_class_index=self.class_names.index("person")
-        for c in self.class_names:
-            if c.startswith("person_"):
-                self.attributes.append("person:"+c[len("person_"):])
+        # skip running if below minimnum frame interval
 
-    def track_frame(self, frame, time):
         do_track=time-self.last_track_time>=self.track_min_interval
+        if do_track==False:
+            return None, None
         
-        objects=None
-        result=None
-        detection_roi=None
+        # check if skip running due to not enough motion
+
+        #result=None
+        #detection_roi=None
         self.motiontracker.add_frame(frame, time)
+        motion_roi=self.motiontracker.get_roi(10)
+        #if stuff.coord.box_a(motion_roi)<0.005:
+        #    return None, None
+
         roi=[0,0,1.0,1.0] #motiontracker.get_roi(100)
-        if stuff.coord.box_a(roi)>0.005 and do_track:
-            roi=[0,0,1.0,1.0]#motiontracker.get_roi(80)
-            detection_roi=roi
-            h,w,_=frame.shape
-            roi_l=int(roi[0]*w)
-            roi_r=int(roi[2]*w)
-            roi_t=int(roi[1]*h)
-            roi_b=int(roi[3]*h)
-            self.motiontracker.set_roi_detected(roi)
-            #print(roi_l,roi_t,roi_r,roi_b)
-            img_roi=frame[roi_t:roi_b, roi_l:roi_r]
-            result=self.yolo(img_roi,
-                             half=True,
-                             conf=0.05,
-                             iou=self.params["nms_iou"],
-                             max_det=600,
-                             verbose=False,
-                             rect=True)
 
-            out_det=stuff.yolo_results_to_dets(result[0],
-                                            det_thr=0.05,
-                                            yolo_class_names=self.class_names,
-                                            class_names=self.class_names,
-                                            attributes=self.attributes,
-                                            face_kp=True,
-                                            pose_kp=True,
-                                            fold_attributes=True)
-            
-            detected_objects=[]
-            for d in out_det:
-                if d["class"]==self.person_class_index:
-                    o=tu.Object(detection=d, time=time, expand_by_pose=True)
-                    o.time=time
-                    stuff.coord.unmap_roi_box(roi, o.box)
-                    for pt in o.pose_pos:
-                        stuff.coord.unmap_roi_point(roi, pt)
-                    detected_objects.append(o)
+        if debug_enable:
+            self.debug|=self.motiontracker.get_debug()
 
-            self.last_track_time=time
-            ret=self.objecttracker.update_predict(detected_objects, self.motiontracker, detection_roi, time)
-            return ret
-        return None
+        roi=[0,0,1.0,1.0]#motiontracker.get_roi(80)
+        detection_roi=roi
+        h,w,_=frame.shape
+        roi_l=int(roi[0]*w)
+        roi_r=int(roi[2]*w)
+        roi_t=int(roi[1]*h)
+        roi_b=int(roi[3]*h)
+        self.motiontracker.set_roi_detected(roi)
+        #print(roi_l,roi_t,roi_r,roi_b)
+        img_roi=frame[roi_t:roi_b, roi_l:roi_r]
+        result=self.yolo(img_roi,
+                            half=True,
+                            conf=0.05,
+                            iou=self.params["nms_iou"],
+                            max_det=600,
+                            verbose=False,
+                            rect=True)
+
+        out_det=stuff.yolo_results_to_dets(result[0],
+                                        det_thr=0.05,
+                                        yolo_class_names=self.class_names,
+                                        class_names=self.class_names,
+                                        attributes=self.attributes,
+                                        face_kp=True,
+                                        pose_kp=True,
+                                        fold_attributes=True)
+        
+        detected_objects=[]
+        for d in out_det:
+            if d["class"]==self.person_class_index:
+                o=tu.Object(detection=d, time=time, expand_by_pose=True)
+                o.time=time
+                stuff.coord.unmap_roi_box(roi, o.box)
+                for pt in o.pose_pos:
+                    stuff.coord.unmap_roi_point(roi, pt)
+                detected_objects.append(o)
+
+        self.last_track_time=time
+        if self.debug_enable:
+            self.debug|={"detections": {"type": "yolo_detections", "data":{"detections":out_det, "class_names":self.class_names, "attributes":self.attributes}}}
+            self.debug|={"test_roi": {"type": "roi", "data": {"roi":copy.copy(motion_roi)}}}
+
+        self.predict_tracked_object_positions(self.motiontracker, time)
+
+        ret=self.update_predict(detected_objects, self.motiontracker, detection_roi, time)
+        return ret, self.debug

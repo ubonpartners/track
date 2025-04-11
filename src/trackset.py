@@ -189,7 +189,7 @@ class TrackSet:
                 self.metadata['original_video']=output_video
             else:
                 # Video writer to save MP4
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                fourcc = cv2.VideoWriter_fourcc(*'avc1')
                 out = cv2.VideoWriter(output_video,
                                     fourcc,
                                     self.metadata['frame_rate'],
@@ -281,7 +281,7 @@ class TrackSet:
         if params is not None:
             for p in params:
                 param_dict[p]=params[p]
-
+        param_dict["original_trackset"]=video
         tracker=trackers.create_tracker(param_dict, track_min_interval=track_min_interval)
 
         cap=None

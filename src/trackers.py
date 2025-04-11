@@ -7,6 +7,7 @@ import stuff
 import copy
 import src.bytetrack.byte_tracker as bt
 import src.utrack.utracker as ut
+import src.cevo_mlpipeline.cevo_mlpipeline_tracker as cm
 
 class ultralytics_tracker:
 
@@ -164,7 +165,7 @@ def create_tracker(param_dict, track_min_interval):
         
     if not "model" in param_dict:
         param_dict["model"]="/mldata/weights/good/yolo11l-dpa-131224.pt"
-        print(f"WARNING: Model not specified in config; using default model {param_dict['model']}")
+        #print(f"WARNING: Model not specified in config; using default model {param_dict['model']}")
 
     tracker_type=param_dict["tracker_type"]
     if tracker_type=="bytetrack" or tracker_type=="botsort":
@@ -173,6 +174,8 @@ def create_tracker(param_dict, track_min_interval):
         tracker=ut.utracker(param_dict, track_min_interval=track_min_interval)
     elif tracker_type=="cevo":
         tracker=cevo_tracker(param_dict, track_min_interval=track_min_interval)
+    elif tracker_type=="cevo_mlpipe":
+        tracker=cm.cevo_mlpipe_tracker(param_dict, track_min_interval=track_min_interval)
     else:
         print(f"Unkown tracker type {tracker_type}")
         exit()
