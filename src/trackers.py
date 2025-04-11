@@ -16,6 +16,7 @@ class ultralytics_tracker:
         self.track_min_interval=track_min_interval
         self.class_names=[self.yolo.names[i] for i in range(len(self.yolo.names))]
         self.last_track_time=-1000
+        self.frames_skipped_count=0
         self.params=params
         self.person_class_index=self.class_names.index("person")
         fd, self.tmp_config_file=tempfile.mkstemp(dir="/tmp", prefix="yolo_config", suffix=".yaml")
@@ -29,8 +30,16 @@ class ultralytics_tracker:
         except Exception as e:
             print("ERROR :: ", "ultralytics_tracker", e)
 
-    def track_frame(self, img, t):
-        do_track=t-self.last_track_time>=self.track_min_interval
+    def track_frame(self, img, t, debug_enable=False):
+
+        if self.track_min_interval>=0:
+            do_track=t-self.last_track_time>=self.track_min_interval
+        else:
+            do_track=self.frames_skipped_count+1>=(-self.track_min_interval)
+            if do_track:
+                self.frames_skipped_count=0
+            else:
+                self.frames_skipped_count+=1
         objects=None
         if do_track:
             results = self.yolo.track(img,
@@ -63,7 +72,7 @@ class ultralytics_tracker:
                     objects.append(o)
 
             self.last_track_time=t
-        return objects
+        return objects, None
     
     
 class cevo_tracker:
@@ -83,7 +92,7 @@ class cevo_tracker:
             if c.startswith("person_"):
                 self.attributes.append("person:"+c[len("person_"):])
 
-    def track_frame(self, frame, time):
+    def track_frame(self, frame, time, debug_enable=False):
         
         if self.track_min_interval>=0:
             do_track=time-self.last_track_time>=self.track_min_interval
@@ -94,7 +103,7 @@ class cevo_tracker:
             else:
                 self.frames_skipped_count+=1
         if do_track==False:
-            return None
+            return None, None
 
         result=self.yolo(frame,
                          classes=[self.person_class_index],
@@ -148,7 +157,7 @@ class cevo_tracker:
             objects.append(o)
        
         self.last_track_time=time    
-        return objects
+        return objects, None
 
 def create_tracker(param_dict, track_min_interval):
     assert "tracker_type" in param_dict, "tracker type must be specified"

@@ -366,7 +366,10 @@ def track_test(config, split=None):
                 continue
             for f in config["framerates"]:
                 t_fr=copy.deepcopy(c)
-                t_fr["min_interval"]=1/(f+0.01)
+                if f<0:
+                    t_fr["min_interval"]=f
+                else:
+                    t_fr["min_interval"]=1/(f+0.01)
                 expanded_tests[t+f", {f}fps"]=t_fr
         config["tests"]=expanded_tests
     

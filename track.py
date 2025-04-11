@@ -2,6 +2,7 @@ import src.trackset as ts
 import src.trackers as trackers
 import src.track_test as track_test
 import src.track_search as track_search
+import src.utrack.motion_track as mt
 import argparse
 import time
 
@@ -12,7 +13,8 @@ def test_track(t, config_file, display=False, output=None):
     trackset.import_create(trackset_gt,
                            track_min_interval=0.159, #-1,
                            debug=False,
-                           config_file=config_file)
+                           config_file=config_file,
+                           debug_enable=True)
     import_time=time.time()
     metrics, frame_events=track_test.compute_metrics(trackset_gt, trackset, frame_metrics=True, eval_rate_divisor=1)
     metrics_time=time.time()
@@ -30,18 +32,26 @@ if __name__ == '__main__':
     parser.add_argument('--view', action='store_true', help='view a trackset')
     parser.add_argument('--caltech', action='store_true', help='make caltech pedestrian sequences')
     parser.add_argument('--mot', action='store_true', help='make MOT sequences')
+    parser.add_argument('--cevo', action='store_true', help='make new CEVO videos')
     parser.add_argument('--test', type=str, default=None, help='test yaml file')
     parser.add_argument('--search', type=str, default=None, help='search config yaml file')
     parser.add_argument('--track', action='store_true', help='test tracker on a single sequence')
     parser.add_argument('--display', action='store_true', help='visualise results')
     parser.add_argument('--config', type=str, default="/mldata/config/track/bytetrack_nofuse.yaml", help="config")
     parser.add_argument('--output', type=str, default=None, help='output mp4 name')
+    parser.add_argument('--motiontracker-test',action='store_true', help='run motiontracker test')
     opt = parser.parse_args()
+    if opt.motiontracker_test:
+        mt.motiontracker_test()
+        exit()
     if opt.caltech:
         ts.convert_caltech_pedestrian()
         exit()
     if opt.mot:
         ts.convert_mot()
+        exit()
+    if opt.cevo:
+        ts.convert_cevo()
         exit()
     if opt.track:
         test_track(opt.trackset, opt.config, display=opt.display, output=opt.output)

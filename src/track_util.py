@@ -97,10 +97,6 @@ class Object:
                           fontScale=0.5,
                           fontColor=(200,255,255,255),
                           bgColor=clr)
-        
-    def update_predict(self, motiontracker):
-        motiontracker.predict_box(self.box)
-        for i in range(self.num_pose):
-            motiontracker.predict_point(self.pose_pos[i])
+  
 
     

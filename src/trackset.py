@@ -11,6 +11,7 @@ import yaml
 import json
 import stuff
 import math
+import shutil
 
 class TrackSet:
     def __init__(self, path=None):
@@ -28,14 +29,27 @@ class TrackSet:
             if path.endswith(".yml") or path.endswith(".yaml") or path.endswith(".json"):
                 self.import_yaml(path)
                 return
+            if path.endswith(".mp4"):
+                self.import_cevo(path)
+                return
 
     def frame_index_at_time(self, t):
         if len(self.frame_times)==0:
             return None
-        index = bisect.bisect_left(self.frame_times, t) - 1
+        index = bisect.bisect_left(self.frame_times, t+1e-7) - 1
         index = max(0, min(index, len(self.frame_times)-1))
         return index
     
+    def frame_time_after(self, t):
+        index=self.frame_index_at_time(t)
+        index=min(index+1, len(self.frame_times)-1)
+        return self.frame_times[index]
+    
+    def frame_time_before(self, t):
+        index=self.frame_index_at_time(t)
+        index=max(0, index-1)
+        return self.frame_times[index]
+
     def duration_seconds(self):
         return self.frame_times[-1] if len(self.frame_times)!=0 else 0
     
@@ -136,8 +150,18 @@ class TrackSet:
         if path is not None:
             return cv2.imread(path)
         return None
+    
+    def debug_at_time(self,t):
+        index=self.frame_index_at_time(t)
+        if index is None:
+            return None
+        
+        frame=self.frames[index]
+        if "tracker_debug" in frame:
+            return frame["tracker_debug"]
+        return None
 
-    def add_frame(self, object_list, time, img_path=None):
+    def add_frame(self, object_list, time, img_path=None, tracker_debug=None):
         objects={}
         for o in object_list:
             objects[o.track_id]={"box":o.box,
@@ -151,7 +175,8 @@ class TrackSet:
         self.frames.append({
                 "frame_time": time,
                 "objects": objects,
-                "image_path": img_path
+                "image_path": img_path,
+                "tracker_debug": tracker_debug
             })
 
     def export_yaml(self, file, output_video=None):
@@ -159,18 +184,22 @@ class TrackSet:
         file=file.replace(" ","-")
 
         if output_video is not None:
-            # Video writer to save MP4
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(output_video,
-                                  fourcc,
-                                  self.metadata['frame_rate'],
-                                  (self.metadata['width'], self.metadata['height']))
-            for f in self.frames:
-                img=cv2.imread(f["image_path"])
-                out.write(img)
-                del f["image_path"]
-            self.metadata['original_video']=output_video
-            out.release()
+            if "original_video" in self.metadata:
+                shutil.copy(self.metadata["original_video"], output_video)
+                self.metadata['original_video']=output_video
+            else:
+                # Video writer to save MP4
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                out = cv2.VideoWriter(output_video,
+                                    fourcc,
+                                    self.metadata['frame_rate'],
+                                    (self.metadata['width'], self.metadata['height']))
+                for f in self.frames:
+                    img=cv2.imread(f["image_path"])
+                    out.write(img)
+                    del f["image_path"]
+                self.metadata['original_video']=output_video
+                out.release()
         dict={"metadata":self.metadata, "frames":self.frames}
         if file.endswith(".json"):
             with open(file, 'w') as json_file:
@@ -187,6 +216,50 @@ class TrackSet:
         for f in self.frames:
             self.frame_times.append(f["frame_time"])
 
+    def import_cevo(self, mp4file):
+        json_path=mp4file[:-4]+" (1).mp4/COCO/annotations.json"
+        print(json_path)
+        cap = cv2.VideoCapture(mp4file)
+        fps = int(cap.get(cv2.CAP_PROP_FPS))  # Frames per second
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))  # Frame width
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))  # Frame height
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) 
+        duration=frame_count/fps
+        annot=stuff.load_dictionary(json_path)
+        num_frames=len(annot["images"])
+    
+        self.frames = []
+        for i in range(num_frames):
+            frame={"frame_id": i,
+                   "frame_time": i/fps,
+                   "objects": {}}
+            self.frames.append(frame)
+            
+        self.metadata={
+                "frame_rate": fps,
+                "width": width,
+                "height": height,
+                "classes": ["person", "face"],
+                "original_video": mp4file
+            }
+    
+        for a in annot["annotations"]:
+            x=a["bbox"][0]/width
+            y=a["bbox"][1]/height
+            w=a["bbox"][2]/width
+            h=a["bbox"][3]/height
+            f=a["image_id"]
+            assert f>0
+            f-=1
+            id=int(a["attributes"]["ID"])
+            c=a["category_id"]
+            if c==2:
+                id+=1000
+            self.frames[f]["objects"][id]={"box": [x, y, x+w, y+h], "class":(c-1), "conf":1}
+        self.frame_times=[]
+        for f in self.frames:
+            self.frame_times.append(f["frame_time"])
+
     def import_create(self,
                       video,
                       track_min_interval=0.05,
@@ -195,7 +268,8 @@ class TrackSet:
                       pbar=None,
                       config_file=None,
                       params=None,
-                      debug=False):
+                      debug=False,
+                      debug_enable=False):
 
         assert len(self.frame_times)==0
         
@@ -260,7 +334,7 @@ class TrackSet:
             if frame is None:
                 break
 
-            objects=tracker.track_frame(frame, t)
+            objects, tracker_debug=tracker.track_frame(frame, t, debug_enable=debug_enable)
 
             #if t>6.4 and t<7.5:
             #    if objects is not None:
@@ -276,7 +350,7 @@ class TrackSet:
 
             if objects is not None:
                 img_path=video.img_path_at_time(t) if cap is None else None
-                self.add_frame(objects, t, img_path=img_path)
+                self.add_frame(objects, t, img_path=img_path, tracker_debug=tracker_debug)
 
             t+=(1.0/fps)
             pbar.update(1)
@@ -385,6 +459,7 @@ def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["pe
 
     display=stuff.Display(width=1280, height=720, output=output)
     selected_ids=[]
+    debug_enable=[False]*10
 
     while(t<duration):
         display.clear()
@@ -444,8 +519,63 @@ def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["pe
                         elif events[e]["Type"]=="FP":
                             clr=(a,0,0,255)
                             thickness=-1 #4
-                            print(f"FP {o.track_id}")
                 o.draw(display, clr=clr, thickness=thickness)
+
+        debug=trackset.debug_at_time(t)
+        debug_entries=[]
+        if debug is not None:
+            for i,d in enumerate(debug):
+                debug_entries.append(d)
+                debug_entry=debug[d]
+                debug_entry_type=debug_entry["type"]
+                debug_entry_data=debug_entry["data"]
+                if debug_enable[i]==False:
+                    continue
+                if debug_entry_type=="yolo_detections":
+                    stuff.draw_boxes(display,
+                                     debug_entry_data["detections"],
+                                     attributes=debug_entry_data["attributes"],
+                                     highlight_index=None,
+                                     class_names=debug_entry_data["class_names"])
+                if debug_entry_type=="motion_track":
+                    flow=debug_entry_data["motion_array"]
+                    if flow is not None:
+                        grid_w=flow.shape[1]
+                        grid_h=flow.shape[0]
+                        for y in range(grid_h):
+                            for x in range(grid_w):
+                                cx=(x+0.5)/grid_w
+                                cy=(y+0.5)/grid_h
+                                vx=flow[y][x][0]
+                                vy=flow[y][x][1]
+                                thr=0.001
+                                if abs(vx)>thr or abs(vy)>thr:
+                                    display.draw_line([cx,cy], 
+                                                    [cx+vx, cy+vy], 
+                                                    clr=(128,255,255,0), thickness=1)
+                                clr=max(0,min(255,int(debug_entry_data["delta_array"][y][x])))
+                                box=[x/grid_w, y/grid_h, (x+1)/grid_w, (y+1)/grid_h]
+                                if clr>5:
+                                    display.draw_box(box, (clr,0,255,0), thickness=-1)
+                if debug_entry_type=="box_prediction":
+                    for i in debug_entry_data:
+                        display.draw_box(debug_entry_data[i]["from"], clr=(128,255,255,255), thickness=1)
+                        display.draw_box(debug_entry_data[i]["to"], clr=(128,255,0,0), thickness=2)
+                        if "pose_from" in debug_entry_data[i]:
+                            stuff.draw_pose(display, 
+                                            pose_pos=debug_entry_data[i]["pose_from"],
+                                            pose_conf=debug_entry_data[i]["pose_conf"], 
+                                            thickness=1, clr=(128,255,255,255))
+                            stuff.draw_pose(display, 
+                                            pose_pos=debug_entry_data[i]["pose_to"],
+                                            pose_conf=debug_entry_data[i]["pose_conf"], 
+                                            thickness=2, clr=(128,255,0,0))
+
+                if debug_entry_type=="roi":
+                    box=debug_entry_data["roi"]
+                    display.draw_box(box, clr=(128,255,0,0), thickness=4)
+
+        #print(debug)
 
         display.show(img, title=f"time={t:5.2f}")
         events=display.get_events(10)
@@ -460,10 +590,19 @@ def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["pe
                 show_det=not show_det
             if e['key']==' ':
                 paused=not paused
+            if e['key']=='>':
+                t=trackset.frame_time_after(t)
+            if e['key']=='<':
+                t=trackset.frame_time_before(t)
             if e['key']=='.':
                 t+=0.033
             if e['key']==',':
                 t-=0.033
+            if e['key']=='l':
+                print(debug_entries)
+            if e['key'] is not None and e['key']>='1' and e['key']<='9':
+                index=int(e['key'])-1
+                debug_enable[index]=not debug_enable[index]
         if paused is False:
             t+=0.033
     display.close()
@@ -593,6 +732,23 @@ def convert_mot():
             ts=TrackSet(input_path)
             ts.export_yaml(output_path, output_video_path)
 
+def convert_cevo():
+    output_folder="/mldata/tracking/cevo_april25"
+    folder="/mldata/downloaded_datasets/IndiaOfficeFrontDoor"
+    stuff.makedir(output_folder+"/annotation/")
+    stuff.makedir(output_folder+"/video/")
+    seqs=os.listdir(folder)
+    for s in seqs:
+        if not s.endswith(".mp4"):
+            continue
+        if not os.path.isfile(folder+"/"+s):
+            continue
+        input=folder+"/"+s
+        output_path=output_folder+"/annotation/"+s[:-4]+".json"
+        output_video_path=output_folder+"/video/"+s
+        print("Processing",folder,s,"....")
+        ts=TrackSet(input)
+        ts.export_yaml(output_path, output_video_path)
 
 def dofix():
     dr="/mldata/tracking/cevo/annotation"
