@@ -282,7 +282,7 @@ class TrackSet:
             for p in params:
                 param_dict[p]=params[p]
         param_dict["original_trackset"]=video
-        tracker=trackers.create_tracker(param_dict, track_min_interval=track_min_interval)
+        tracker=trackers.create_tracker(param_dict, track_min_interval=track_min_interval, debug_enable=debug_enable)
 
         cap=None
 

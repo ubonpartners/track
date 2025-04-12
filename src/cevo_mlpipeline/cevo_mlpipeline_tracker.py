@@ -5,7 +5,10 @@ import src.track_util as tu
 import os
 
 def run_cmd(cmd, debug=False):
-    result=subprocess.run(cmd, stdout=subprocess.DEVNULL, capture_output=True, text=True)
+    if debug:
+        subprocess.run(cmd)
+        return
+    result=subprocess.run(cmd, capture_output=True, text=True)
     stdout_str = result.stdout
     stderr_str = result.stderr
     if result.returncode!=0:
@@ -15,7 +18,7 @@ def run_cmd(cmd, debug=False):
         exit()
 
 class cevo_mlpipe_tracker:
-    def __init__(self, params, track_min_interval):
+    def __init__(self, params, track_min_interval, debug_enable=False):
         #print(params)
         trackset=params["original_trackset"]
         video=trackset.metadata["original_video"]
@@ -27,7 +30,7 @@ class cevo_mlpipe_tracker:
         #print(fps, track_min_interval, divisor)
         #print(video)
 
-        exe_debug=False
+        exe_debug=debug_enable
 
         h264_file=tempfile.NamedTemporaryFile(delete=False, suffix=".h264").name
         cevo_out_folder=tempfile.NamedTemporaryFile(delete=False, suffix=".out").name

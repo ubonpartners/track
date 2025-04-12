@@ -76,7 +76,7 @@ def object_match_score(new_obj, tracked_obj, context):
     return score
 
 class utracker:
-    def __init__(self, params, track_min_interval):
+    def __init__(self, params, track_min_interval, debug_enable=False):
         self.params=params
         self.yolo = ultralytics.YOLO(params["model"])
         self.track_min_interval=track_min_interval

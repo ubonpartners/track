@@ -11,7 +11,7 @@ import src.cevo_mlpipeline.cevo_mlpipeline_tracker as cm
 
 class ultralytics_tracker:
 
-    def __init__(self, params, track_min_interval):
+    def __init__(self, params, track_min_interval, debug_enable=False):
         self.tmp_file=None
         self.yolo = ultralytics.YOLO(params["model"])
         self.track_min_interval=track_min_interval
@@ -22,6 +22,8 @@ class ultralytics_tracker:
         self.person_class_index=self.class_names.index("person")
         fd, self.tmp_config_file=tempfile.mkstemp(dir="/tmp", prefix="yolo_config", suffix=".yaml")
         os.close(fd)
+        if "original_trackset" in self.params:
+            del self.params["original_trackset"]
         with open(self.tmp_config_file, 'w') as outfile:
             yaml.dump(self.params, outfile, default_flow_style=False)
 
@@ -41,10 +43,14 @@ class ultralytics_tracker:
                 self.frames_skipped_count=0
             else:
                 self.frames_skipped_count+=1
+
+        det_w=stuff.get_dict_param(self.params, "det_w", 640)
+        det_h=stuff.get_dict_param(self.params, "det_h", 640)
+
         objects=None
         if do_track:
             results = self.yolo.track(img,
-                                      imgsz=640,
+                                      imgsz=[det_h, det_w],
                                       persist=True,
                                       classes=[self.person_class_index],
                                       verbose=False,
@@ -78,7 +84,7 @@ class ultralytics_tracker:
     
 class cevo_tracker:
     
-    def __init__(self, params, track_min_interval):
+    def __init__(self, params, track_min_interval, debug_enable=False):
         
         self.params=params
         self.yolo = ultralytics.YOLO(self.params["model"])
@@ -94,7 +100,9 @@ class cevo_tracker:
                 self.attributes.append("person:"+c[len("person_"):])
 
     def track_frame(self, frame, time, debug_enable=False):
-        
+        self.debug_enable=debug_enable
+        self.debug={}
+
         if self.track_min_interval>=0:
             do_track=time-self.last_track_time>=self.track_min_interval
         else:
@@ -105,10 +113,13 @@ class cevo_tracker:
                 self.frames_skipped_count+=1
         if do_track==False:
             return None, None
+        
+        det_w=stuff.get_dict_param(self.params, "det_w", 640)
+        det_h=stuff.get_dict_param(self.params, "det_h", 640)
 
         result=self.yolo(frame,
                          classes=[self.person_class_index],
-                         imgsz=640,
+                         imgsz=[det_h, det_w],
                          half=True,
                          conf=self.params["track_low_thresh"],
                          iou=self.params["nms_iou"],
@@ -127,6 +138,10 @@ class cevo_tracker:
                                         face_kp=True,
                                         pose_kp=True,
                                         fold_attributes=True)
+        
+        if self.debug_enable:
+            self.debug|={"detections": {"type": "yolo_detections", "data":{"detections":out_det, "class_names":self.class_names, "attributes":self.attributes}}}
+        
     
         person_dets=[d for d in out_det if d["class"]==self.person_class_index]
 
@@ -158,9 +173,9 @@ class cevo_tracker:
             objects.append(o)
        
         self.last_track_time=time    
-        return objects, None
+        return objects, self.debug
 
-def create_tracker(param_dict, track_min_interval):
+def create_tracker(param_dict, track_min_interval, debug_enable=False):
     assert "tracker_type" in param_dict, "tracker type must be specified"
         
     if not "model" in param_dict:
@@ -169,13 +184,13 @@ def create_tracker(param_dict, track_min_interval):
 
     tracker_type=param_dict["tracker_type"]
     if tracker_type=="bytetrack" or tracker_type=="botsort":
-        tracker=ultralytics_tracker(param_dict, track_min_interval=track_min_interval)
+        tracker=ultralytics_tracker(param_dict, track_min_interval=track_min_interval, debug_enable=debug_enable)
     elif tracker_type=="utrack":
-        tracker=ut.utracker(param_dict, track_min_interval=track_min_interval)
+        tracker=ut.utracker(param_dict, track_min_interval=track_min_interval, debug_enable=debug_enable)
     elif tracker_type=="cevo":
-        tracker=cevo_tracker(param_dict, track_min_interval=track_min_interval)
+        tracker=cevo_tracker(param_dict, track_min_interval=track_min_interval, debug_enable=debug_enable)
     elif tracker_type=="cevo_mlpipe":
-        tracker=cm.cevo_mlpipe_tracker(param_dict, track_min_interval=track_min_interval)
+        tracker=cm.cevo_mlpipe_tracker(param_dict, track_min_interval=track_min_interval, debug_enable=debug_enable)
     else:
         print(f"Unkown tracker type {tracker_type}")
         exit()
