@@ -1,24 +1,20 @@
 import cv2
 import numpy as np
 import src.utrack.kalman as kalman
+import ubon_pycstuff.ubon_pycstuff as upyc
 import stuff
 import copy
 
 class MotionTracker:
     def __init__(self, params=None):
         self.params=params
-        self.width=0
-        self.height=0
-        self.last_frame=None
         self.last_frame_time=None
         self.num_frames=0
-        self.grid_size=0
         self.flow=None
         self.motion_array=None
-        self.nvof_w=0
-        self.nvof_h=0
         self.roi=[0,0,0,0]
         self.accumulated_delta=None
+        self.flow_engine=None
 
     def predict_delta(self, pt):
         if self.motion_array is None:
@@ -58,48 +54,63 @@ class MotionTracker:
                 stuff.coord.clip01(box[3]-dys)]
 
     def add_frame(self, img, time):
-        img_height, img_width, _ = img.shape
-        self.last_frame_time=time
-        scalef=min(320/img_height, 320/img_width)
-        scale_w=int(img_width*scalef)
-        scale_h=int(img_height*scalef)
-        scale_w=4*((scale_w+3)//4)
-        scale_h=4*((scale_h+3)//4)
+        
 
-        if scale_w!=self.width or scale_h!=self.height:
-            #print(f"MotionTracker : resize to {scale_w} x {scale_h}")
-            self.nvof = cv2.cuda_NvidiaOpticalFlow_2_0.create(imageSize=[scale_w, scale_h],
-                                                              enableCostBuffer=True,
-                                                              enableTemporalHints=False,
-                                                              perfPreset=cv2.cuda.NvidiaOpticalFlow_2_0_NV_OF_PERF_LEVEL_MEDIUM,
-                                                              outputGridSize=cv2.cuda.NvidiaOpticalFlow_2_0_NV_OF_OUTPUT_VECTOR_GRID_SIZE_4,
-                                                              hintGridSize=cv2.cuda.NvidiaOpticalFlow_2_0_NV_OF_HINT_VECTOR_GRID_SIZE_4)
-                    
-            self.grid_size=self.nvof.getGridSize()
-            self.last_frame=None
-            self.num_frames=0
-            self.width=scale_w
-            self.height=scale_h
-            self.flow=None
-            self.nvof_w=int(scale_w/self.grid_size)
-            self.nvof_h=int(scale_h/self.grid_size)
-            self.hint_buffer=np.zeros((self.nvof_h, self.nvof_w, 2), dtype=np.int16)
-            self.accumulated_delta=np.ones((self.nvof_h, self.nvof_w), dtype=int)*1#1000
+        if False:
+            img_height, img_width, _ = img.shape
+            self.last_frame_time=time
+            scalef=min(320/img_height, 320/img_width)
+            scale_w=int(img_width*scalef)
+            scale_h=int(img_height*scalef)
+            scale_w=4*((scale_w+3)//4)
+            scale_h=4*((scale_h+3)//4)
 
-        img_scaled=cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), (self.width, self.height))
+            if self.num_frames==0 or scale_w!=self.width or scale_h!=self.height:
+                #print(f"MotionTracker : resize to {scale_w} x {scale_h}")
+                self.nvof = cv2.cuda_NvidiaOpticalFlow_2_0.create(imageSize=[scale_w, scale_h],
+                                                                enableCostBuffer=True,
+                                                                enableTemporalHints=False,
+                                                                perfPreset=cv2.cuda.NvidiaOpticalFlow_2_0_NV_OF_PERF_LEVEL_MEDIUM,
+                                                                outputGridSize=cv2.cuda.NvidiaOpticalFlow_2_0_NV_OF_OUTPUT_VECTOR_GRID_SIZE_4,
+                                                                hintGridSize=cv2.cuda.NvidiaOpticalFlow_2_0_NV_OF_HINT_VECTOR_GRID_SIZE_4)
+                        
+                self.grid_size=self.nvof.getGridSize()
+                self.last_frame=None
+                self.num_frames=0
+                self.width=scale_w
+                self.height=scale_h
+                self.flow=None
+                self.nvof_w=int(scale_w/self.grid_size)
+                self.nvof_h=int(scale_h/self.grid_size)
+                self.hint_buffer=np.zeros((self.nvof_h, self.nvof_w, 2), dtype=np.int16)
+                self.accumulated_delta=np.ones((self.nvof_h, self.nvof_w), dtype=int)*1#1000
 
-        if self.num_frames!=0:
-            self.flow = self.nvof.calc(img_scaled, self.last_frame, None, hint=self.hint_buffer)
-            delta=self.flow[1]
-            delta=np.maximum(0, delta-5)
-            self.accumulated_delta+=delta
-            self.motion_array = self.flow[0].astype(np.float32)
-            self.motion_array[..., 0]*=(1.0/(32*self.width))
-            self.motion_array[..., 1]*=(1.0/(32*self.height))
-            self.accumulated_delta+= (100 * np.abs(self.motion_array[..., 0])).astype(self.accumulated_delta.dtype)
-            self.accumulated_delta+= (100 * np.abs(self.motion_array[..., 1])).astype(self.accumulated_delta.dtype)
+            img_scaled=cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), (self.width, self.height))
 
-        self.last_frame=img_scaled
+            if self.num_frames!=0:
+                self.flow = self.nvof.calc(img_scaled, self.last_frame, None, hint=self.hint_buffer)
+                delta=self.flow[1]
+                delta=np.maximum(0, delta-5)
+                self.accumulated_delta+=delta
+                self.motion_array = self.flow[0].astype(np.float32)
+                self.motion_array[..., 0]*=(1.0/(32*self.width))
+                self.motion_array[..., 1]*=(1.0/(32*self.height))
+                self.accumulated_delta+= (100 * np.abs(self.motion_array[..., 0])).astype(self.accumulated_delta.dtype)
+                self.accumulated_delta+= (100 * np.abs(self.motion_array[..., 1])).astype(self.accumulated_delta.dtype)
+            self.last_frame=img_scaled
+        else:
+            if self.flow_engine is None:
+                self.flow_engine=upyc.c_nvof(320, 320)
+            costs, self.motion_array = copy.deepcopy(self.flow_engine.run(upyc.c_image.from_numpy(img)))
+            self.nvof_h, self.nvof_w=costs.shape
+            #print(self.nvof_w, self.nvof_h)
+            if self.num_frames==0:
+                self.accumulated_delta=np.ones((self.nvof_h, self.nvof_w), dtype=int)*1
+            self.last_frame_time=time
+            #print("motion", self.motion_array.shape)
+            if self.num_frames!=0:
+                self.accumulated_delta+=(2*costs)
+                
         self.num_frames+=1
     
     def get_roi(self, thr):
@@ -120,7 +131,7 @@ class MotionTracker:
         self.accumulated_delta[t:b, l:r]=0
 
     def get_debug(self):
-        return {"motion_track": {"type": "motion_track", "data":{"motion_array":copy.copy(self.motion_array), "delta_array":copy.copy(self.accumulated_delta)}}}
+        return {"motion_track": {"type": "motion_track", "data":{"motion_array":copy.deepcopy(self.motion_array), "delta_array":copy.copy(self.accumulated_delta)}}}
             
 
     def draw(self, img):
@@ -128,15 +139,14 @@ class MotionTracker:
             return img
         scale=8
         
-        grid_h=self.flow[0].shape[0]
-        grid_w=self.flow[0].shape[1]
+        grid_h=self.motion_array.shape[0]
+        grid_w=self.motion_array.shape[1]
         overlay=np.zeros((grid_h*scale, grid_w*scale, 3), dtype=np.uint8)
         m=scale
-
         #print(f"grid {grid_w}x{grid_h} overlay {overlay.shape}")
         for y in range(grid_h):
             for x in range(grid_w):
-                v=self.flow[1][y][x]
+                v=self.costs[y][x]
                 vx=int(self.motion_array[y][x][0]*grid_w*scale)
                 vy=int(self.motion_array[y][x][1]*grid_h*scale)
                 inside=False
@@ -168,7 +178,7 @@ def motiontracker_test():
     images=[]
     w=256
     h=256
-    for x in [0, 4, 8]:
+    for x in [0, -4, -8]:
         images.append(img[100:(100+h), (100+x):(100+x+w)])
     mt.add_frame(images[0], 0)
     mt.add_frame(images[2], 1)
