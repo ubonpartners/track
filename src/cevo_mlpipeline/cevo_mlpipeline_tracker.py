@@ -3,12 +3,19 @@ import tempfile
 import stuff
 import src.track_util as tu
 import os
+import yaml
 
-def run_cmd(cmd, debug=False):
+def run_cmd(cmd, debug=False, timeout=240):
     if debug:
         subprocess.run(cmd)
         return
-    result=subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result=subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        print(f"⚠️ Command {cmd!r} timed out after {timeout} seconds")
+        print(f" STDOUT: {e.stdout}")
+        print(f" STDERR: {e.stderr}")
+        sys.exit(1)
     stdout_str = result.stdout
     stderr_str = result.stderr
     if result.returncode!=0:
@@ -19,16 +26,19 @@ def run_cmd(cmd, debug=False):
 
 class cevo_mlpipe_tracker:
     def __init__(self, params, track_min_interval, debug_enable=False):
-        #print(params)
-        trackset=params["original_trackset"]
+        self.params=params;
+        trackset=self.params["original_trackset"]
+        del self.params["original_trackset"]
+        # write config to yaml file so we can pass it as parameter to cevo binary
+        fd, self.tmp_config_file=tempfile.mkstemp(dir="/tmp", prefix="cevo_config_", suffix=".yaml")
+        os.close(fd)
+        with open(self.tmp_config_file, 'w') as outfile:
+            yaml.dump(self.params, outfile, default_flow_style=False)
         video=trackset.metadata["original_video"]
         fps=int(trackset.metadata["frame_rate"]+0.5)
         divisor=1
         while(divisor/fps<track_min_interval):
             divisor+=1
-        
-        #print(fps, track_min_interval, divisor)
-        #print(video)
 
         exe_debug=debug_enable
 
@@ -54,12 +64,18 @@ class cevo_mlpipe_tracker:
         # run Cevo video_dec_trt; runs tracker and outputs JSON annotations
         
         cmd=[params["exe"],
+            "-c", self.tmp_config_file,
             "-n", "1", "-p", "1", "-d", cevo_out_folder,
             "--pix_fmt", "H264",
             "-f",f"{fps}/{divisor}",
             "-v", h264_file,
             "--trt-enginefile", params["trt"],
             "--display", "0x00", "--dbg-level", "0"]
+        
+        #s=""
+        #for c in cmd:
+        #    s=s+c+" "
+        #print(s)
         
         run_cmd(cmd, debug=exe_debug)
 
@@ -78,6 +94,12 @@ class cevo_mlpipe_tracker:
         stuff.rmdir(cevo_out_folder)
 
         self.fn=0
+
+    def __del__(self):
+        try:
+            os.remove(self.tmp_config_file)
+        except Exception as e:
+            print("ERROR :: ", "cevo_tracker", e)
 
     def track_frame(self, frame, time, debug_enable=False):
         if not self.fn in self.frames:
