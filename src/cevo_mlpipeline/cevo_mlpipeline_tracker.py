@@ -1,35 +1,19 @@
-import subprocess
+
 import tempfile
 import stuff
 import src.track_util as tu
 import os
 import yaml
-
-def run_cmd(cmd, debug=False, timeout=240):
-    if debug:
-        subprocess.run(cmd)
-        return
-    try:
-        result=subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        print(f"⚠️ Command {cmd!r} timed out after {timeout} seconds")
-        print(f" STDOUT: {e.stdout}")
-        print(f" STDERR: {e.stderr}")
-        sys.exit(1)
-    stdout_str = result.stdout
-    stderr_str = result.stderr
-    if result.returncode!=0:
-        print(f" command {cmd} failed")
-        print(f" STDOUT: {stdout_str}")
-        print(f" STDERR: {stderr_str}")
-        exit()
+from pathlib import Path
 
 class cevo_mlpipe_tracker:
-    def __init__(self, params, track_min_interval, debug_enable=False):
+    def __init__(self, params, track_min_interval, debug_enable=False, cache_h264=True):
         self.params=params;
         trackset=self.params["original_trackset"]
         del self.params["original_trackset"]
+
         # write config to yaml file so we can pass it as parameter to cevo binary
+        
         fd, self.tmp_config_file=tempfile.mkstemp(dir="/tmp", prefix="cevo_config_", suffix=".yaml")
         os.close(fd)
         with open(self.tmp_config_file, 'w') as outfile:
@@ -41,25 +25,31 @@ class cevo_mlpipe_tracker:
             divisor+=1
 
         exe_debug=debug_enable
+        
+        # convert mp4 file into h264 using ffmpeg
+        # by default we will put the converted file in a "generated" subfolder
+        # of where the mp4 is so we can reuse it next time - if you don't want
+        # to do this use cache_h264=False which will use a temp file instead
 
-        h264_file=tempfile.NamedTemporaryFile(delete=False, suffix=".h264").name
-        cevo_out_folder=tempfile.NamedTemporaryFile(delete=False, suffix=".out").name
-        stuff.rm(h264_file)
-        stuff.rm(cevo_out_folder)
-
-        # use FFMPEG to convert original video file to h264 stream
-
-        cmd=["ffmpeg",
-            "-i", video,
-            "-c:v", "copy",
-            "-bsf:v", "h264_mp4toannexb",
-            "-an",
-            "-f", "h264",
-            h264_file]
-
-        run_cmd(cmd, debug=exe_debug)
+        h264_file_temp=None
+        h264_file=None
+        if cache_h264 and video.endswith(".mp4"):
+            p = Path(video)
+            h264_file=str(p.with_name("generated_h264") / p.with_suffix(".h264").name)
+            gen_dir = p.with_name("generated_h264")
+            gen_dir.mkdir(parents=True, exist_ok=True)
+            if not os.path.isfile(h264_file):
+                stuff.mp4_to_h264(video, h264_file, debug=exe_debug)
+        else:
+            h264_file=tempfile.NamedTemporaryFile(delete=False, suffix=".h264").name
+            stuff.rm(h264_file)
+            stuff.mp4_to_h264(video, h264_file, debug=exe_debug)
+            h264_file_temp=h264_file
 
         assert os.path.isfile(h264_file), "Failed to create h264 file"
+
+        cevo_out_folder=tempfile.NamedTemporaryFile(delete=False, suffix=".out").name
+        stuff.rm(cevo_out_folder)
 
         # run Cevo video_dec_trt; runs tracker and outputs JSON annotations
         
@@ -72,12 +62,7 @@ class cevo_mlpipe_tracker:
             "--trt-enginefile", params["trt"],
             "--display", "0x00", "--dbg-level", "0"]
         
-        #s=""
-        #for c in cmd:
-        #    s=s+c+" "
-        #print(s)
-        
-        run_cmd(cmd, debug=exe_debug)
+        stuff.run_cmd(cmd, debug=exe_debug)
 
         assert os.path.isdir(cevo_out_folder), "Failed to create output cevo data"
 
@@ -90,7 +75,8 @@ class cevo_mlpipe_tracker:
             d["test_time"]=fn/trackset.metadata["frame_rate"]
             self.frames[fn]=d
 
-        stuff.rm(h264_file)
+        if h264_file_temp is not None:
+            stuff.rm(h264_file_temp)
         stuff.rmdir(cevo_out_folder)
 
         self.fn=0

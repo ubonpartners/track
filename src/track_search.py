@@ -99,6 +99,8 @@ def search_track(yaml_file):
     search_log(logfile, f"Iter {iter_count:04d} intial score {score_best:0.4f} at vector {vec_best}")
     search_log(logfile, f"---> Best score is {track_test.summary_string(best_full_result)}")
 
+    total_improvement=[0.0]*len(param_names)
+
     while True:
         index = param_index % len(param_names)
 
@@ -125,17 +127,24 @@ def search_track(yaml_file):
         score_up,full_result_up=search_test(config, param_names, vec_up, param_min, param_max, results, split=train_split, logfile=logfile)
         score_down,full_result_down=search_test(config, param_names, vec_down, param_min, param_max, results, split=train_split, logfile=logfile)
         if score_up>score_best:
+            total_improvement[index]+=(score_up-score_best)
             score_best=score_up
             vec_best=vec_up
             best_full_result=full_result_up
             last_improvement_iter=iter_count
         if score_down>score_best:
+            total_improvement[index]+=(score_down-score_best)
             score_best=score_down
             vec_best=vec_down
             best_full_result=full_result_down
             last_improvement_iter=iter_count
         if last_improvement_iter==iter_count:
-            search_log(logfile, f"Iter {iter_count:04d} mult: {step_multiplier} param {param_names[index]} new score_best: {score_best:0.4f} at vector {vec_best} total {len(results)} results")
+            search_log(logfile, f"Iter {iter_count:04d} mult: {step_multiplier} param {param_names[index]} 🎉🎉 new score_best 🎉🎉 : {score_best:0.4f} at vector {vec_best} total {len(results)} results")
+            improvement=sum(total_improvement)
+            if improvement!=0:
+                for i in range(len(param_names)):
+                    if total_improvement[i]!=0:
+                        search_log(logfile, f"\t\t{param_names[i]:20s} improvement {total_improvement[i]:8.5f} {(100*total_improvement[i]/improvement):.1f}%%")
             successive_improvements+=1
             improvements_since_validate+=1
             if successive_improvements>=2:
