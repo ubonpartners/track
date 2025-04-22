@@ -27,6 +27,9 @@ def lost_object_match_score(self, other, context):
         return 0
     return box_score
 
+def partition_fn(obj, context):
+    return obj.partition_mask
+
 def object_match_score(new_obj, tracked_obj, context):
     kf_weight=context["kf_weight"]
     kp_weight=context["kp_weight"]
@@ -126,9 +129,14 @@ class utracker:
     def update_predict(self, detected_objects, motiontracker, roi, time):
         self.log(f"Update-predict {len(self.tracked_objects)} old objects {len(detected_objects)} new objects")
 
+        use_new_match=True
+        partition_size=(4,16)
+
         for o in self.tracked_objects:
             o.matched=False
             o.time=time
+            if use_new_match:
+                o.partition_mask=stuff.uniform_grid_partition(o.box, context=partition_size)
 
         pose_conf=self.params["pose_conf"]
         for o in detected_objects:
@@ -136,6 +144,8 @@ class utracker:
             o.adjusted_confidence=o.confidence+pose_conf*sum(o.pose_conf)
             o.track_state=TrackState.New
             o.observations=1
+            if use_new_match:
+                o.partition_mask=stuff.uniform_grid_partition(o.box, context=partition_size)
 
         max_miss_time=self.params["track_buffer_seconds"]
 
@@ -163,7 +173,18 @@ class utracker:
             det_filtered=[o for o in detected_objects if o.matched==False and mfn_context["det_select"](o)]
             tracked_filtered=[o for o in self.tracked_objects if o.matched==False and mfn_context["tracked_select"](o)]
 
-            new_ind, old_ind, scores=stuff.match_lsa(det_filtered, tracked_filtered, mfn=object_match_score, mfn_context=mfn_context)
+            if use_new_match:
+                new_ind, old_ind, scores=stuff.match_lsa2(det_filtered,
+                                                          tracked_filtered,
+                                                          mfn=object_match_score,
+                                                          mfn_context=mfn_context,
+                                                          partition_fn=partition_fn,
+                                                          max_partitions=64)
+            else:
+                new_ind, old_ind, scores=stuff.match_lsa(det_filtered,
+                                                          tracked_filtered,
+                                                          mfn=object_match_score,
+                                                          mfn_context=mfn_context)
             #print(f"{match_pass} {len(det_filtered)} {len(tracked_filtered)}")
             num_matches=len(new_ind)
             self.log(f"...Time {time:8.3f} : ROI {roi} {num_matches} matches")
@@ -242,7 +263,18 @@ class utracker:
         # remove duplicated objects
 
         lost_object_context={"iou":self.params["delete_dup_iou"]}
-        new_ind, old_ind, scores=stuff.match_lsa(self.tracked_objects, self.tracked_objects, mfn=lost_object_match_score, mfn_context=lost_object_context)
+        if use_new_match:
+            new_ind, old_ind, scores=stuff.match_lsa2(self.tracked_objects,
+                                                  self.tracked_objects,
+                                                  mfn=lost_object_match_score,
+                                                  mfn_context=lost_object_context,
+                                                  partition_fn=partition_fn,
+                                                  max_partitions=64)
+        else:
+            new_ind, old_ind, scores=stuff.match_lsa(self.tracked_objects,
+                                                  self.tracked_objects,
+                                                  mfn=lost_object_match_score,
+                                                  mfn_context=lost_object_context)
         for i,s in enumerate(scores):
             if s>0:
                 self.tracked_objects[old_ind[i]].track_state=TrackState.Removed
