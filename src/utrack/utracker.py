@@ -314,25 +314,40 @@ class utracker:
             self.last_track_time=time
             return None, self.debug
 
-        roi=motion_roi #[0,0,1.0,1.0] #motiontracker.get_roi(100)
+        self.predict_tracked_object_positions(self.motiontracker, time)
+            
+        # expand ROI to include the predicted position of all tracked objects
+        expanded_roi=motion_roi.copy()
+        for o in self.tracked_objects:
+            expanded_roi[0]=min(o.kf_predicted_box[0], min(o.of_predicted_box[0], expanded_roi[0]))
+            expanded_roi[1]=min(o.kf_predicted_box[1], min(o.of_predicted_box[1], expanded_roi[1]))
+            expanded_roi[2]=max(o.kf_predicted_box[2], max(o.of_predicted_box[2], expanded_roi[2]))
+            expanded_roi[3]=max(o.kf_predicted_box[3], max(o.of_predicted_box[3], expanded_roi[3]))
+        e_w=max(0.05, expanded_roi[2]-expanded_roi[0])
+        e_h=max(0.05, expanded_roi[3]-expanded_roi[1])
+        expanded_roi[0]=stuff.clip01(expanded_roi[0]-self.params["roi_expand_ratio"]*0.5*e_w)
+        expanded_roi[1]=stuff.clip01(expanded_roi[1]-self.params["roi_expand_ratio"]*0.5*e_h)
+        expanded_roi[2]=stuff.clip01(expanded_roi[2]+self.params["roi_expand_ratio"]*0.5*e_w)
+        expanded_roi[3]=stuff.clip01(expanded_roi[3]+self.params["roi_expand_ratio"]*0.5*e_h)
 
-        roi=[0,0,1.0,1.0]#motiontracker.get_roi(80)
-        detection_roi=roi
+        detection_roi=expanded_roi
+        #print("B", detection_roi[0], detection_roi[2]);
+        #print(detection_roi[2]-detection_roi[0],e_w,(detection_roi[2]-detection_roi[0])/ e_w, self.params["roi_expand_ratio"])
         h,w,_=frame.shape
-        roi_l=int(roi[0]*w)
-        roi_r=int(roi[2]*w)
-        roi_t=int(roi[1]*h)
-        roi_b=int(roi[3]*h)
-        self.motiontracker.set_roi_detected(motion_roi)
+        roi_l=int(detection_roi[0]*w)
+        roi_r=int(detection_roi[2]*w)
+        roi_t=int(detection_roi[1]*h)
+        roi_b=int(detection_roi[3]*h)
+        self.motiontracker.set_roi_detected(detection_roi)
         #print(roi_l,roi_t,roi_r,roi_b)
         img_roi=frame[roi_t:roi_b, roi_l:roi_r]
         result=self.yolo(img_roi,
-                            half=True,
-                            conf=0.05,
-                            iou=self.params["nms_iou"],
-                            max_det=600,
-                            verbose=False,
-                            rect=True)
+                         half=True,
+                         conf=0.05,
+                         iou=self.params["nms_iou"],
+                         max_det=600,
+                         verbose=False,
+                         rect=True)
 
         out_det=stuff.yolo_results_to_dets(result[0],
                                         det_thr=0.05,
@@ -349,17 +364,27 @@ class utracker:
                 #stuff.check_pose_points(d)
                 o=tu.Object(detection=d, time=time, expand_by_pose=True)
                 o.time=time
-                stuff.coord.unmap_roi_box(roi, o.box)
-                #for pt in o.pose_pos:
-                #    stuff.coord.unmap_roi_point(roi, pt)
+                stuff.coord.unmap_roi_box_inplace(detection_roi, o.box)
+                for pt in o.pose_pos:
+                    stuff.coord.unmap_roi_point_inplace(detection_roi, pt)
+                    
                 detected_objects.append(o)
+
+            stuff.coord.unmap_roi_box_inplace(detection_roi, d["box"])
+            if "pose_points" in d:
+                for i in range(len(d["pose_points"])//3):
+                    d["pose_points"][i*3:i*3+2]=stuff.coord.unmap_roi_point(detection_roi, d["pose_points"][i*3:i*3+2])
+            if "face_points" in d:
+                for i in range(len(d["face_points"])//3):
+                    d["face_points"][i*3:i*3+2]=stuff.coord.unmap_roi_point(detection_roi, d["face_points"][i*3:i*3+2])
 
         self.last_track_time=time
         if self.debug_enable:
             self.debug|={"detections": {"type": "yolo_detections", "data":{"detections":out_det, "class_names":self.class_names, "attributes":self.attributes}}}
-            self.debug|={"test_roi": {"type": "roi", "data": {"roi":copy.copy(motion_roi)}}}
+        self.debug|={"detection_roi": {"type": "roi", "data": {"roi":copy.copy(detection_roi)}}}
+        self.debug|={"motion_roi": {"type": "roi", "data": {"roi":copy.copy(motion_roi)}}}
 
-        self.predict_tracked_object_positions(self.motiontracker, time)
+
 
         ret=self.update_predict(detected_objects, self.motiontracker, detection_roi, time)
         return ret, self.debug

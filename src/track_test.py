@@ -35,6 +35,7 @@ def summary_string(r):
     s+=f" SWPo:{r['switch_per_obj']:5.3f}"
     s+=f" FRPo:{r['frag_per_obj']:5.3f}"
     s+=f" Skip:{r['tracked_frames_skipped_frac']:0.2f}"
+    s+=f" dROI:{r['average_detection_roi_area']:0.2f}"
     return s
 
 def compute_metrics(gt, test, 
@@ -116,9 +117,20 @@ def compute_metrics(gt, test,
     metrics_dict["tracked_frames"]=len(test.frames)
 
     skipped=0
+    total_detection_roi_area=0
     for i in range(len(test.frames)):
         if test.frames[i]["objects"] is None:
             skipped+=1
+        else:
+            detection_roi_area=1.0
+            if "tracker_debug" in test.frames[i]:
+                if "detection_roi" in test.frames[i]["tracker_debug"]:
+                    detection_roi_area=stuff.box_a(test.frames[i]["tracker_debug"]["detection_roi"]["data"]["roi"])
+            total_detection_roi_area+=detection_roi_area
+
+    average_detection_roi_area=total_detection_roi_area/(len(test.frames)-skipped+1e-7)
+    metrics_dict["average_detection_roi_area"]=average_detection_roi_area
+    
     metrics_dict["tracked_frames_skipped"]=skipped
     metrics_dict["tracked_frames_skipped_frac"]=skipped/len(test.frames)
 
@@ -239,6 +251,7 @@ def display_results(results, columns, sort_key):
                 er['tracked_time']/=len(filtered)
                 er['tracked_fps']/=len(filtered)
                 er['tracked_frames_skipped_frac']=er['tracked_frames_skipped_frac']/len(filtered)
+                er['average_detection_roi_area']=er['average_detection_roi_area']/len(filtered)
                 er['fitness']=fitness_score(er)
                 
                 #er['mota']=er['mota']/er['num_objects']

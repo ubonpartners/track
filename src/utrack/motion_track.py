@@ -87,7 +87,7 @@ class MotionTracker:
         #    min_col, max_col = cols.min(), cols.max()
         #    roi= [min_col/self.nvof_w, min_row/self.nvof_h, (max_col+1)/self.nvof_w, (max_row+1)/self.nvof_h]
         if self.mad_cost is not None:
-            rows, cols = np.where(self.mad_cost>8)
+            rows, cols = np.where(self.mad_cost>self.params["motiontracker_mad_delta"])
             if len(rows)==0:
                 return [0,0,0,0]
         else:

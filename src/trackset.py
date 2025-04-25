@@ -610,6 +610,7 @@ def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["pe
 
                 if debug_entry_type=="roi":
                     box=debug_entry_data["roi"]
+                    display.draw_box(box, clr=(16,255,255,0), thickness=-1)
                     display.draw_box(box, clr=(128,255,0,0), thickness=4)
 
         #print(debug)
