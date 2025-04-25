@@ -346,7 +346,7 @@ class utracker:
         detected_objects=[]
         for d in out_det:
             if d["class"]==self.person_class_index:
-                stuff.check_pose_points(d)
+                #stuff.check_pose_points(d)
                 o=tu.Object(detection=d, time=time, expand_by_pose=True)
                 o.time=time
                 stuff.coord.unmap_roi_box(roi, o.box)
