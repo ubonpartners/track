@@ -34,6 +34,7 @@ def summary_string(r):
     s+=f" FPTr:{r['fp_tracks']}"
     s+=f" SWPo:{r['switch_per_obj']:5.3f}"
     s+=f" FRPo:{r['frag_per_obj']:5.3f}"
+    s+=f" Skip:{r['tracked_frames_skipped_frac']:0.2f}"
     return s
 
 def compute_metrics(gt, test, 
@@ -113,6 +114,14 @@ def compute_metrics(gt, test,
     completely_lost_gt_ids = set(all_gt_ids) - set(matched_gt_ids)
     num_never_detected=len(completely_lost_gt_ids)
     metrics_dict["tracked_frames"]=len(test.frames)
+
+    skipped=0
+    for i in range(len(test.frames)):
+        if test.frames[i]["objects"] is None:
+            skipped+=1
+    metrics_dict["tracked_frames_skipped"]=skipped
+    metrics_dict["tracked_frames_skipped_frac"]=skipped/len(test.frames)
+
     metrics_dict["tracked_time"]=duration
     metrics_dict["tracked_fps"]=len(test.frames)/duration
     metrics_dict["match_iou"]=match_iou
@@ -229,6 +238,7 @@ def display_results(results, columns, sort_key):
                 er['tracked_frames']/=len(filtered)
                 er['tracked_time']/=len(filtered)
                 er['tracked_fps']/=len(filtered)
+                er['tracked_frames_skipped_frac']=er['tracked_frames_skipped_frac']/len(filtered)
                 er['fitness']=fitness_score(er)
                 
                 #er['mota']=er['mota']/er['num_objects']
@@ -422,7 +432,7 @@ def track_test(config, split=None):
                 tests_to_run.append(params)
             else:
                 output_results.append(result)
-    
+
     mp.set_start_method('spawn', force=True)
     print(f"Running {len(tests_to_run)} tests...")
     with tqdm(total=len(tests_to_run),
@@ -439,6 +449,7 @@ def track_test(config, split=None):
         for _ in range(num_workers):
             work_queue.put(None)
 
+        
         workers = []
         for i in range(num_workers):
             p = Process(target=worker_fn, args=(work_queue, result_queue, quit_queue, i))

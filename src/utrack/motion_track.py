@@ -15,6 +15,7 @@ class MotionTracker:
         self.roi=[0,0,0,0]
         self.accumulated_delta=None
         self.flow_engine=None
+        self.old_motion_surf=None
 
     def predict_delta(self, pt):
         if self.motion_array is None:
@@ -54,72 +55,48 @@ class MotionTracker:
                 stuff.coord.clip01(box[3]-dys)]
 
     def add_frame(self, img, time):
-        
-
-        if False:
-            img_height, img_width, _ = img.shape
-            self.last_frame_time=time
-            scalef=min(320/img_height, 320/img_width)
-            scale_w=int(img_width*scalef)
-            scale_h=int(img_height*scalef)
-            scale_w=4*((scale_w+3)//4)
-            scale_h=4*((scale_h+3)//4)
-
-            if self.num_frames==0 or scale_w!=self.width or scale_h!=self.height:
-                #print(f"MotionTracker : resize to {scale_w} x {scale_h}")
-                self.nvof = cv2.cuda_NvidiaOpticalFlow_2_0.create(imageSize=[scale_w, scale_h],
-                                                                enableCostBuffer=True,
-                                                                enableTemporalHints=False,
-                                                                perfPreset=cv2.cuda.NvidiaOpticalFlow_2_0_NV_OF_PERF_LEVEL_MEDIUM,
-                                                                outputGridSize=cv2.cuda.NvidiaOpticalFlow_2_0_NV_OF_OUTPUT_VECTOR_GRID_SIZE_4,
-                                                                hintGridSize=cv2.cuda.NvidiaOpticalFlow_2_0_NV_OF_HINT_VECTOR_GRID_SIZE_4)
-                        
-                self.grid_size=self.nvof.getGridSize()
-                self.last_frame=None
-                self.num_frames=0
-                self.width=scale_w
-                self.height=scale_h
-                self.flow=None
-                self.nvof_w=int(scale_w/self.grid_size)
-                self.nvof_h=int(scale_h/self.grid_size)
-                self.hint_buffer=np.zeros((self.nvof_h, self.nvof_w, 2), dtype=np.int16)
-                self.accumulated_delta=np.ones((self.nvof_h, self.nvof_w), dtype=int)*1#1000
-
-            img_scaled=cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), (self.width, self.height))
-
-            if self.num_frames!=0:
-                self.flow = self.nvof.calc(img_scaled, self.last_frame, None, hint=self.hint_buffer)
-                delta=self.flow[1]
-                delta=np.maximum(0, delta-5)
-                self.accumulated_delta+=delta
-                self.motion_array = self.flow[0].astype(np.float32)
-                self.motion_array[..., 0]*=(1.0/(32*self.width))
-                self.motion_array[..., 1]*=(1.0/(32*self.height))
-                self.accumulated_delta+= (100 * np.abs(self.motion_array[..., 0])).astype(self.accumulated_delta.dtype)
-                self.accumulated_delta+= (100 * np.abs(self.motion_array[..., 1])).astype(self.accumulated_delta.dtype)
-            self.last_frame=img_scaled
+        cimg=upyc.c_image.from_numpy(img).convert(upyc.MONO_DEVICE)
+        cimg=cimg.scale(320,180)
+        self.new_motion_surf=cimg.blur()
+        if self.old_motion_surf!=None:
+            mad_surf=self.new_motion_surf.mad_4x4(self.old_motion_surf)
+            self.mad_cost=mad_surf.to_numpy()
         else:
-            if self.flow_engine is None:
-                self.flow_engine=upyc.c_nvof(320, 320)
-            costs, self.motion_array = copy.deepcopy(self.flow_engine.run(upyc.c_image.from_numpy(img)))
-            self.nvof_h, self.nvof_w=costs.shape
-            #print(self.nvof_w, self.nvof_h)
-            if self.num_frames==0:
-                self.accumulated_delta=np.ones((self.nvof_h, self.nvof_w), dtype=int)*1
-            self.last_frame_time=time
-            #print("motion", self.motion_array.shape)
-            if self.num_frames!=0:
-                self.accumulated_delta+=(2*costs)
-                
+            self.mad_cost=None
+
+        if self.flow_engine is None:
+            self.flow_engine=upyc.c_nvof(320, 320)
+        costs, self.motion_array = copy.deepcopy(self.flow_engine.run(upyc.c_image.from_numpy(img)))
+        self.nvof_h, self.nvof_w=costs.shape
+        #print(self.nvof_w, self.nvof_h)
+        if self.num_frames==0:
+            self.accumulated_delta=np.ones((self.nvof_h, self.nvof_w), dtype=int)*1
+        self.last_frame_time=time
+        #print("motion", self.motion_array.shape)
+        self.accumulated_delta+=(2*costs)
+        self.accumulated_delta+= (1 * np.abs(self.motion_array[..., 0])).astype(self.accumulated_delta.dtype)
+        self.accumulated_delta+= (1 * np.abs(self.motion_array[..., 1])).astype(self.accumulated_delta.dtype)
+            
         self.num_frames+=1
     
     def get_roi(self, thr):
         roi=[0,0,0,0]
-        rows, cols = np.where(self.accumulated_delta > thr)
-        if rows.size > 0 and cols.size > 0:
-            min_row, max_row = rows.min(), rows.max()
-            min_col, max_col = cols.min(), cols.max()
-            roi= [min_col/self.nvof_w, min_row/self.nvof_h, (max_col+1)/self.nvof_w, (max_row+1)/self.nvof_h]
+        #rows, cols = np.where(self.accumulated_delta > thr)
+        #if rows.size > 0 and cols.size > 0:
+        #    min_row, max_row = rows.min(), rows.max()
+        #    min_col, max_col = cols.min(), cols.max()
+        #    roi= [min_col/self.nvof_w, min_row/self.nvof_h, (max_col+1)/self.nvof_w, (max_row+1)/self.nvof_h]
+        if self.mad_cost is not None:
+            rows, cols = np.where(self.mad_cost>8)
+            if len(rows)==0:
+                return [0,0,0,0]
+        else:
+            return [0,0,1,1]
+
+        min_row, max_row = rows.min(), rows.max()
+        min_col, max_col = cols.min(), cols.max()
+        h,w=self.mad_cost.shape
+        roi= [min_col/w, min_row/h, (max_col+1)/w, (max_row+1)/h]
         return roi
     
     def set_roi_detected(self, roi):
@@ -130,6 +107,21 @@ class MotionTracker:
         #print("CLEAR ",roi, l,r,t,b)
         self.accumulated_delta[t:b, l:r]=0
 
+        if stuff.box_a(roi)>0.9 or self.old_motion_surf is None:
+            self.old_motion_surf=self.new_motion_surf
+        else:
+            h,w=180,320
+            l=int(w*roi[0])
+            t=int(h*roi[1])
+            r=int(w*roi[2])
+            b=int(h*roi[3])
+            l=l&(~3)
+            t=t&(~3)
+            r=(r+3)&(~3)
+            b=(b+3)&(~3)
+            #print(roi,l,r,t,b)
+            self.old_motion_surf=self.old_motion_surf.blend(self.new_motion_surf, l,t,r-l,b-t,l,t)
+            #self.old_motion_surf.display("old_motion_surf")
     def get_debug(self):
         return {"motion_track": {"type": "motion_track", "data":{"motion_array":copy.deepcopy(self.motion_array), "delta_array":copy.copy(self.accumulated_delta)}}}
             

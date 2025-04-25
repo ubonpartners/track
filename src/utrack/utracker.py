@@ -293,7 +293,7 @@ class utracker:
         self.debug_enable=debug_enable
         self.debug={}
 
-        # skip running if below minimnum frame interval
+        # skip running if below minimum frame interval
 
         do_track=time-self.last_track_time>=self.track_min_interval
         if do_track==False:
@@ -304,14 +304,17 @@ class utracker:
         #result=None
         #detection_roi=None
         self.motiontracker.add_frame(frame, time)
-        motion_roi=self.motiontracker.get_roi(10)
-        #if stuff.coord.box_a(motion_roi)<0.005:
-        #    return None, None
-
-        roi=[0,0,1.0,1.0] #motiontracker.get_roi(100)
+        motion_roi=self.motiontracker.get_roi(50)
 
         if debug_enable:
             self.debug|=self.motiontracker.get_debug()
+
+        if stuff.coord.box_a(motion_roi)<self.params["completely_skip_frame_area"]:
+            #print("Completely skipped frame")
+            self.last_track_time=time
+            return None, self.debug
+
+        roi=motion_roi #[0,0,1.0,1.0] #motiontracker.get_roi(100)
 
         roi=[0,0,1.0,1.0]#motiontracker.get_roi(80)
         detection_roi=roi
@@ -320,7 +323,7 @@ class utracker:
         roi_r=int(roi[2]*w)
         roi_t=int(roi[1]*h)
         roi_b=int(roi[3]*h)
-        self.motiontracker.set_roi_detected(roi)
+        self.motiontracker.set_roi_detected(motion_roi)
         #print(roi_l,roi_t,roi_r,roi_b)
         img_roi=frame[roi_t:roi_b, roi_l:roi_r]
         result=self.yolo(img_roi,
@@ -343,11 +346,12 @@ class utracker:
         detected_objects=[]
         for d in out_det:
             if d["class"]==self.person_class_index:
+                stuff.check_pose_points(d)
                 o=tu.Object(detection=d, time=time, expand_by_pose=True)
                 o.time=time
                 stuff.coord.unmap_roi_box(roi, o.box)
-                for pt in o.pose_pos:
-                    stuff.coord.unmap_roi_point(roi, pt)
+                #for pt in o.pose_pos:
+                #    stuff.coord.unmap_roi_point(roi, pt)
                 detected_objects.append(o)
 
         self.last_track_time=time

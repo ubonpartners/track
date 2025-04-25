@@ -33,11 +33,16 @@ class TrackSet:
                 self.import_cevo(path)
                 return
 
-    def frame_index_at_time(self, t):
+    def frame_index_at_time(self, t, nearest=False):
         if len(self.frame_times)==0:
             return None
         index = bisect.bisect_left(self.frame_times, t+1e-7) - 1
         index = max(0, min(index, len(self.frame_times)-1))
+
+        if nearest and index+1<len(self.frame_times):
+            if abs(t-self.frame_times[index+1])<abs(t-self.frame_times[index]):
+                return index+1
+
         return index
     
     def frame_time_after(self, t):
@@ -67,34 +72,53 @@ class TrackSet:
         return obj
         
     def objects_at_time(self, t, min_conf=0.0001):
-        index=self.frame_index_at_time(t)
-        if index is None:
+        index_left=self.frame_index_at_time(t)
+        if index_left is None:
             return None
         
-        frame=self.frames[index]
-        indexp1=index+1 if index+1<len(self.frames) else index
-        framep1=self.frames[index+1] if index+1<len(self.frames) else frame
+        frame_left=self.frames[index_left]
 
-        frac=(t-frame["frame_time"])/(framep1["frame_time"]-frame["frame_time"]+1e-7)
+        # a frame having "objects" as None means tracking was not run
+        # so we need to find bracketing frames where it's not None,
+        # if such exist
+
+        while(frame_left["objects"] is None and index_left>0):
+            index_left-=1
+            frame_left=self.frames[index_left]
+    
+        index_right=index_left+1 if index_left+1<len(self.frames) else index_left
+        frame_right=self.frames[index_right]
+        while(frame_right["objects"] is None and index_right+1<len(self.frames)):
+            index_right+=1
+            frame_right=self.frames[index_right]
+       
+        frac=(t-frame_left["frame_time"])/(frame_right["frame_time"]-frame_left["frame_time"]+1e-7)
         frac=min(1.0, max(0.0, frac))
 
-        s1=set(frame["objects"].keys())
-        s2=set(framep1["objects"].keys())
+        if frame_left["objects"] is None:
+            object_set_left=set()
+        else:
+            object_set_left=set(frame_left["objects"].keys())
+
+        if frame_right["objects"] is None:
+            object_set_right=set()
+        else:
+            object_set_right=set(frame_right["objects"].keys())
 
         ret=[]
 
         # if we are very close to an actual frame time, just return those objects
 
         if frac>0.99:
-            for track_id in s2:
-                obj=self.get_Object(indexp1, track_id)
+            for track_id in object_set_right:
+                obj=self.get_Object(index_right, track_id)
                 ret.append(obj)
             ret=[o for o in ret if o.confidence>=min_conf]
             return ret
         
         if frac<0.01:
-            for track_id in s1:
-                obj=self.get_Object(index, track_id)
+            for track_id in object_set_left:
+                obj=self.get_Object(index_left, track_id)
                 ret.append(obj)
             ret=[o for o in ret if o.confidence>=min_conf]
             return ret
@@ -103,23 +127,24 @@ class TrackSet:
         # we interpolate the objects that are in both frames
         # for the ones that are not we return the ones from the frame we are closes to
 
-        common_obj=list(s1.intersection(s2))
-        f_only=list(s1-s2)
-        p1_only=list(s2-s1)
+        common_obj=list(object_set_left.intersection(object_set_right))
+        left_only=list(object_set_left-object_set_right)
+        right_only=list(object_set_right-object_set_left)
         
         for track_id in common_obj:
-            obj=self.get_Object(index, track_id)
-            objp1=self.get_Object(indexp1, track_id)
-            obj=tu.object_interpolate(obj, objp1, frac)
+            obj_left=self.get_Object(index_left, track_id)
+            obj_right=self.get_Object(index_right, track_id)
+            obj=tu.object_interpolate(obj_left, obj_right, frac)
             obj.track_id=track_id
             ret.append(obj)
-        if frac<=0.5:
-            for track_id in f_only:
-                obj=self.get_Object(index, track_id)
+
+        if frac<=0.5 and t-frame_left["frame_time"]<0.1:
+            for track_id in left_only:
+                obj=self.get_Object(index_left, track_id)
                 ret.append(obj)
-        else:
-            for track_id in p1_only:
-                obj=self.get_Object(indexp1, track_id)
+        elif frac>=0.5 and frame_right["frame_time"]-t<0.1:
+            for track_id in right_only:
+                obj=self.get_Object(index_right, track_id)
                 ret.append(obj)
         ret=[o for o in ret if o.confidence>=min_conf]
         return ret
@@ -132,10 +157,10 @@ class TrackSet:
         frame_time=frame["frame_time"]
         # pick frame with closest time
         if nearest and index+1<len(self.frames):
-            framep1=self.frames[index+1]
-            frame_timep1=framep1["frame_time"]
+            frame_right=self.frames[index+1]
+            frame_timep1=frame_right["frame_time"]
             if abs(t-frame_timep1)<abs(t-frame_time):
-                frame=framep1
+                frame=frame_right
         if "image_path" in frame:
             path=frame["image_path"]
             return path
@@ -151,25 +176,35 @@ class TrackSet:
             return cv2.imread(path)
         return None
     
-    def debug_at_time(self,t):
-        index=self.frame_index_at_time(t)
+    def debug_at_time(self,t, nearest=False):
+        index=self.frame_index_at_time(t, nearest=nearest)
         if index is None:
-            return None
+            return None, t
         
         frame=self.frames[index]
         if "tracker_debug" in frame:
-            return frame["tracker_debug"]
-        return None
-
+            return frame["tracker_debug"], frame["frame_time"]
+        return None, frame["frame_time"]
+    
+    def skip_at_time(self,t, nearest=False):
+        index=self.frame_index_at_time(t, nearest=nearest)
+        if index is None:
+            return True
+        frame=self.frames[index]
+        return frame["objects"] is None
+    
     def add_frame(self, object_list, time, img_path=None, tracker_debug=None):
-        objects={}
-        for o in object_list:
-            objects[o.track_id]={"box":o.box,
-                                 "class":o.cl,
-                                 "conf":o.confidence,
-                                 "pose_pos":o.pose_pos,
-                                 "pose_conf":o.pose_conf,
-                                 "attr":o.attr}
+        if object_list is None:
+            objects=None
+        else:
+            objects={}
+            for o in object_list:
+                objects[o.track_id]={"box":o.box,
+                                    "class":o.cl,
+                                    "conf":o.confidence,
+                                    "pose_pos":o.pose_pos,
+                                    "pose_conf":o.pose_conf,
+                                    "attr":o.attr}
         assert len(self.frame_times)==0 or time>self.frame_times[-1]
         self.frame_times.append(time)
         self.frames.append({
@@ -336,10 +371,6 @@ class TrackSet:
 
             objects, tracker_debug=tracker.track_frame(frame, t, debug_enable=debug_enable)
 
-            #if t>6.4 and t<7.5:
-            #    if objects is not None:
-            #        for o in objects:
-            #            print(f"{t} {o.track_id} {o.box}")
             if debug:
                 display.clear()
                 if objects is not None:
@@ -348,10 +379,10 @@ class TrackSet:
                 display.show(frame, title=f"time={t:5.2f}")
                 events=display.get_events(0)
 
-            if objects is not None:
+            if objects is not None or tracker_debug is not None:
                 img_path=video.img_path_at_time(t) if cap is None else None
                 self.add_frame(objects, t, img_path=img_path, tracker_debug=tracker_debug)
-
+            #print(t, objects is not None, tracker_debug is not None)
             t+=(1.0/fps)
             pbar.update(1)
 
@@ -521,7 +552,13 @@ def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["pe
                             thickness=-1 #4
                 o.draw(display, clr=clr, thickness=thickness)
 
-        debug=trackset.debug_at_time(t)
+        debug, debug_time=trackset.debug_at_time(t, nearest=True)
+
+        if trackset.skip_at_time(t, nearest=True):
+            display.draw_text(f"SKIPPED {debug_time:5.2f}", 0.05,0.05)
+        else:
+            display.draw_text(f"TRACKED {debug_time:5.2f}", 0.05,0.05)    
+
         debug_entries=[]
         if debug is not None:
             for i,d in enumerate(debug):
