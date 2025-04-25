@@ -11,6 +11,7 @@ import traceback
 import stuff
 import xlsxwriter
 import datetime
+import multiprocessing as mp
 from multiprocessing import Process, Queue
 import src.trackset as ts
 
@@ -157,8 +158,8 @@ def result_string(result, columns):
         if key in result:
             rs+=(f"{fmt.format(result[key])}")
             rh+=hd
-        else:
-            print(f"{key}: Key not found in dictionary")
+        #else:
+        #    print(f"{key}: Key not found in dictionary")
     return rs,rh
 
 def get_avg_scores(results, test, param, group=None):
@@ -208,7 +209,7 @@ def display_results(results, columns, sort_key):
                 er=e["result"]
                 for p in params:
                     if p not in ["fitness","fp_per_frame","fn_per_obj","switch_per_obj","frag_per_obj"]:
-                        er[p]=sum([r["result"][p] for r in filtered])
+                        er[p]=sum([r["result"][p] for r in filtered if "result" in r and p in r["result"]])
                 weighted_motp_sum=0
 
                 for r in filtered:
@@ -286,7 +287,7 @@ def display_results(results, columns, sort_key):
         worksheet.write(i+1, 1, result["params"]["test_key"])
         for j,c in enumerate(columns):
             cs=c.split(",")
-            val = result["result"][cs[0]]
+            val = result["result"][cs[0]] if cs[0] in result["result"] else 0
             if math.isinf(val):
                 worksheet.write(i+1, j+2, "INF")
             elif math.isnan(val):
@@ -422,6 +423,7 @@ def track_test(config, split=None):
             else:
                 output_results.append(result)
     
+    mp.set_start_method('spawn', force=True)
     print(f"Running {len(tests_to_run)} tests...")
     with tqdm(total=len(tests_to_run),
               desc="search",
