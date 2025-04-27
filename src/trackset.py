@@ -12,6 +12,7 @@ import json
 import stuff
 import math
 import shutil
+import time
 
 class TrackSet:
     def __init__(self, path=None):
@@ -44,12 +45,12 @@ class TrackSet:
                 return index+1
 
         return index
-    
+
     def frame_time_after(self, t):
         index=self.frame_index_at_time(t)
         index=min(index+1, len(self.frame_times)-1)
         return self.frame_times[index]
-    
+
     def frame_time_before(self, t):
         index=self.frame_index_at_time(t)
         index=max(0, index-1)
@@ -57,7 +58,7 @@ class TrackSet:
 
     def duration_seconds(self):
         return self.frame_times[-1] if len(self.frame_times)!=0 else 0
-    
+
     def get_Object(self, index, track_id):
         frame=self.frames[index]
         o=frame["objects"][track_id]
@@ -70,12 +71,12 @@ class TrackSet:
                       time=frame["frame_time"])
         obj.track_id=track_id
         return obj
-        
+
     def objects_at_time(self, t, min_conf=0.0001):
         index_left=self.frame_index_at_time(t)
         if index_left is None:
             return None
-        
+
         frame_left=self.frames[index_left]
 
         # a frame having "objects" as None means tracking was not run
@@ -85,13 +86,13 @@ class TrackSet:
         while(frame_left["objects"] is None and index_left>0):
             index_left-=1
             frame_left=self.frames[index_left]
-    
+
         index_right=index_left+1 if index_left+1<len(self.frames) else index_left
         frame_right=self.frames[index_right]
         while(frame_right["objects"] is None and index_right+1<len(self.frames)):
             index_right+=1
             frame_right=self.frames[index_right]
-       
+
         frac=(t-frame_left["frame_time"])/(frame_right["frame_time"]-frame_left["frame_time"]+1e-7)
         frac=min(1.0, max(0.0, frac))
 
@@ -115,14 +116,14 @@ class TrackSet:
                 ret.append(obj)
             ret=[o for o in ret if o.confidence>=min_conf]
             return ret
-        
+
         if frac<0.01:
             for track_id in object_set_left:
                 obj=self.get_Object(index_left, track_id)
                 ret.append(obj)
             ret=[o for o in ret if o.confidence>=min_conf]
             return ret
-        
+
         # ok, we are between two frames
         # we interpolate the objects that are in both frames
         # for the ones that are not we return the ones from the frame we are closes to
@@ -130,7 +131,7 @@ class TrackSet:
         common_obj=list(object_set_left.intersection(object_set_right))
         left_only=list(object_set_left-object_set_right)
         right_only=list(object_set_right-object_set_left)
-        
+
         for track_id in common_obj:
             obj_left=self.get_Object(index_left, track_id)
             obj_right=self.get_Object(index_right, track_id)
@@ -148,7 +149,7 @@ class TrackSet:
                 ret.append(obj)
         ret=[o for o in ret if o.confidence>=min_conf]
         return ret
-    
+
     def img_path_at_time(self, t, nearest=True):
         index=self.frame_index_at_time(t)
         if index is None:
@@ -175,24 +176,24 @@ class TrackSet:
         if path is not None:
             return cv2.imread(path)
         return None
-    
+
     def debug_at_time(self,t, nearest=False):
         index=self.frame_index_at_time(t, nearest=nearest)
         if index is None:
             return None, t
-        
+
         frame=self.frames[index]
         if "tracker_debug" in frame:
             return frame["tracker_debug"], frame["frame_time"]
         return None, frame["frame_time"]
-    
+
     def skip_at_time(self,t, nearest=False):
         index=self.frame_index_at_time(t, nearest=nearest)
         if index is None:
             return True
         frame=self.frames[index]
         return frame["objects"] is None
-    
+
     def add_frame(self, object_list, time, img_path=None, tracker_debug=None):
         if object_list is None:
             objects=None
@@ -258,18 +259,18 @@ class TrackSet:
         fps = int(cap.get(cv2.CAP_PROP_FPS))  # Frames per second
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))  # Frame width
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))  # Frame height
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) 
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         duration=frame_count/fps
         annot=stuff.load_dictionary(json_path)
         num_frames=len(annot["images"])
-    
+
         self.frames = []
         for i in range(num_frames):
             frame={"frame_id": i,
                    "frame_time": i/fps,
                    "objects": {}}
             self.frames.append(frame)
-            
+
         self.metadata={
                 "frame_rate": fps,
                 "width": width,
@@ -277,7 +278,7 @@ class TrackSet:
                 "classes": ["person", "face"],
                 "original_video": mp4file
             }
-    
+
         for a in annot["annotations"]:
             x=a["bbox"][0]/width
             y=a["bbox"][1]/height
@@ -304,10 +305,12 @@ class TrackSet:
                       config_file=None,
                       params=None,
                       debug=False,
-                      debug_enable=False):
+                      debug_enable=False,
+                      mpwq_context=None,
+                      mpwq_progress_fn=None):
 
         assert len(self.frame_times)==0
-        
+
         param_dict={}
         if config_file is not None:
             config=stuff.load_dictionary(config_file)
@@ -331,7 +334,7 @@ class TrackSet:
             fps = int(cap.get(cv2.CAP_PROP_FPS))  # Frames per second
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))  # Frame width
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))  # Frame height
-            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) 
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             duration=fps*frame_count
 
         duration=min(duration, max_duration)
@@ -343,22 +346,22 @@ class TrackSet:
                 "height": height,
                 "classes": ["person"],
             }
-  
+
         if isinstance(video, TrackSet):
             if "original_video" in video.metadata:
                 self.metadata["original_video"]=video.metadata["original_video"]
 
-        if pbar is None:
+        if pbar is None and mpwq_progress_fn is None:
             pbar=tqdm(total=int(duration*fps)+1,
                       desc=f"{display:35s}",
                       colour="#ffcc00")
-        else:
-            pbar.reset(total=int(duration*fps))
-            pbar.set_description(f"{display:35s}")
-            pbar.refresh()
+        elif mpwq_progress_fn is not None:
+            mpwq_progress_fn(mpwq_context, desc=f"{display:35s}", total=int(duration*fps))
+
         if debug:
             display=stuff.Display(width=1280, height=720)
-            
+
+        fn=0
         while t<=duration:
             if cap is not None:
                 success, frame = cap.read()
@@ -384,7 +387,11 @@ class TrackSet:
                 self.add_frame(objects, t, img_path=img_path, tracker_debug=tracker_debug)
             #print(t, objects is not None, tracker_debug is not None)
             t+=(1.0/fps)
-            pbar.update(1)
+            fn+=1
+            if pbar is not None:
+                pbar.update(1)
+            elif mpwq_progress_fn is not None:
+                mpwq_progress_fn(mpwq_context, update=1)
 
         if cap is not None:
             cap.release()
@@ -408,7 +415,7 @@ class TrackSet:
         gt_path = os.path.join(seq_dir, "gt/gt.txt")
         if not os.path.exists(gt_path):
             raise FileNotFoundError(f"Ground truth file not found at {gt_path}")
-        
+
         # Parse ground truth annotations
         data = np.loadtxt(gt_path, delimiter=',')
         # Columns: frame_id, track_id, bb_left, bb_top, bb_width, bb_height, confidence, class, visibility
@@ -420,7 +427,7 @@ class TrackSet:
                 "height": frame_height,
                 "classes": ["person", "vehicle", "other"],
             }
-        
+
         for frame_id in range(1, seq_length):
             frame_time = (frame_id-1) / frame_rate
             objects = {}
@@ -557,7 +564,7 @@ def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["pe
         if trackset.skip_at_time(t, nearest=True):
             display.draw_text(f"SKIPPED {debug_time:5.2f}", 0.05,0.05)
         else:
-            display.draw_text(f"TRACKED {debug_time:5.2f}", 0.05,0.05)    
+            display.draw_text(f"TRACKED {debug_time:5.2f}", 0.05,0.05)
 
         debug_entries=[]
         if debug is not None:
@@ -587,8 +594,8 @@ def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["pe
                                 vy=flow[y][x][1]
                                 thr=0.001
                                 if abs(vx)>thr or abs(vy)>thr:
-                                    display.draw_line([cx,cy], 
-                                                    [cx+vx, cy+vy], 
+                                    display.draw_line([cx,cy],
+                                                    [cx+vx, cy+vy],
                                                     clr=(128,255,255,0), thickness=1)
                                 clr=max(0,min(255,int(debug_entry_data["delta_array"][y][x])))
                                 box=[x/grid_w, y/grid_h, (x+1)/grid_w, (y+1)/grid_h]
@@ -599,13 +606,13 @@ def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["pe
                         display.draw_box(debug_entry_data[i]["from"], clr=(128,255,255,255), thickness=1)
                         display.draw_box(debug_entry_data[i]["to"], clr=(128,255,0,0), thickness=2)
                         if "pose_from" in debug_entry_data[i]:
-                            stuff.draw_pose(display, 
+                            stuff.draw_pose(display,
                                             pose_pos=debug_entry_data[i]["pose_from"],
-                                            pose_conf=debug_entry_data[i]["pose_conf"], 
+                                            pose_conf=debug_entry_data[i]["pose_conf"],
                                             thickness=1, clr=(128,255,255,255))
-                            stuff.draw_pose(display, 
+                            stuff.draw_pose(display,
                                             pose_pos=debug_entry_data[i]["pose_to"],
-                                            pose_conf=debug_entry_data[i]["pose_conf"], 
+                                            pose_conf=debug_entry_data[i]["pose_conf"],
                                             thickness=2, clr=(128,255,0,0))
 
                 if debug_entry_type=="roi":
@@ -662,7 +669,7 @@ def extract_frames_from_seq(seq_file, output_video):
             break
         frames.append(frame)
         out.write(frame)
-    
+
     cap.release()
     out.release()
     return frames, frame_rate
@@ -679,7 +686,7 @@ def process_caltech_sequence(vbb_file, frames, frame_rate, output_yaml, output_v
 
     objLbl = [str(v[0]) for v in data['A'][0][0][4][0]]
     labels=list(set(objLbl))
-                
+
     classes=["person"]
     for l in labels:
         if not l in classes:
@@ -729,7 +736,7 @@ def process_caltech_sequence(vbb_file, frames, frame_rate, output_yaml, output_v
         yaml.dump(yaml_data, yaml_file, default_flow_style=False)
 
 def convert_caltech_pedestrian():
-    
+
     base="/mldata/downloaded_datasets/other/caltech_pedestrian"
 
     for s in range (0,12):

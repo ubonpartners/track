@@ -14,6 +14,9 @@ import datetime
 import multiprocessing as mp
 from multiprocessing import Process, Queue
 import src.trackset as ts
+import threading
+
+tqdm.set_lock(threading.RLock())
 
 def mot_obj(obj, w, h):
     ol=int(obj.box[0]*w)
@@ -38,10 +41,10 @@ def summary_string(r):
     s+=f" dROI:{r['average_detection_roi_area']:0.2f}"
     return s
 
-def compute_metrics(gt, test, 
-                    max_duration=1000, 
-                    frame_metrics=False, 
-                    match_iou=0.45, 
+def compute_metrics(gt, test,
+                    max_duration=1000,
+                    frame_metrics=False,
+                    match_iou=0.45,
                     classes_to_test=["person"],
                     eval_rate_divisor=1):
     assert match_iou<0.9 and match_iou>0.1, f"stupid match_iou {match_iou}"
@@ -90,7 +93,7 @@ def compute_metrics(gt, test,
                                     'num_unique_objects', 'num_matches', \
                                     'idfp', 'idfn', 'idtp'], \
                         name='acc')
-    
+
     metrics_dict=summary.loc['acc'].to_dict()
 
     # add some extra metrics like
@@ -130,7 +133,7 @@ def compute_metrics(gt, test,
 
     average_detection_roi_area=total_detection_roi_area/(len(test.frames)-skipped+1e-7)
     metrics_dict["average_detection_roi_area"]=average_detection_roi_area
-    
+
     metrics_dict["tracked_frames_skipped"]=skipped
     metrics_dict["tracked_frames_skipped_frac"]=skipped/len(test.frames)
 
@@ -147,7 +150,7 @@ def compute_metrics(gt, test,
     metrics_dict["switch_per_obj"]=metrics_dict["num_switches"]/(metrics_dict["num_unique_objects"]+1e-7) # num switches per unique object
     metrics_dict["frag_per_obj"]=metrics_dict["num_fragmentations"]/(metrics_dict["num_unique_objects"]+1e-7)
     metrics_dict["fitness"]=fitness_score(metrics_dict)
-    
+
     # optionally extract per-frame MOT metrics
     if frame_metrics:
         t=0
@@ -198,7 +201,7 @@ def get_avg_scores(results, test, param, group=None):
         return t
     else:
         return 0
-    
+
 def display_results(results, columns, sort_key):
     out_sort=[]
     out_txt=[]
@@ -253,7 +256,7 @@ def display_results(results, columns, sort_key):
                 er['tracked_frames_skipped_frac']=er['tracked_frames_skipped_frac']/len(filtered)
                 er['average_detection_roi_area']=er['average_detection_roi_area']/len(filtered)
                 er['fitness']=fitness_score(er)
-                
+
                 #er['mota']=er['mota']/er['num_objects']
                 #er['motp']=er['motp']/er['num_objects']
                 results2.append(e)
@@ -321,7 +324,8 @@ def display_results(results, columns, sort_key):
 
     return results2
 
-def run_one_test(params, pbar=None):
+def track_test_work_fn(params, mpwq_context, mpwq_progress_fn):
+
     trackset=ts.TrackSet()
     trackset_gt=ts.TrackSet(params["ds_path"])
     trackset.import_create(trackset_gt,
@@ -330,54 +334,27 @@ def run_one_test(params, pbar=None):
                            max_duration=params["max_duration"],
                            config_file=params["config"],
                            params=params,
-                           pbar=pbar)
+                           mpwq_context=mpwq_context,
+                           mpwq_progress_fn=mpwq_progress_fn)
     match_iou=0.45
     if "match_iou" in params:
         match_iou=params["match_iou"]
     eval_rate_divisor=1
     if "eval_rate_divisor" in params:
         eval_rate_divisor=params["eval_rate_divisor"]
-    result=compute_metrics(trackset_gt, trackset, 
-                           max_duration=params["max_duration"], 
+    result=compute_metrics(trackset_gt, trackset,
+                           max_duration=params["max_duration"],
                            match_iou=match_iou,
                            eval_rate_divisor=eval_rate_divisor)
     del trackset
     del trackset_gt
 
-    entry={"params":params, 
+    entry={"params":params,
            "result":result}
     return entry
 
-def worker_fn(work_queue, result_queue, quit_queue, progress_position):
-    pbar=tqdm(total=100,
-              desc=f"{progress_position:02d}: {'Starting....':31s}",
-              colour="#cc"+f"{1010*(progress_position+1)}",
-              position=progress_position+1,
-              leave=True)
-    while True:
-        try:
-            # Get a job from the work queue
-            work_item = work_queue.get(timeout=15)  # Adjust timeout as needed
-            if work_item is None:
-                # None indicates no more jobs
-                break
-            # Perform the task
-            result = run_one_test(work_item, pbar=pbar)
-            # Put the result in the results queue
-            result_queue.put(result)
-        except Exception as e:
-            error_info = traceback.format_exc()
-            result_queue.put({"exception":error_info})
-            # Break the loop if queue is empty and timeout occurs
-            break
-
-    pbar.set_description(f"{progress_position:02d}: {'Done':31s}")
-    pbar.refresh()
-    # wait to be told to exit (stops pbar getting messed up)
-    _ = quit_queue.get(timeout=600)
-
-def track_test(config, split=None):
-    
+def track_test(config, split=None, desc="track test"):
+    start_time=time.time()
     if isinstance(config, str):
         config=stuff.load_dictionary(config)
 
@@ -396,7 +373,7 @@ def track_test(config, split=None):
                     t_fr["min_interval"]=1/(f+0.01)
                 expanded_tests[t+f", {f}fps"]=t_fr
         config["tests"]=expanded_tests
-    
+
     resultfile=None
     if "results_cache_file" in config:
         resultfile=config["results_cache_file"]
@@ -405,7 +382,7 @@ def track_test(config, split=None):
     if resultfile is not None and os.path.isfile(resultfile):
         with open(resultfile, 'rb') as handle:
             cached_results = pickle.load(handle)
-    
+
     datasets=config["datasets"]
     tests=config["tests"]
     columns=config["columns"]
@@ -429,7 +406,7 @@ def track_test(config, split=None):
                         continue
                     result=r
             if result is None:
-                
+
                 test=tests[test_key]
                 params={}
                 for p in test:
@@ -441,62 +418,26 @@ def track_test(config, split=None):
                 params["display"]=f"{len(tests_to_run):02d}: "+ds_key+"/"+test_key
                 params["ds_key"]=ds_key
                 params["test_key"]=test_key
-                
+
                 tests_to_run.append(params)
             else:
                 output_results.append(result)
 
-    mp.set_start_method('spawn', force=True)
-    print(f"Running {len(tests_to_run)} tests...")
-    with tqdm(total=len(tests_to_run),
-              desc="search",
-              colour="#0000ff",
-              position=0,
-              leave=True) as pbar:
-        start_time=time.time()
-        work_queue = Queue()
-        result_queue = Queue()
-        quit_queue = Queue()
-        for item in tests_to_run:
-            work_queue.put(item)
-        for _ in range(num_workers):
-            work_queue.put(None)
+    results = stuff.mp_workqueue_run(tests_to_run, track_test_work_fn, num_workers=num_workers, desc=desc)
 
-        
-        workers = []
-        for i in range(num_workers):
-            p = Process(target=worker_fn, args=(work_queue, result_queue, quit_queue, i))
-            p.start()
-            workers.append(p)
+    for entry in results:
+        cache=True
+        ds_key=entry["params"]["ds_key"]
+        if "no_cache" in config["datasets"][ds_key]:
+            if config["datasets"][ds_key]["no_cache"]==True:
+                cache=False
+        if cache is True and resultfile is not None:
+            cached_results.append(entry)
+            dname = os.path.dirname(resultfile)
+            os.makedirs(dname, exist_ok=True)
+            stuff.save_atomic_pickle(cached_results, resultfile)
+        output_results.append(entry)
 
-        num_results_got=0
-        while num_results_got<len(tests_to_run):
-            entry=result_queue.get(timeout=600)
-            num_results_got+=1
-            pbar.update(1)
-            #print(f"!!Completed {num_results_got} tests of {len(tests_to_run)}")
-            if "exception" in entry:
-                print(f"Process exception {entry['exception']}")
-                exit()
-
-            cache=True
-            ds_key=entry["params"]["ds_key"]
-            if "no_cache" in config["datasets"][ds_key]:
-                if config["datasets"][ds_key]["no_cache"]==True:
-                    cache=False
-            if cache is True and resultfile is not None:
-                cached_results.append(entry)
-                dname = os.path.dirname(resultfile)
-                os.makedirs(dname, exist_ok=True)
-                stuff.save_atomic_pickle(cached_results, resultfile)
-            output_results.append(entry)
-
-        for _ in range(num_workers):
-            quit_queue.put(None)
-
-        for p in workers:
-            p.join()
-    
     for o in output_results:
         if "group" in config["datasets"][o["params"]["ds_key"]]:
             o["group"]=config["datasets"][o["params"]["ds_key"]]["group"]

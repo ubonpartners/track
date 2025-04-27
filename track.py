@@ -3,6 +3,7 @@ import src.trackers as trackers
 import src.track_test as track_test
 import src.track_search as track_search
 import src.utrack.motion_track as mt
+import stuff
 import argparse
 import time
 
@@ -28,6 +29,7 @@ def test_track(t, config_file, display=False, output=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='view.py')
+    parser.add_argument('--logging', type=str, default='info', help="Logging config: level[:console|file]")
     parser.add_argument('--trackset', type=str, default='/mldata/tracking/mot/annotation/MOT20-01.json')
     parser.add_argument('--view', action='store_true', help='view a trackset')
     parser.add_argument('--caltech', action='store_true', help='make caltech pedestrian sequences')
@@ -41,6 +43,7 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=str, default=None, help='output mp4 name')
     parser.add_argument('--motiontracker-test',action='store_true', help='run motiontracker test')
     opt = parser.parse_args()
+    stuff.configure_root_logger(opt.logging)
     if opt.motiontracker_test:
         mt.motiontracker_test()
         exit()

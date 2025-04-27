@@ -79,7 +79,7 @@ class MotionTracker:
             
         self.num_frames+=1
     
-    def get_roi(self, thr):
+    def get_roi(self):
         roi=[0,0,0,0]
         #rows, cols = np.where(self.accumulated_delta > thr)
         #if rows.size > 0 and cols.size > 0:
