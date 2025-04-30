@@ -13,7 +13,10 @@ class ultralytics_tracker:
 
     def __init__(self, params, track_min_interval, debug_enable=False):
         self.tmp_file=None
-        self.yolo = ultralytics.YOLO(params["model"])
+        if "tracker_model" in params:
+            self.yolo = ultralytics.YOLO(params["tracker_model"])
+        else:
+            self.yolo = ultralytics.YOLO(params["model"])
         self.track_min_interval=track_min_interval
         self.class_names=[self.yolo.names[i] for i in range(len(self.yolo.names))]
         self.last_track_time=-1000
@@ -60,7 +63,7 @@ class ultralytics_tracker:
                                       half=True,
                                       max_det=600,
                                       tracker=self.tmp_config_file)
-            
+
             out_det=stuff.yolo_results_to_dets(results[0],
                                             det_thr=max(0.01, min(0.95, self.params["track_low_thresh"])),
                                             yolo_class_names=self.class_names,
@@ -68,7 +71,7 @@ class ultralytics_tracker:
                                             face_kp=True,
                                             pose_kp=True,
                                             params=self.params)
-            
+
             person_dets=[d for d in out_det if d["class"]==self.person_class_index]
             objects=[]
             for d in person_dets:
@@ -80,12 +83,12 @@ class ultralytics_tracker:
 
             self.last_track_time=t
         return objects, None
-    
-    
+
+
 class cevo_tracker:
-    
+
     def __init__(self, params, track_min_interval, debug_enable=False):
-        
+
         self.params=params
         self.yolo = ultralytics.YOLO(self.params["model"])
         self.track_min_interval=track_min_interval
@@ -113,7 +116,7 @@ class cevo_tracker:
                 self.frames_skipped_count+=1
         if do_track==False:
             return None, None
-        
+
         det_w=stuff.get_dict_param(self.params, "det_w", 640)
         det_h=stuff.get_dict_param(self.params, "det_h", 640)
 
@@ -126,7 +129,7 @@ class cevo_tracker:
                          max_det=600,
                          verbose=False,
                          rect=True)
-        
+
         h=result[0].orig_shape[0]
         w=result[0].orig_shape[1]
 
@@ -138,11 +141,11 @@ class cevo_tracker:
                                         face_kp=True,
                                         pose_kp=True,
                                         fold_attributes=True)
-        
+
         if self.debug_enable:
             self.debug|={"detections": {"type": "yolo_detections", "data":{"detections":out_det, "class_names":self.class_names, "attributes":self.attributes}}}
-        
-    
+
+
         person_dets=[d for d in out_det if d["class"]==self.person_class_index]
 
         scores=[]
@@ -157,27 +160,27 @@ class cevo_tracker:
             scores.append(d["confidence"])
 
         output_stracks=self.byte_tracker.update(bboxes, scores, time)
-        
+
         objects=[]
         for s in output_stracks:
             b = s.mean[:4].copy()
             b[2] *= b[3]
 
-            box=[stuff.clip01((b[0]-0.5*b[2])/w), 
-                 stuff.clip01((b[1]-0.5*b[3])/h), 
-                 stuff.clip01((b[0]+0.5*b[2])/w), 
+            box=[stuff.clip01((b[0]-0.5*b[2])/w),
+                 stuff.clip01((b[1]-0.5*b[3])/h),
+                 stuff.clip01((b[0]+0.5*b[2])/w),
                  stuff.clip01((b[1]+0.5*b[3])/h)]
             d={"box":box, "class":self.person_class_index, "confidence":1.0}
             o=tu.Object(detection=d, time=time)
             o.track_id=s.track_id
             objects.append(o)
-       
-        self.last_track_time=time    
+
+        self.last_track_time=time
         return objects, self.debug
 
 def create_tracker(param_dict, track_min_interval, debug_enable=False):
     assert "tracker_type" in param_dict, "tracker type must be specified"
-        
+
     if not "model" in param_dict:
         param_dict["model"]="/mldata/weights/good/yolo11l-dpa-131224.pt"
         #print(f"WARNING: Model not specified in config; using default model {param_dict['model']}")
@@ -195,5 +198,3 @@ def create_tracker(param_dict, track_min_interval, debug_enable=False):
         print(f"Unkown tracker type {tracker_type}")
         exit()
     return tracker
-
-

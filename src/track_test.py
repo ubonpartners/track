@@ -7,7 +7,6 @@ import motmetrics as mm
 import pickle
 import time
 from tqdm.auto import tqdm
-import traceback
 import stuff
 import xlsxwriter
 import datetime
@@ -15,6 +14,7 @@ import multiprocessing as mp
 from multiprocessing import Process, Queue
 import src.trackset as ts
 import threading
+import logging
 
 tqdm.set_lock(threading.RLock())
 
@@ -126,7 +126,7 @@ def compute_metrics(gt, test,
             skipped+=1
         else:
             detection_roi_area=1.0
-            if "tracker_debug" in test.frames[i]:
+            if "tracker_debug" in test.frames[i] and test.frames[i]["tracker_debug"] is not None:
                 if "detection_roi" in test.frames[i]["tracker_debug"]:
                     detection_roi_area=stuff.box_a(test.frames[i]["tracker_debug"]["detection_roi"]["data"]["roi"])
             total_detection_roi_area+=detection_roi_area
@@ -180,7 +180,10 @@ def result_string(result, columns):
         hd=cs[1]
         fmt=cs[2]
         if key in result:
-            rs+=(f"{fmt.format(result[key])}")
+            if fmt=="seconds_ago":
+                rs+=(f"{stuff.format_seconds_ago(result[key]):>6s}")
+            else:
+                rs+=(f"{fmt.format(result[key])}")
             rh+=hd
         #else:
         #    print(f"{key}: Key not found in dictionary")
@@ -256,6 +259,8 @@ def display_results(results, columns, sort_key):
                 er['tracked_frames_skipped_frac']=er['tracked_frames_skipped_frac']/len(filtered)
                 er['average_detection_roi_area']=er['average_detection_roi_area']/len(filtered)
                 er['fitness']=fitness_score(er)
+                if 'time' in er:
+                    er['time']/=len(filtered)
 
                 #er['mota']=er['mota']/er['num_objects']
                 #er['motp']=er['motp']/er['num_objects']
@@ -325,7 +330,7 @@ def display_results(results, columns, sort_key):
     return results2
 
 def track_test_work_fn(params, mpwq_context, mpwq_progress_fn):
-
+    logging.debug("Running here")
     trackset=ts.TrackSet()
     trackset_gt=ts.TrackSet(params["ds_path"])
     trackset.import_create(trackset_gt,
@@ -350,8 +355,20 @@ def track_test_work_fn(params, mpwq_context, mpwq_progress_fn):
     del trackset_gt
 
     entry={"params":params,
-           "result":result}
+           "result":result,
+           "time":datetime.datetime.now()}
     return entry
+
+def on_result_callback(mpwq_context, result):
+    cache=True
+    ds_key=result["params"]["ds_key"]
+    if "no_cache" in mpwq_context["config"]["datasets"][ds_key]:
+        if mpwq_context["config"]["datasets"][ds_key]["no_cache"]==True:
+            cache=False
+    if cache is True and mpwq_context["resultfile"] is not None:
+        mpwq_context["cached_results"].append(result)
+        stuff.save_atomic_pickle(mpwq_context["cached_results"], mpwq_context["resultfile"])
+        #logging.info(f"Saved {len(mpwq_context["cached_results"])} cached results")
 
 def track_test(config, split=None, desc="track test"):
     start_time=time.time()
@@ -423,22 +440,23 @@ def track_test(config, split=None, desc="track test"):
             else:
                 output_results.append(result)
 
-    results = stuff.mp_workqueue_run(tests_to_run, track_test_work_fn, num_workers=num_workers, desc=desc)
+    on_result_context={"cached_results": cached_results,
+                       "config":config,
+                       "resultfile": resultfile}
+
+    results = stuff.mp_workqueue_run(tests_to_run,
+                                     track_test_work_fn,
+                                     num_workers=num_workers,
+                                     desc=desc,
+                                     result_callback_context=on_result_context,
+                                     result_callback=on_result_callback)
 
     for entry in results:
-        cache=True
-        ds_key=entry["params"]["ds_key"]
-        if "no_cache" in config["datasets"][ds_key]:
-            if config["datasets"][ds_key]["no_cache"]==True:
-                cache=False
-        if cache is True and resultfile is not None:
-            cached_results.append(entry)
-            dname = os.path.dirname(resultfile)
-            os.makedirs(dname, exist_ok=True)
-            stuff.save_atomic_pickle(cached_results, resultfile)
         output_results.append(entry)
 
     for o in output_results:
+        if "time" in o:
+            o["result"]["time"]=(datetime.datetime.now()-o["time"]).total_seconds()
         if "group" in config["datasets"][o["params"]["ds_key"]]:
             o["group"]=config["datasets"][o["params"]["ds_key"]]["group"]
 

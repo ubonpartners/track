@@ -44,9 +44,9 @@ def object_match_score(new_obj, tracked_obj, context):
     if tracked_obj.observations<2:
         kf_weight=0
     else: #tracked_obj.observations<3:
-        f=min(0.1, 1/tracked_obj.observations)
+        f=math.pow(max(0.1, 1/tracked_obj.observations),context["kf_warmup"])
         kf_weight*=(1-f)
-        of_weight*=f
+
     #print(tracked_obj.observations)
 
     kp_score=None
@@ -153,7 +153,8 @@ class utracker:
             mfn_context={"kf_weight":self.params["kf_weight"],
                          "kp_weight":self.params["kp_weight"],
                          "kp_distance_scale":self.params["kp_distance_scale"],
-                         "fuse_scores":self.params["fuse_scores"]}
+                         "fuse_scores":self.params["fuse_scores"],
+                         "kf_warmup":self.params["kf_warmup"]}
 
             if match_pass==0:
                 mfn_context["det_select"]=lambda o : o.adjusted_confidence>self.params["track_initial_thresh"]

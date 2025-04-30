@@ -599,8 +599,17 @@ def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["pe
                                                     clr=(128,255,255,0), thickness=1)
                                 clr=max(0,min(255,int(debug_entry_data["delta_array"][y][x])))
                                 box=[x/grid_w, y/grid_h, (x+1)/grid_w, (y+1)/grid_h]
-                                #if clr>5:
-                                #    display.draw_box(box, (clr,0,255,0), thickness=-1)
+                if debug_entry_type=="cost_map":
+                    cost_map=debug_entry_data["cost_map"]
+                    scale=debug_entry_data["scale"]
+                    if cost_map is not None:
+                        grid_w=cost_map.shape[1]
+                        grid_h=cost_map.shape[0]
+                        for y in range(grid_h):
+                            for x in range(grid_w):
+                                clr=max(0,min(255,int(scale*cost_map[y][x])))
+                                box=[x/grid_w, y/grid_h, (x+1)/grid_w, (y+1)/grid_h]
+                                display.draw_box(box, (clr,0,255,0), thickness=-1)
                 if debug_entry_type=="box_prediction":
                     for i in debug_entry_data:
                         display.draw_box(debug_entry_data[i]["from"], clr=(128,255,255,255), thickness=1)

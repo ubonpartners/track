@@ -15,7 +15,8 @@ class MotionTracker:
         self.roi=[0,0,0,0]
         self.accumulated_delta=None
         self.flow_engine=None
-        self.old_motion_surf=None
+        self.motion_reference_surface=None
+        self.noise_floor=None
 
     def predict_delta(self, pt):
         if self.motion_array is None:
@@ -55,12 +56,31 @@ class MotionTracker:
                 stuff.coord.clip01(box[3]-dys)]
 
     def add_frame(self, img, time):
+        # scale incoming surface to a low resoltion and only use Y channel
         cimg=upyc.c_image.from_numpy(img).convert(upyc.MONO_DEVICE)
         cimg=cimg.scale(320,180)
+        # blur the image (reduce impact of noise)
         self.new_motion_surf=cimg.blur()
-        if self.old_motion_surf!=None:
-            mad_surf=self.new_motion_surf.mad_4x4(self.old_motion_surf)
+        # compute 4x4 mean absolute differences between incoming frame
+        # and the reference surface
+        if self.motion_reference_surface!=None:
+            mad_surf=self.new_motion_surf.mad_4x4(self.motion_reference_surface)
             self.mad_cost=mad_surf.to_numpy()
+            if self.noise_floor is None:
+                self.noise_floor = self.mad_cost.copy().astype(np.float32)
+            else:
+                if self.num_frames<5:
+                    alpha=0.1
+                elif self.num_frames<10:
+                    alpha=0.5
+                else:
+                    alpha=0.9
+                beta=0.995
+                self.noise_floor = np.where(
+                                        self.mad_cost < self.noise_floor,
+                                        alpha * self.noise_floor + (1 - alpha) * self.mad_cost,
+                                        beta * self.noise_floor + (1 - beta) * self.mad_cost  # slower rise
+                                    )
         else:
             self.mad_cost=None
 
@@ -76,18 +96,13 @@ class MotionTracker:
         self.accumulated_delta+=(2*costs)
         self.accumulated_delta+= (1 * np.abs(self.motion_array[..., 0])).astype(self.accumulated_delta.dtype)
         self.accumulated_delta+= (1 * np.abs(self.motion_array[..., 1])).astype(self.accumulated_delta.dtype)
-            
+
         self.num_frames+=1
-    
+
     def get_roi(self):
         roi=[0,0,0,0]
-        #rows, cols = np.where(self.accumulated_delta > thr)
-        #if rows.size > 0 and cols.size > 0:
-        #    min_row, max_row = rows.min(), rows.max()
-        #    min_col, max_col = cols.min(), cols.max()
-        #    roi= [min_col/self.nvof_w, min_row/self.nvof_h, (max_col+1)/self.nvof_w, (max_row+1)/self.nvof_h]
         if self.mad_cost is not None:
-            rows, cols = np.where(self.mad_cost>self.params["motiontracker_mad_delta"])
+            rows, cols = np.where(self.mad_cost>self.noise_floor+self.params["motiontracker_mad_delta"])
             if len(rows)==0:
                 return [0,0,0,0]
         else:
@@ -98,7 +113,7 @@ class MotionTracker:
         h,w=self.mad_cost.shape
         roi= [min_col/w, min_row/h, (max_col+1)/w, (max_row+1)/h]
         return roi
-    
+
     def set_roi_detected(self, roi):
         l=int(self.nvof_w*roi[0]+0.99)
         t=int(self.nvof_h*roi[1]+0.99)
@@ -107,8 +122,8 @@ class MotionTracker:
         #print("CLEAR ",roi, l,r,t,b)
         self.accumulated_delta[t:b, l:r]=0
 
-        if stuff.box_a(roi)>0.9 or self.old_motion_surf is None:
-            self.old_motion_surf=self.new_motion_surf
+        if stuff.box_a(roi)>0.9 or self.motion_reference_surface is None:
+            self.motion_reference_surface=self.new_motion_surf
         else:
             h,w=180,320
             l=int(w*roi[0])
@@ -119,18 +134,23 @@ class MotionTracker:
             t=t&(~3)
             r=(r+3)&(~3)
             b=(b+3)&(~3)
-            #print(roi,l,r,t,b)
-            self.old_motion_surf=self.old_motion_surf.blend(self.new_motion_surf, l,t,r-l,b-t,l,t)
-            #self.old_motion_surf.display("old_motion_surf")
+            # update the area of the reference surface corresponding to the roi
+            # where we ran analytics
+            self.motion_reference_surface=self.motion_reference_surface.blend(self.new_motion_surf, l,t,r-l,b-t,l,t)
+
     def get_debug(self):
-        return {"motion_track": {"type": "motion_track", "data":{"motion_array":copy.deepcopy(self.motion_array), "delta_array":copy.copy(self.accumulated_delta)}}}
-            
+        debug={"motion_track": {"type": "motion_track", "data":{"motion_array":copy.deepcopy(self.motion_array),
+                                                                 "delta_array":copy.copy(self.accumulated_delta),
+                                                                 }}}
+        if self.noise_floor is not None:
+            debug["noise_floor"]= {"type": "cost_map", "data":{"cost_map":copy.copy(self.noise_floor), "scale":5.0}}
+        return debug
 
     def draw(self, img):
         if self.flow is None:
             return img
         scale=8
-        
+
         grid_h=self.motion_array.shape[0]
         grid_w=self.motion_array.shape[1]
         overlay=np.zeros((grid_h*scale, grid_w*scale, 3), dtype=np.uint8)
@@ -152,7 +172,7 @@ class MotionTracker:
 
                 clr=(0,max(0,min(255,int(self.accumulated_delta[y][x]))),0)
                 cv2.rectangle(overlay,
-                              (x*m, y*m), 
+                              (x*m, y*m),
                               ((x+1)*m, (y+1)*m), clr, cv2.FILLED)
                 if abs(vx)>8 or abs(vy)>8:
                     cv2.line(overlay, (x*m+m//2, y*m+m//2), (x*m+m//2+(vx//8), y*m+m//2+(vy//8)), (0, 255, 0), thickness=1)
@@ -162,7 +182,7 @@ class MotionTracker:
         overlay=cv2.resize(overlay, (img_w, img_h))
         img2=cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0)
         return img2
-    
+
 def motiontracker_test():
     img=cv2.imread("/mldata/image/arrest2.jpg")
     img_h, img_w, _=img.shape
@@ -176,7 +196,7 @@ def motiontracker_test():
     mt.add_frame(images[2], 1)
     box=[0.4,0.4,0.6,0.6]
     out_box=mt.predict_box(box, 1)
-    
+
     print(out_box)
     print((out_box[0]-box[0])*w)
     print((out_box[1]-box[1])*h)

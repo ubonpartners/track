@@ -106,7 +106,7 @@ def search_track(yaml_file):
     vec_best=copy.copy(param_initial)
 
     iter_count=0
-    param_index=4
+    param_index=0
     last_improvement_iter=0
     improvements_since_validate=0
     last_validate_iter=0
