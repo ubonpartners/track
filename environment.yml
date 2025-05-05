@@ -29,6 +29,9 @@ dependencies:
     - lapx
     - cython_bbox
     - motmetrics
+    - pillow
+    - scikit-image
+    - pycairo
     - numpy=1.26.4
     - git+https://github.com/ubonpartners/stuff.git
     - git+https://github.com/ubonpartners/ultralytics.git@multilabel
