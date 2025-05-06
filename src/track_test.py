@@ -15,6 +15,7 @@ from multiprocessing import Process, Queue
 import src.trackset as ts
 import threading
 import logging
+import src.track_util as tu
 
 tqdm.set_lock(threading.RLock())
 
@@ -167,6 +168,61 @@ def compute_metrics(gt, test,
             frame_index+=1
     del mh
     del acc
+
+    # compute detection mAP
+    # this works if the debug has the detections
+
+    target_class=[]
+    conf=[]
+    tp=[]
+    pred_class=[]
+
+    for i,frame in enumerate(test.frames):
+        if "tracker_debug" in frame:
+            t=frame["frame_time"]
+            debug=frame["tracker_debug"]
+            if "detections" in debug:
+                det=debug["detections"]
+                # get the GT objects from the trackset
+                # and the detected objects, do the mAP matching
+                gt_obj=gt.objects_at_time(t)
+                iou_thr=0.5
+                det_obj=[]
+                for d in det["data"]["detections"]:
+                    det_obj.append(tu.Object(box=d["box"],cl=d["class"],conf=d["confidence"]))
+                gts = sorted([obj for obj in gt_obj if obj.cl == 0],key=lambda x: x.confidence,reverse=True)
+                dets = sorted([obj for obj in det_obj if obj.cl == 0],key=lambda x: x.confidence,reverse=True)
+                gt_matched=[-1]*len(gts)
+                det_matched=[-1]*len(dets)
+
+                for j,_ in enumerate(dets):
+                    for i,_ in enumerate(gts):
+                        if gt_matched[i]==-1 and gts[i].cl==dets[j].cl and stuff.box_iou(gts[i].box, dets[j].box)>iou_thr:
+                            gt_matched[i]=j
+                            det_matched[j]=i
+                            break
+
+                for j,_ in enumerate(gts):
+                    target_class.append(gts[j].cl)
+
+                for j,_ in enumerate(dets):
+                    pred_class.append(dets[j].cl)
+                    conf.append(dets[j].confidence)
+                    tp.append(0 if det_matched[j]==-1 else 1)
+
+    if len(conf)>5:
+        ap, p, r, p_curve, r_curve = stuff.ap_calc(conf, tp, pred_class, target_class, 1, min_gt=5, pr_curves=True)
+        interesting_thr=[0.25,0.3]
+        cl=0 # person
+        metrics_dict["det_ap_person"]=ap[cl]
+        metrics_dict["det_p_person"]=p[cl]
+        metrics_dict["det_r_person"]=r[cl]
+        for thr in interesting_thr:
+            s=f"th{int(thr*100):2d}"
+            index=int(len(p_curve[cl])*thr)
+            metrics_dict[f"det_p_person_{s}"]=p_curve[cl][index]
+            metrics_dict[f"det_r_person_{s}"]=r_curve[cl][index]
+
     if frame_metrics:
         return metrics_dict, frame_events
     return metrics_dict
