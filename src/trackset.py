@@ -72,7 +72,11 @@ class TrackSet:
         obj.track_id=track_id
         return obj
 
-    def objects_at_time(self, t, min_conf=0.0001):
+    def object_class_name(self, object):
+        classes=self.metadata["classes"]
+        return classes[object.cl]
+
+    def objects_at_time(self, t, min_conf=0.0001, class_remap=None):
         index_left=self.frame_index_at_time(t)
         if index_left is None:
             return None
@@ -115,14 +119,14 @@ class TrackSet:
                 obj=self.get_Object(index_right, track_id)
                 ret.append(obj)
             ret=[o for o in ret if o.confidence>=min_conf]
-            return ret
+            return tu.object_class_remap(ret, self.metadata["classes"], class_remap)
 
         if frac<0.01:
             for track_id in object_set_left:
                 obj=self.get_Object(index_left, track_id)
                 ret.append(obj)
             ret=[o for o in ret if o.confidence>=min_conf]
-            return ret
+            return tu.object_class_remap(ret, self.metadata["classes"], class_remap)
 
         # ok, we are between two frames
         # we interpolate the objects that are in both frames
@@ -148,7 +152,7 @@ class TrackSet:
                 obj=self.get_Object(index_right, track_id)
                 ret.append(obj)
         ret=[o for o in ret if o.confidence>=min_conf]
-        return ret
+        return tu.object_class_remap(ret, self.metadata["classes"], class_remap)
 
     def img_path_at_time(self, t, nearest=True):
         index=self.frame_index_at_time(t)
@@ -344,7 +348,7 @@ class TrackSet:
                 "frame_rate": fps,
                 "width": width,
                 "height": height,
-                "classes": ["person"],
+                "classes": ["person", "face"],
             }
 
         if isinstance(video, TrackSet):
@@ -498,7 +502,7 @@ def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["pe
     display=stuff.Display(width=1280, height=720, output=output)
     selected_ids=[]
     debug_enable=[False]*10
-
+    show=False
     while(t<duration):
         display.clear()
 
@@ -581,6 +585,10 @@ def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["pe
                                      attributes=debug_entry_data["attributes"],
                                      highlight_index=None,
                                      class_names=debug_entry_data["class_names"])
+                    if show:
+                        for i,d in enumerate(debug_entry_data["detections"]): #print(debug_entry_data["detections"])
+                            print(f"{i} {d["confidence"]}")
+                        show=False
                 if debug_entry_type=="motion_track":
                     flow=debug_entry_data["motion_array"]
                     if flow is not None:
@@ -652,6 +660,8 @@ def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["pe
                 t+=0.033
             if e['key']==',':
                 t-=0.033
+            if e['key']=='s':
+                show=True
             if e['key']=='l':
                 print(debug_entries)
             if e['key'] is not None and e['key']>='1' and e['key']<='9':

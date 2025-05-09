@@ -382,8 +382,8 @@ class utracker:
                     d["face_points"][i*3:i*3+2]=stuff.coord.unmap_roi_point(detection_roi, d["face_points"][i*3:i*3+2])
 
         self.last_track_time=time
-        if self.debug_enable:
-            self.debug|={"detections": {"type": "yolo_detections", "data":{"detections":out_det, "class_names":self.class_names, "attributes":self.attributes}}}
+        #if self.debug_enable:
+        self.debug|={"detections": {"type": "yolo_detections", "data":{"detections":out_det, "class_names":self.class_names, "attributes":self.attributes}}}
         self.debug|={"detection_roi": {"type": "roi", "data": {"roi":copy.copy(detection_roi)}}}
         self.debug|={"motion_roi": {"type": "roi", "data": {"roi":copy.copy(motion_roi)}}}
 

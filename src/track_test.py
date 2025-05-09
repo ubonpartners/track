@@ -40,6 +40,10 @@ def summary_string(r):
     s+=f" FRPo:{r['frag_per_obj']:5.3f}"
     s+=f" Skip:{r['tracked_frames_skipped_frac']:0.2f}"
     s+=f" dROI:{r['average_detection_roi_area']:0.2f}"
+    if 'det_ap_person' in r:
+        s+=f" PmAP:{r['det_ap_person']:0.3f}"
+    if 'det_ap_face' in r:
+        s+=f" FmAP:{r['det_ap_face']:0.3f}"
     return s
 
 def compute_metrics(gt, test,
@@ -47,6 +51,7 @@ def compute_metrics(gt, test,
                     frame_metrics=False,
                     match_iou=0.45,
                     classes_to_test=["person"],
+                    classes_for_det_map=["person","face"],
                     eval_rate_divisor=1):
     assert match_iou<0.9 and match_iou>0.1, f"stupid match_iou {match_iou}"
     duration=min(max_duration, max(gt.duration_seconds(), test.duration_seconds()))
@@ -58,14 +63,13 @@ def compute_metrics(gt, test,
     # run evaluation at the framerate of the original video
     time_incr=(1.0/gt.metadata["frame_rate"])*eval_rate_divisor
     acc = mm.MOTAccumulator(auto_id=True)
-    tot=0
+
     while t<duration:
         # get GT and Test objects at time
         # this interpolates objects if there is no frame at that time
-        gt_obj=gt.objects_at_time(t)
-        tot+=len(gt_obj)
-        gt_obj=[o for o in gt_obj if gt.metadata["classes"][o.cl] in classes_to_test]
-        test_obj=test.objects_at_time(t)
+        gt_obj=gt.objects_at_time(t, class_remap=classes_to_test)
+        test_obj=test.objects_at_time(t, class_remap=classes_to_test)
+
         assert test_obj is not None
         test_obj=[o for o in test_obj if test.metadata["classes"][o.cl] in cl]
         if test_obj is None or gt_obj is None:
@@ -181,17 +185,19 @@ def compute_metrics(gt, test,
         if "tracker_debug" in frame:
             t=frame["frame_time"]
             debug=frame["tracker_debug"]
-            if "detections" in debug:
+            if debug is not None and "detections" in debug:
                 det=debug["detections"]
                 # get the GT objects from the trackset
                 # and the detected objects, do the mAP matching
-                gt_obj=gt.objects_at_time(t)
+                gt_obj=gt.objects_at_time(t, class_remap=classes_for_det_map)
                 iou_thr=0.5
                 det_obj=[]
                 for d in det["data"]["detections"]:
                     det_obj.append(tu.Object(box=d["box"],cl=d["class"],conf=d["confidence"]))
-                gts = sorted([obj for obj in gt_obj if obj.cl == 0],key=lambda x: x.confidence,reverse=True)
-                dets = sorted([obj for obj in det_obj if obj.cl == 0],key=lambda x: x.confidence,reverse=True)
+                det_obj=tu.object_class_remap(det_obj, test.metadata["classes"], classes_for_det_map)
+
+                gts = sorted(gt_obj,key=lambda x: x.confidence,reverse=True)
+                dets = sorted(det_obj,key=lambda x: x.confidence,reverse=True)
                 gt_matched=[-1]*len(gts)
                 det_matched=[-1]*len(dets)
 
@@ -211,17 +217,17 @@ def compute_metrics(gt, test,
                     tp.append(0 if det_matched[j]==-1 else 1)
 
     if len(conf)>5:
-        ap, p, r, p_curve, r_curve = stuff.ap_calc(conf, tp, pred_class, target_class, 1, min_gt=5, pr_curves=True)
+        ap, p, r, p_curve, r_curve = stuff.ap_calc(conf, tp, pred_class, target_class, len(classes_for_det_map), min_gt=5, pr_curves=True)
         interesting_thr=[0.25,0.3]
-        cl=0 # person
-        metrics_dict["det_ap_person"]=ap[cl]
-        metrics_dict["det_p_person"]=p[cl]
-        metrics_dict["det_r_person"]=r[cl]
-        for thr in interesting_thr:
-            s=f"th{int(thr*100):2d}"
-            index=int(len(p_curve[cl])*thr)
-            metrics_dict[f"det_p_person_{s}"]=p_curve[cl][index]
-            metrics_dict[f"det_r_person_{s}"]=r_curve[cl][index]
+        for cl,cl_name in enumerate(classes_for_det_map):
+            metrics_dict["det_ap_"+cl_name]=ap[cl]
+            metrics_dict["det_p_"+cl_name]=p[cl]
+            metrics_dict["det_r_"+cl_name]=r[cl]
+            for thr in interesting_thr:
+                s=f"th{int(thr*100):2d}"
+                index=int(len(p_curve[cl])*thr)
+                metrics_dict[f"det_p_{cl_name}_{s}"]=p_curve[cl][index]
+                metrics_dict[f"det_r_{cl_name}_{s}"]=r_curve[cl][index]
 
     if frame_metrics:
         return metrics_dict, frame_events
@@ -300,26 +306,22 @@ def display_results(results, columns, sort_key):
                 er["idf1"]= (2 * er["idtp"]) / (2 * er["idtp"] + er["idfp"] + er["idfn"]+1e-7)
                 er['mota']= 1 - (er['num_false_positives'] + er['num_misses'] + er['num_switches']) / er['num_objects']
                 er['motp']=weighted_motp_sum/er['idtp']
-                er['mostly_tracked_frac']/=len(filtered)
-                er['partially_tracked_frac']/=len(filtered)
-                er['mostly_lost2_frac']/=len(filtered)
-                er['missed_frac']/=len(filtered)
-                er['fp_tracks_frac']/=len(filtered)
                 er["fp_per_frame"]=er["num_false_positives"]/(er["num_frames"]+1e-7) # false positive dets per frame
                 er["fn_per_obj"]=er["num_misses"]/(er["num_objects"]+1e-7) # num false negative dets per real object GT det
                 er["switch_per_obj"]=er["num_switches"]/(er["num_unique_objects"]+1e-7) # num switches per unique object
                 er["frag_per_obj"]=er["num_fragmentations"]/(er["num_unique_objects"]+1e-7)
-                er['tracked_frames']/=len(filtered)
-                er['tracked_time']/=len(filtered)
-                er['tracked_fps']/=len(filtered)
-                er['tracked_frames_skipped_frac']=er['tracked_frames_skipped_frac']/len(filtered)
-                er['average_detection_roi_area']=er['average_detection_roi_area']/len(filtered)
-                er['fitness']=fitness_score(er)
-                if 'time' in er:
-                    er['time']/=len(filtered)
 
-                #er['mota']=er['mota']/er['num_objects']
-                #er['motp']=er['motp']/er['num_objects']
+                stats_to_avg=['mostly_tracked_frac','partially_tracked_frac','mostly_lost2_frac',
+                              'missed_frac','fp_tracks_frac', 'time',
+                              'tracked_frames','tracked_time','tracked_fps','tracked_frames_skipped_frac',
+                              'average_detection_roi_area','det_ap_person', 'det_ap_face']
+
+                for x in stats_to_avg:
+                    if x in er:
+                        er[x]=er[x]/len(filtered)
+
+                er['fitness']=fitness_score(er)
+
                 results2.append(e)
             datasets.append(name)
 
@@ -474,8 +476,10 @@ def track_test(config, split=None, desc="track test"):
             for r in cached_results:
                 if r["params"]["test_key"]==test_key and r["params"]["ds_key"]==ds_key:
                     if "regenerate" in datasets[ds_key] and datasets[ds_key]["regenerate"]==True:
+                        r["params"]["need_regenerate"]=True
                         continue
                     if "regenerate" in tests[test_key] and tests[test_key]["regenerate"]==True:
+                        r["params"]["need_regenerate"]=True
                         continue
                     result=r
             if result is None:
@@ -495,6 +499,11 @@ def track_test(config, split=None, desc="track test"):
                 tests_to_run.append(params)
             else:
                 output_results.append(result)
+
+
+    cached_results_new=[r for r in cached_results if "need_regenerate" not in r["params"]]
+    logging.info(f"cached results {len(cached_results)}; deleting {len(cached_results)-len(cached_results_new)} need to run {len(tests_to_run)} tests")
+    cached_results=cached_results_new
 
     on_result_context={"cached_results": cached_results,
                        "config":config,

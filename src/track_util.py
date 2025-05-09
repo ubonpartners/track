@@ -24,8 +24,23 @@ def object_interpolate(a, b, frac):
                 a2.pose_conf[i]=0
         return a2
 
+def object_class_remap(objects, initial_classes, target_classes):
+    if target_classes is None:
+        return objects
+    remap=[None]*len(initial_classes)
+    for i,cl in enumerate(target_classes):
+        if cl in initial_classes:
+            remap[initial_classes.index(cl)]=i
+    ret=copy.deepcopy(objects)
+    for r in ret:
+        if r.cl in remap:
+            r.cl=remap[r.cl]
+        else:
+            r.cl=None
+    return [o for o in ret if o.cl is not None]
+
 class Object:
-    def __init__(self, box=None, cl=None, conf=None, 
+    def __init__(self, box=None, cl=None, conf=None,
                  pose=None, pose_conf=None, pose_pos=None,
                  attr=None, time=None, detection=None, expand_by_pose=False):
         if detection is not None:
@@ -91,12 +106,9 @@ class Object:
                         p2=self.pose_pos[l[2]]
                         mid=[0.5*(p1[0]+p2[0]), 0.5*(p1[1]+p2[1])]
                         display.draw_line(self.pose_pos[l[0]], mid, clr=clr)
-        display.draw_text(f"ID {int(self.track_id)} {self.cl} {self.confidence:0.2f}", 
+        display.draw_text(f"ID {int(self.track_id)} {self.cl} {self.confidence:0.2f}",
                           self.box[0],
                           self.box[1],
                           fontScale=0.5,
                           fontColor=(200,255,255,255),
                           bgColor=clr)
-  
-
-    
