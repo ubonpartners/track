@@ -84,7 +84,7 @@ class Object:
         self.time=time
         self.track_id=None
 
-    def draw(self, display, clr=(255,255,255,255), thickness=1):
+    def draw(self, display, clr=(255,255,255,255), thickness=1, label_prefix=None):
         display.draw_box(self.box, clr=clr, thickness=thickness, select_context=self.track_id)
         if hasattr(self, "predicted_box"):
             #print(self.predicted_box)
@@ -106,7 +106,10 @@ class Object:
                         p2=self.pose_pos[l[2]]
                         mid=[0.5*(p1[0]+p2[0]), 0.5*(p1[1]+p2[1])]
                         display.draw_line(self.pose_pos[l[0]], mid, clr=clr)
-        display.draw_text(f"ID {int(self.track_id)} {self.cl} {self.confidence:0.2f}",
+        label=f"ID {int(self.track_id)} {self.cl} {self.confidence:0.2f}"
+        if label_prefix is not None:
+            label=label_prefix+label
+        display.draw_text(label,
                           self.box[0],
                           self.box[1],
                           fontScale=0.5,

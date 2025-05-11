@@ -16,11 +16,15 @@ import time
 
 class TrackSet:
     def __init__(self, path=None):
+        self.name="No name"
+        self.source_name=None
         self.frame_times=[]
         self.frames=[]
         self.metadata={}
         self.videoreader=None
         if path is not None:
+            self.name=f"Import {path}"
+            self.source_name=path
             if path.endswith(".ini"):
                 self.import_mot(path)
                 return
@@ -317,6 +321,7 @@ class TrackSet:
 
         param_dict={}
         if config_file is not None:
+            self.name=f"Import-create {stuff.name_from_file(config_file)}"
             config=stuff.load_dictionary(config_file)
             for c in config:
                 param_dict[c]=config[c]
@@ -329,11 +334,17 @@ class TrackSet:
         cap=None
 
         if isinstance(video, TrackSet):
+            if video.source_name is not None:
+                self.name+=f":{stuff.name_from_file(video.source_name)}"
+            else:
+                self.name+=f" none {video.name}"
             fps=video.metadata["frame_rate"]
             duration=video.duration_seconds()
             width=video.metadata["width"]
             height=video.metadata["height"]
         else:
+            self.name+=f" Video={stuff.name_from_file(video)}"
+            self.source_name=video
             cap = cv2.VideoCapture(video)
             fps = int(cap.get(cv2.CAP_PROP_FPS))  # Frames per second
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))  # Frame width
@@ -486,190 +497,250 @@ class TrackSet:
         for f in self.frames:
             self.frame_times.append(f["frame_time"])
 
-def display_trackset(trackset=None, trackset_gt=None, frame_events=None, cl=["person"], output=None):
-    if isinstance(trackset, str):
-        trackset=ts.TrackSet(trackset)
-    if isinstance(trackset_gt, str):
-        trackset_gt=ts.TrackSet(trackset_gt)
+def onoff(x):
+    if x:
+        return "[ON]"
+    else:
+        return "[OFF]"
 
-    trackset_base=trackset_gt if trackset_gt is not None else trackset
+def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl=["person"], output=None):
+
+    tss=[]
+
+    for i, ts in enumerate(trackset_list):
+        name=f"Trackset {i}"
+        if isinstance(ts, str):
+            name+=":"+ts
+            ts=TrackSet(ts)
+        name+="["+ts.name+"]"
+        tss.append({"name": name,
+                    "display":stuff.Display(width=1280, height=720, output=output, name=name),
+                    "selected_ids":[],
+                    "show":False,
+                    "trackset":ts})
+
+    if isinstance(trackset_gt, str):
+        trackset_gt=TrackSet(trackset_gt)
+
+    trackset_base=trackset_gt if trackset_gt is not None else trackset_list[0]
     duration=trackset_base.duration_seconds()
     t=0
     paused=True
     show_gts=True
     show_det=True
+    show_help=True
 
-    display=stuff.Display(width=1280, height=720, output=output)
-    selected_ids=[]
     debug_enable=[False]*10
-    show=False
     while(t<duration):
-        display.clear()
+        for ts in tss:
+            trackset=ts["trackset"]
+            display=ts["display"]
+            selected_ids=ts["selected_ids"]
+            display.clear()
 
-        img=trackset_base.img_at_time(t)
+            img=trackset_base.img_at_time(t)
 
-        events={}
-        if frame_events:
-            best_diff=100000
-            best_index=0
-            for i, e in enumerate(frame_events):
-                diff=abs(e["frame_time"]-t)
-                if diff<best_diff:
-                    best_diff=diff
-                    best_index=i
-            events=frame_events[best_index]["events"]
+            events={}
+            if frame_events:
+                best_diff=100000
+                best_index=0
+                for i, e in enumerate(frame_events):
+                    diff=abs(e["frame_time"]-t)
+                    if diff<best_diff:
+                        best_diff=diff
+                        best_index=i
+                events=frame_events[best_index]["events"]
 
-        if trackset_gt and show_gts:
-            objs_gt=trackset_gt.objects_at_time(t)
-            for o in objs_gt:
-                obj_cl=trackset_gt.metadata["classes"][o.cl]
-                if not obj_cl in cl:
-                    continue
-                a=255 if o.track_id in selected_ids else 48
-                clr=(a,0,0,0)
-                thickness=2
-                for e in events:
-                    if math.isnan(events[e]["OId"]):
+            if trackset_gt and show_gts:
+                objs_gt=trackset_gt.objects_at_time(t)
+                for o in objs_gt:
+                    obj_cl=trackset_gt.metadata["classes"][o.cl]
+                    if not obj_cl in cl:
                         continue
-                    if int(events[e]["OId"])==o.track_id:
-                        if events[e]["Type"]=="SWITCH":
-                            clr=(a,0,128,128)
-                        elif events[e]["Type"]=="MATCH":
-                            clr=(a,0,128,0)
-                        elif events[e]["Type"]=="MISS":
-                            clr=(a,0,0,128)
-                            thickness=4
-                o.draw(display, clr=clr, thickness=thickness)
+                    a=200 if o.track_id in selected_ids else 48
+                    clr=(a,0,0,0)
+                    thickness=2
+                    prefix="?"
+                    #print(o.track_id)
+                    for e in events:
+                        if math.isnan(events[e]["OId"]):
+                            continue
+                       # print(f"OID is {events[e]["OId"]}")
+                        if int(events[e]["OId"])==int(o.track_id):
+                            if events[e]["Type"]=="SWITCH" or events[e]["Type"]=="TRANSFER":
+                                clr=(a,0,128,128)
+                                prefix="[SW]"
+                            elif events[e]["Type"]=="MATCH":
+                                clr=(a,0,128,0)
+                                prefix="[OK]"
+                            elif events[e]["Type"]=="MISS":
+                                clr=(a,128,0,0)
+                                prefix="[MISS]"
+                                thickness=4
+                            else:
+                                prefix="[??]"
+                                print(f"weird gt event type {events[e]["Type"]}")
+                    o.draw(display, clr=clr, thickness=thickness, label_prefix=prefix)
 
-        if trackset and show_det:
-            objs=trackset.objects_at_time(t)
-            for o in objs:
-                obj_cl=trackset.metadata["classes"][o.cl]
-                if not obj_cl in cl:
-                    continue
-                a=255 if o.track_id in selected_ids else 48
-                clr=(a,255,255,255)
-                thickness=2
-                for e in events:
-                    if math.isnan(events[e]["HId"]):
+            if trackset and show_det:
+                objs=trackset.objects_at_time(t)
+                for o in objs:
+                    obj_cl=trackset.metadata["classes"][o.cl]
+                    if not obj_cl in cl:
                         continue
-                    if int(events[e]["HId"])==o.track_id:
-                        if events[e]["Type"]=="SWITCH":
-                            clr=(a,0,255,255)
-                        elif events[e]["Type"]=="MATCH":
-                            clr=(a,0,255,0)
-                        elif events[e]["Type"]=="FP":
-                            clr=(a,0,0,255)
-                            thickness=-1 #4
-                o.draw(display, clr=clr, thickness=thickness)
+                    a=200 if o.track_id in selected_ids else 48
+                    clr=(a,255,255,255)
+                    thickness=2
+                    prefix="?"
+                    for e in events:
+                        if math.isnan(events[e]["HId"]):
+                            continue
+                        if int(events[e]["HId"])==o.track_id:
+                            if events[e]["Type"]=="SWITCH" or events[e]["Type"]=="TRANSFER":
+                                clr=(a,255,255,0)
+                                prefix="[SW]"
+                            elif events[e]["Type"]=="MATCH":
+                                clr=(a,0,255,0)
+                                prefix="[OK]"
+                            elif events[e]["Type"]=="FP":
+                                clr=(a,255,0,0)
+                                thickness=4 #4
+                                prefix="[FP]"
+                            elif events[e]["Type"]=="MIGRATE":
+                                clr=(a,255,255,0)
+                                prefix="[MIG]"
+                            elif events[e]["Type"]=="ASCEND":
+                                clr=(a,255,255,0)
+                                prefix="[ASC]"
+                            else:
+                                prefix="[??]"
+                                print(f"weird det event type {events[e]["Type"]}")
+                    o.draw(display, clr=clr, thickness=thickness, label_prefix=prefix)
 
-        debug, debug_time=trackset.debug_at_time(t, nearest=True)
+            debug, debug_time=trackset.debug_at_time(t, nearest=True)
 
-        if trackset.skip_at_time(t, nearest=True):
-            display.draw_text(f"SKIPPED {debug_time:5.2f}", 0.05,0.05)
-        else:
-            display.draw_text(f"TRACKED {debug_time:5.2f}", 0.05,0.05)
+            if trackset.skip_at_time(t, nearest=True):
+                display.draw_text(f"SKIPPED {debug_time:5.2f}", 0.05,0.05)
+            else:
+                display.draw_text(f"TRACKED {debug_time:5.2f}", 0.05,0.05)
 
-        debug_entries=[]
-        if debug is not None:
-            for i,d in enumerate(debug):
-                debug_entries.append(d)
-                debug_entry=debug[d]
-                debug_entry_type=debug_entry["type"]
-                debug_entry_data=debug_entry["data"]
-                if debug_enable[i]==False:
-                    continue
-                if debug_entry_type=="yolo_detections":
-                    stuff.draw_boxes(display,
-                                     debug_entry_data["detections"],
-                                     attributes=debug_entry_data["attributes"],
-                                     highlight_index=None,
-                                     class_names=debug_entry_data["class_names"])
-                    if show:
-                        for i,d in enumerate(debug_entry_data["detections"]): #print(debug_entry_data["detections"])
-                            print(f"{i} {d["confidence"]}")
-                        show=False
-                if debug_entry_type=="motion_track":
-                    flow=debug_entry_data["motion_array"]
-                    if flow is not None:
-                        grid_w=flow.shape[1]
-                        grid_h=flow.shape[0]
-                        for y in range(grid_h):
-                            for x in range(grid_w):
-                                cx=(x+0.5)/grid_w
-                                cy=(y+0.5)/grid_h
-                                vx=flow[y][x][0]
-                                vy=flow[y][x][1]
-                                thr=0.001
-                                if abs(vx)>thr or abs(vy)>thr:
-                                    display.draw_line([cx,cy],
-                                                    [cx+vx, cy+vy],
-                                                    clr=(128,255,255,0), thickness=1)
-                                clr=max(0,min(255,int(debug_entry_data["delta_array"][y][x])))
-                                box=[x/grid_w, y/grid_h, (x+1)/grid_w, (y+1)/grid_h]
-                if debug_entry_type=="cost_map":
-                    cost_map=debug_entry_data["cost_map"]
-                    scale=debug_entry_data["scale"]
-                    if cost_map is not None:
-                        grid_w=cost_map.shape[1]
-                        grid_h=cost_map.shape[0]
-                        for y in range(grid_h):
-                            for x in range(grid_w):
-                                clr=max(0,min(255,int(scale*cost_map[y][x])))
-                                box=[x/grid_w, y/grid_h, (x+1)/grid_w, (y+1)/grid_h]
-                                display.draw_box(box, (clr,0,255,0), thickness=-1)
-                if debug_entry_type=="box_prediction":
-                    for i in debug_entry_data:
-                        display.draw_box(debug_entry_data[i]["from"], clr=(128,255,255,255), thickness=1)
-                        display.draw_box(debug_entry_data[i]["to"], clr=(128,255,0,0), thickness=2)
-                        if "pose_from" in debug_entry_data[i]:
-                            stuff.draw_pose(display,
-                                            pose_pos=debug_entry_data[i]["pose_from"],
-                                            pose_conf=debug_entry_data[i]["pose_conf"],
-                                            thickness=1, clr=(128,255,255,255))
-                            stuff.draw_pose(display,
-                                            pose_pos=debug_entry_data[i]["pose_to"],
-                                            pose_conf=debug_entry_data[i]["pose_conf"],
-                                            thickness=2, clr=(128,255,0,0))
+            debug_entries=[]
+            if debug is not None:
+                for i,d in enumerate(debug):
+                    debug_entries.append(d)
+                    debug_entry=debug[d]
+                    debug_entry_type=debug_entry["type"]
+                    debug_entry_data=debug_entry["data"]
+                    if debug_enable[i]==False:
+                        continue
+                    if debug_entry_type=="yolo_detections":
+                        stuff.draw_boxes(display,
+                                        debug_entry_data["detections"],
+                                        attributes=debug_entry_data["attributes"],
+                                        highlight_index=None,
+                                        class_names=debug_entry_data["class_names"])
+                        if ts["show"]:
+                            for i,d in enumerate(debug_entry_data["detections"]): #print(debug_entry_data["detections"])
+                                print(f"{i} {d["confidence"]}")
+                            ts["show"]=False
+                    if debug_entry_type=="motion_track":
+                        flow=debug_entry_data["motion_array"]
+                        if flow is not None:
+                            grid_w=flow.shape[1]
+                            grid_h=flow.shape[0]
+                            for y in range(grid_h):
+                                for x in range(grid_w):
+                                    cx=(x+0.5)/grid_w
+                                    cy=(y+0.5)/grid_h
+                                    vx=flow[y][x][0]
+                                    vy=flow[y][x][1]
+                                    thr=0.001
+                                    if abs(vx)>thr or abs(vy)>thr:
+                                        display.draw_line([cx,cy],
+                                                        [cx+vx, cy+vy],
+                                                        clr=(128,255,255,0), thickness=1)
+                                    clr=max(0,min(255,int(debug_entry_data["delta_array"][y][x])))
+                                    box=[x/grid_w, y/grid_h, (x+1)/grid_w, (y+1)/grid_h]
+                    if debug_entry_type=="cost_map":
+                        cost_map=debug_entry_data["cost_map"]
+                        scale=debug_entry_data["scale"]
+                        if cost_map is not None:
+                            grid_w=cost_map.shape[1]
+                            grid_h=cost_map.shape[0]
+                            for y in range(grid_h):
+                                for x in range(grid_w):
+                                    clr=max(0,min(255,int(scale*cost_map[y][x])))
+                                    box=[x/grid_w, y/grid_h, (x+1)/grid_w, (y+1)/grid_h]
+                                    display.draw_box(box, (clr,0,255,0), thickness=-1)
+                    if debug_entry_type=="box_prediction":
+                        for i in debug_entry_data:
+                            display.draw_box(debug_entry_data[i]["from"], clr=(128,255,255,255), thickness=1)
+                            display.draw_box(debug_entry_data[i]["to"], clr=(128,255,0,0), thickness=2)
+                            if "pose_from" in debug_entry_data[i]:
+                                stuff.draw_pose(display,
+                                                pose_pos=debug_entry_data[i]["pose_from"],
+                                                pose_conf=debug_entry_data[i]["pose_conf"],
+                                                thickness=1, clr=(128,255,255,255))
+                                stuff.draw_pose(display,
+                                                pose_pos=debug_entry_data[i]["pose_to"],
+                                                pose_conf=debug_entry_data[i]["pose_conf"],
+                                                thickness=2, clr=(128,255,0,0))
 
-                if debug_entry_type=="roi":
-                    box=debug_entry_data["roi"]
-                    display.draw_box(box, clr=(16,255,255,0), thickness=-1)
-                    display.draw_box(box, clr=(128,255,0,0), thickness=4)
+                    if debug_entry_type=="roi":
+                        box=debug_entry_data["roi"]
+                        display.draw_box(box, clr=(16,255,255,0), thickness=-1)
+                        display.draw_box(box, clr=(128,255,0,0), thickness=4)
 
-        #print(debug)
+            help="HELP\n"
+            help+=f"h) toggle this help display {onoff(help)}\n"
+            help+=f"< > advance time, +SHIFT to skip to next tracked frame\n"
+            help+=f"D, G toggle tracking Det {onoff(show_det)} GTs {onoff(show_gts)}\n"
+            help+=f"<space> toggle continous playback {onoff(not paused)}\n"
+            for i,e in enumerate(debug_entries):
+                help+=(f"- {i+1} Toggle debug overlay {i} : {e} {onoff(debug_enable[i])}\n")
 
-        display.show(img, title=f"time={t:5.2f}")
-        events=display.get_events(10)
-        for e in events:
-            if 'selected' in e:
-                selected_ids=[]
-                for box in e['selected']:
-                    selected_ids.append(box['context'])
-            if e['key']=='g':
-                show_gts=not show_gts
-            if e['key']=='d':
-                show_det=not show_det
-            if e['key']==' ':
-                paused=not paused
-            if e['key']=='>':
-                t=trackset.frame_time_after(t)
-            if e['key']=='<':
-                t=trackset.frame_time_before(t)
-            if e['key']=='.':
-                t+=0.033
-            if e['key']==',':
-                t-=0.033
-            if e['key']=='s':
-                show=True
-            if e['key']=='l':
-                print(debug_entries)
-            if e['key'] is not None and e['key']>='1' and e['key']<='9':
-                index=int(e['key'])-1
-                debug_enable[index]=not debug_enable[index]
+            if show_help:
+                display.draw_text(help, 0.05, 0.1)
+
+            display.show(img, title=f"{ts["name"]} time={t:5.2f}")
+
+        #end tss loop
+
+        for i,ts in enumerate(tss):
+            display=ts["display"]
+            trackset=ts["trackset"]
+            events=display.get_events(10)
+            for e in events:
+                if 'selected' in e:
+                    selected_ids=[]
+                    for box in e['selected']:
+                        selected_ids.append(box['context'])
+                    ts["selected_ids"]=selected_ids
+                if e['key']=='g':
+                    show_gts=not show_gts
+                if e['key']=='d':
+                    show_det=not show_det
+                if e['key']==' ':
+                    paused=not paused
+                if e['key']=='>':
+                    t=trackset.frame_time_after(t)
+                if e['key']=='<':
+                    t=trackset.frame_time_before(t)
+                if e['key']=='.':
+                    t+=0.033
+                if e['key']==',':
+                    t-=0.033
+                if e['key']=='s':
+                    show=True
+                if e['key']=='h':
+                    show_help=not show_help
+                if e['key'] is not None and e['key']>='1' and e['key']<='9':
+                    index=int(e['key'])-1
+                    debug_enable[index]=not debug_enable[index]
         if paused is False:
             t+=0.033
-    display.close()
+    for ts in tss:
+        ts["display"].close()
 
 def extract_frames_from_seq(seq_file, output_video):
     cap = cv2.VideoCapture(seq_file)

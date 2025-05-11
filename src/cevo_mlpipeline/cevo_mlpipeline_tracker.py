@@ -6,8 +6,91 @@ import os
 import yaml
 from pathlib import Path
 
+def load_cevo_json(json_folder):
+    frames=os.listdir(json_folder)
+    frames=[f for f in frames if "_det" not in f]
+    frames.sort()
+    out_frames={}
+    for f in frames:
+        fname=json_folder+"/"+f
+        if fname.endswith(".json"):
+            d=stuff.load_dictionary(fname)
+            fn=d["frame_num"]-1
+            d["test_time"]=d["rtp_time"]/1000000.0
+            out_frames[fn]=d
+    return out_frames
+
+def cevo_parse_next_frame(self, frame, time, debug_enable=False):
+    if not self.fn in self.frames:
+            self.fn+=1
+            return None, None
+    h,w,_=frame.shape
+    det_frame=self.frames[self.fn]
+    objects=[]
+    #print(det_frame)
+    if det_frame["bbox"] is None:
+        self.fn+=1
+        return [], None
+    assert abs(time-det_frame["test_time"])<0.1
+
+    for det in det_frame["bbox"]:
+        b=det["bbox"]
+        conf=det["confidence"]
+        track_id=det["track_id"]
+        bx=b["x"]
+        by=b["y"]
+        bw=b["w"]
+        bh=b["h"]
+        box=[stuff.clip01((bx)/w),
+                stuff.clip01((by)/h),
+                stuff.clip01((bx+bw)/w),
+                stuff.clip01((by+bh)/h)]
+        # currently JSON only contains person tracks and no class field
+        d={"box":box, "class":self.classes.index("person"), "confidence":conf}
+        o=tu.Object(detection=d, time=time)
+        o.track_id=track_id
+        objects.append(o)
+    debug=None
+
+    if "bbox_organised_dets" in det_frame:
+        inter_w,inter_h=det_frame["inter_width"], det_frame["inter_height"]
+        infer_w,infer_h=det_frame["infer_width"], det_frame["infer_height"]
+        roi_x=det_frame["roi"]["x"]/inter_w
+        roi_y=det_frame["roi"]["y"]/inter_h
+        roi_w=det_frame["roi"]["w"]/inter_w
+        roi_h=det_frame["roi"]["h"]/inter_h
+        dets=[]
+        for d in det_frame["bbox_organised_dets"]:
+            if d["class_id"]=='Person' or d["class_id"]=='Face':
+                x0=d["bbox"]["cx"]
+                y0=d["bbox"]["cy"]
+                w=d["bbox"]["w"]
+                h=d["bbox"]["h"]
+                x1=x0+w/2
+                y1=y0+h/2
+                x0=x0-w/2
+                y0=y0-h/2
+                conf=d["confidence"]
+                x0=x0/infer_w
+                y0=y0/infer_h
+                x1=x1/infer_w
+                y1=y1/infer_h
+                box=[roi_x+roi_w*x0, roi_y+roi_h*y0, roi_x+roi_w*x1, roi_y+roi_h*y1]
+                det={"box":box, "class":(self.classes.index(d["class_id"].lower())), "confidence":conf}
+                dets.append(det)
+        debug={"detections": {"type": "yolo_detections", "data":{"detections":dets, "class_names":["person"], "attributes":None}}}
+        debug|={"detection_roi": {"type": "roi", "data": {"roi":[roi_x, roi_y, roi_x+roi_w, roi_y+roi_h]}}}
+
+    #print(self.frames[self.fn])
+    self.fn+=1
+    return objects, debug
+
 class cevo_mlpipe_tracker:
-    def __init__(self, params, track_min_interval, debug_enable=False, cache_h264=True, classes=["person","face"]):
+    def __init__(self, params,
+                 track_min_interval,
+                 debug_enable=False,
+                 cache_h264=True,
+                 classes=["person","face"]):
         self.params=params
         self.classes=classes
         trackset=self.params["original_trackset"]
@@ -67,19 +150,7 @@ class cevo_mlpipe_tracker:
 
         assert os.path.isdir(cevo_out_folder), "Failed to create output cevo data"
 
-        frames=os.listdir(cevo_out_folder+"/"+os.path.basename(h264_file))
-        frames=[f for f in frames if "_det" not in f]
-        frames.sort()
-        self.frames={}
-        for f in frames:
-            fname=cevo_out_folder+"/"+os.path.basename(h264_file)+"/"+f
-            d=stuff.load_dictionary(fname)
-            fname_det=fname.replace(".json", "_det.json")
-            if os.path.exists(fname_det):
-                d["det_debug"]=stuff.load_dictionary(fname_det)
-            fn=d["frame_num"]-1
-            d["test_time"]=fn/trackset.metadata["frame_rate"]
-            self.frames[fn]=d
+        self.frames=load_cevo_json(cevo_out_folder+"/"+os.path.basename(h264_file))
 
         if h264_file_temp is not None:
             stuff.rm(h264_file_temp)
@@ -94,67 +165,15 @@ class cevo_mlpipe_tracker:
             print("ERROR :: ", "cevo_tracker", e)
 
     def track_frame(self, frame, time, debug_enable=False):
-        if not self.fn in self.frames:
-            self.fn+=1
-            return None, None
-        h,w,_=frame.shape
-        det_frame=self.frames[self.fn]
-        objects=[]
-        #print(det_frame)
-        if det_frame["bbox"] is None:
-            self.fn+=1
-            return [], None
+        return cevo_parse_next_frame(self, frame, time, debug_enable)
 
-        assert abs(time-det_frame["test_time"])<0.1
+class cevo_analyser:
+    def __init__(self, params, track_min_interval, debug_enable=False, cache_h264=True, classes=["person","face"]):
+        cevo_out_folder=params["json_debug_path"]
+        assert os.path.isdir(cevo_out_folder), "Failed to find folder with JSON"
+        self.frames=load_cevo_json(cevo_out_folder)
+        self.fn=0
+        self.classes=classes
 
-        for det in det_frame["bbox"]:
-            b=det["bbox"]
-            conf=det["confidence"]
-            track_id=det["track_id"]
-            bx=b["x"]
-            by=b["y"]
-            bw=b["w"]
-            bh=b["h"]
-            box=[stuff.clip01((bx)/w),
-                 stuff.clip01((by)/h),
-                 stuff.clip01((bx+bw)/w),
-                 stuff.clip01((by+bh)/h)]
-            # currently JSON only contains person tracks and no class field
-            d={"box":box, "class":self.classes.index("person"), "confidence":conf}
-            o=tu.Object(detection=d, time=time)
-            o.track_id=track_id
-            objects.append(o)
-        debug=None
-
-        if "bbox_organised_dets" in det_frame:
-            inter_w,inter_h=det_frame["inter_width"], det_frame["inter_height"]
-            infer_w,infer_h=det_frame["infer_width"], det_frame["infer_height"]
-            roi_x=det_frame["roi"]["x"]/inter_w
-            roi_y=det_frame["roi"]["y"]/inter_h
-            roi_w=det_frame["roi"]["w"]/inter_w
-            roi_h=det_frame["roi"]["h"]/inter_h
-            dets=[]
-            for d in det_frame["bbox_organised_dets"]:
-                if d["class_id"]=='Person' or d["class_id"]=='Face':
-                    x0=d["bbox"]["cx"]
-                    y0=d["bbox"]["cy"]
-                    w=d["bbox"]["w"]
-                    h=d["bbox"]["h"]
-                    x1=x0+w/2
-                    y1=y0+h/2
-                    x0=x0-w/2
-                    y0=y0-h/2
-                    conf=d["confidence"]
-                    x0=x0/infer_w
-                    y0=y0/infer_h
-                    x1=x1/infer_w
-                    y1=y1/infer_h
-                    box=[roi_x+roi_w*x0, roi_y+roi_h*y0, roi_x+roi_w*x1, roi_y+roi_h*y1]
-                    det={"box":box, "class":(self.classes.index(d["class_id"].lower())), "confidence":conf}
-                    dets.append(det)
-            debug={"detections": {"type": "yolo_detections", "data":{"detections":dets, "class_names":["person"], "attributes":None}}}
-            debug|={"detection_roi": {"type": "roi", "data": {"roi":[roi_x, roi_y, roi_x+roi_w, roi_y+roi_h]}}}
-
-        #print(self.frames[self.fn])
-        self.fn+=1
-        return objects, debug
+    def track_frame(self, frame, time, debug_enable=False):
+        return cevo_parse_next_frame(self, frame, time, debug_enable)
