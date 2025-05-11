@@ -164,10 +164,10 @@ def compute_metrics(gt, test,
         while t<duration:
             if frame_index in acc.mot_events.index.get_level_values(0).unique():
                 frame=acc.mot_events.xs(frame_index, level=0) #acc.mot_events.loc[frame_index]
-                frame_events.append({"frame_time":t, "events":frame.to_dict(orient='index')})
+                frame_events.append({"frame_time":t, "events":frame.to_dict(orient='index'), "stats":{}})
             else:
                 # no events for this frame
-                frame_events.append({"frame_time":t, "events":{}})
+                frame_events.append({"frame_time":t, "events":{}, "stats":{}})
             t+=time_incr
             frame_index+=1
     del mh

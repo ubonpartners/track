@@ -24,13 +24,16 @@ def compare_track(t, compare_config=None, display=True):
         params=None
         if "params" in this_config:
             params=this_config["params"]
+        track_min_interval=0.159
+        if "track_min_interval" in this_config:
+            track_min_interval=this_config["track_min_interval"]
 
         trackset=ts.TrackSet()
         start_time=time.time()
         trackset.import_create(trackset_gt,
                                config_file=this_config["config"],
                                params=params,
-                               track_min_interval=0.159, #-1,
+                               track_min_interval=track_min_interval, #-1,
                                debug=False,
                                debug_enable=True)
         trackset.name=c

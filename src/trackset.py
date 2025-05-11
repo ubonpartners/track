@@ -530,7 +530,7 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl
     show_det=True
     show_help=True
 
-    debug_enable=[False]*10
+    debug_overlays_enabled={}
     while(t<duration):
         for ts in tss:
             trackset=ts["trackset"]
@@ -620,18 +620,18 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl
             debug, debug_time=trackset.debug_at_time(t, nearest=True)
 
             if trackset.skip_at_time(t, nearest=True):
-                display.draw_text(f"SKIPPED {debug_time:5.2f}", 0.05,0.05)
+                display.draw_text(f"Nearest processed frame at t={debug_time:5.2f} SKIPPED", 0.05,0.05)
             else:
-                display.draw_text(f"TRACKED {debug_time:5.2f}", 0.05,0.05)
+                display.draw_text(f"Nearest processed frame at t={debug_time:5.2f} TRACKED", 0.05,0.05)
 
-            debug_entries=[]
             if debug is not None:
                 for i,d in enumerate(debug):
-                    debug_entries.append(d)
+                    if not d in debug_overlays_enabled:
+                        debug_overlays_enabled[d]=False
                     debug_entry=debug[d]
                     debug_entry_type=debug_entry["type"]
                     debug_entry_data=debug_entry["data"]
-                    if debug_enable[i]==False:
+                    if not d in debug_overlays_enabled or debug_overlays_enabled[d]==False:
                         continue
                     if debug_entry_type=="yolo_detections":
                         stuff.draw_boxes(display,
@@ -696,8 +696,9 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl
             help+=f"< > advance time, +SHIFT to skip to next tracked frame\n"
             help+=f"D, G toggle tracking Det {onoff(show_det)} GTs {onoff(show_gts)}\n"
             help+=f"<space> toggle continous playback {onoff(not paused)}\n"
-            for i,e in enumerate(debug_entries):
-                help+=(f"- {i+1} Toggle debug overlay {i} : {e} {onoff(debug_enable[i])}\n")
+            help+=f"Debug overlays-\n"
+            for i,e in enumerate(debug_overlays_enabled):
+                help+=(f"--- {i+1} Toggle : {e} {onoff(debug_overlays_enabled[e])}\n")
 
             if show_help:
                 display.draw_text(help, 0.05, 0.1)
@@ -736,7 +737,8 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl
                     show_help=not show_help
                 if e['key'] is not None and e['key']>='1' and e['key']<='9':
                     index=int(e['key'])-1
-                    debug_enable[index]=not debug_enable[index]
+                    key = list(debug_overlays_enabled.keys())[index]
+                    debug_overlays_enabled[key]=not debug_overlays_enabled[key]
         if paused is False:
             t+=0.033
     for ts in tss:
