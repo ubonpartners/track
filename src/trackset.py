@@ -529,6 +529,7 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl
     show_gts=True
     show_det=True
     show_help=True
+    show_stats=True
 
     debug_overlays_enabled={}
     while(t<duration):
@@ -541,6 +542,7 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl
             img=trackset_base.img_at_time(t)
 
             events={}
+            stats={}
             if frame_events:
                 best_diff=100000
                 best_index=0
@@ -550,6 +552,7 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl
                         best_diff=diff
                         best_index=i
                 events=frame_events[best_index]["events"]
+                stats=frame_events[best_index]["stats"]
 
             if trackset_gt and show_gts:
                 objs_gt=trackset_gt.objects_at_time(t)
@@ -567,7 +570,7 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl
                             continue
                        # print(f"OID is {events[e]["OId"]}")
                         if int(events[e]["OId"])==int(o.track_id):
-                            if events[e]["Type"]=="SWITCH" or events[e]["Type"]=="TRANSFER":
+                            if events[e]["Type"]=="SWITCH":
                                 clr=(a,0,128,128)
                                 prefix="[SW]"
                             elif events[e]["Type"]=="MATCH":
@@ -577,6 +580,8 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl
                                 clr=(a,128,0,0)
                                 prefix="[MISS]"
                                 thickness=4
+                            elif events[e]["Type"] in ["TRANSFER","ASCEND","MIGRATE"]:
+                                prefix="[TRANS]"
                             else:
                                 prefix="[??]"
                                 print(f"weird gt event type {events[e]["Type"]}")
@@ -692,18 +697,26 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl
                         display.draw_box(box, clr=(128,255,0,0), thickness=4)
 
             help="HELP\n"
-            help+=f"h) toggle this help display {onoff(help)}\n"
+            help+=f"h) toggle this help display {onoff(show_help)}\n"
+            help+=f"s) toggle stats display {onoff(show_stats)}\n"
             help+=f"< > advance time, +SHIFT to skip to next tracked frame\n"
             help+=f"D, G toggle tracking Det {onoff(show_det)} GTs {onoff(show_gts)}\n"
             help+=f"<space> toggle continous playback {onoff(not paused)}\n"
             help+=f"Debug overlays-\n"
             for i,e in enumerate(debug_overlays_enabled):
-                help+=(f"--- {i+1} Toggle : {e} {onoff(debug_overlays_enabled[e])}\n")
+                help+=(f"--- {i+1} Toggle : {e:20s} {onoff(debug_overlays_enabled[e])}\n")
 
             if show_help:
                 display.draw_text(help, 0.05, 0.1)
 
+            if show_stats and len(stats)>0:
+                sstats="STATS\n"
+                for s in stats:
+                    sstats+=f"{s:20}: {stats[s]}\n"
+                display.draw_text(sstats, 0.8, 0.1)
+
             display.show(img, title=f"{ts["name"]} time={t:5.2f}")
+
 
         #end tss loop
 
@@ -732,6 +745,8 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl
                 if e['key']==',':
                     t-=0.033
                 if e['key']=='s':
+                    show_stats=not show_stats
+                if e['key']=='x':
                     show=True
                 if e['key']=='h':
                     show_help=not show_help

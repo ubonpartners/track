@@ -64,6 +64,9 @@ def compute_metrics(gt, test,
     time_incr=(1.0/gt.metadata["frame_rate"])*eval_rate_divisor
     acc = mm.MOTAccumulator(auto_id=True)
 
+    frame_events=[]
+    frame_index=0
+
     while t<duration:
         # get GT and Test objects at time
         # this interpolates objects if there is no frame at that time
@@ -78,6 +81,11 @@ def compute_metrics(gt, test,
         t_dets=[mot_obj(t, img_w, img_h) for t in test_obj]
         gt_dets=np.array(gt_dets)
         t_dets=np.array(t_dets)
+
+        stats={"num_gt_tracks":len(gt_dets),
+               "num_tracks":len(t_dets)}
+        frame_events.append({"frame_time":t, "events":{}, "stats":stats})
+
         C=[[]]
         if len(gt_dets)>0 and len(t_dets)>0:
             C = mm.distances.iou_matrix(gt_dets[:,1:], t_dets[:,1:], \
@@ -86,6 +94,7 @@ def compute_metrics(gt, test,
         acc.update(gt_dets[:,0].astype('int').tolist() if len(gt_dets)>0 else [], \
                    t_dets[:,0].astype('int').tolist() if len(t_dets)>0 else [], C)
         t+=time_incr
+        frame_index=0
 
     mh = mm.metrics.create()
 
@@ -160,14 +169,27 @@ def compute_metrics(gt, test,
     if frame_metrics:
         t=0
         frame_index=0
-        frame_events=[]
+
         while t<duration:
+            assert frame_events[frame_index]["frame_time"]==t
             if frame_index in acc.mot_events.index.get_level_values(0).unique():
                 frame=acc.mot_events.xs(frame_index, level=0) #acc.mot_events.loc[frame_index]
-                frame_events.append({"frame_time":t, "events":frame.to_dict(orient='index'), "stats":{}})
-            else:
-                # no events for this frame
-                frame_events.append({"frame_time":t, "events":{}, "stats":{}})
+                events=frame.to_dict(orient='index')
+                frame_events[frame_index]["events"]=events
+                num_match=0
+                num_miss=0
+                num_switch=0
+                num_fp=0
+                for e in events:
+                    if events[e]["Type"]=="MATCH":
+                        num_match+=1
+                    if events[e]["Type"]=="MISS":
+                        num_miss+=1
+                    if events[e]["Type"]=="SWITCH":
+                        num_switch+=1
+                    if events[e]["Type"]=="FP":
+                        num_fp+=1
+                frame_events[frame_index]["stats"]|={"num_match":num_match, "num_miss":num_miss, "num_fp":num_fp, "num_switch":num_switch}
             t+=time_incr
             frame_index+=1
     del mh
