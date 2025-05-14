@@ -11,6 +11,7 @@ def load_cevo_json(json_folder):
     frames=[f for f in frames if "_det" not in f]
     frames.sort()
     out_frames={}
+    frame_times=[]
     for f in frames:
         fname=json_folder+"/"+f
         if fname.endswith(".json"):
@@ -18,20 +19,20 @@ def load_cevo_json(json_folder):
             fn=d["frame_num"]-1
             d["test_time"]=d["rtp_time"]/1000000.0
             out_frames[fn]=d
-    return out_frames
+            frame_times.append(d["test_time"])
+    return out_frames, frame_times
 
 def cevo_parse_next_frame(self, frame, time, debug_enable=False):
-    if not self.fn in self.frames:
-            self.fn+=1
-            return None, None
-    h,w,_=frame.shape
+    # parse next frame should already be called with exactly the right frame
+    # times already extracted from the cevo JSON
+    self.fn = min(self.frames, key=lambda k: abs(self.frames[k]["test_time"] - time))
     det_frame=self.frames[self.fn]
+    assert abs(det_frame["test_time"]-time)<0.1, "cevo frame time error"
+
+    h,w,_=frame.shape
     objects=[]
-    #print(det_frame)
     if det_frame["bbox"] is None:
-        self.fn+=1
         return [], None
-    assert abs(time-det_frame["test_time"])<0.1
 
     for det in det_frame["bbox"]:
         b=det["bbox"]
@@ -81,8 +82,6 @@ def cevo_parse_next_frame(self, frame, time, debug_enable=False):
         debug={"detections": {"type": "yolo_detections", "data":{"detections":dets, "class_names":["person"], "attributes":None}}}
         debug|={"detection_roi": {"type": "roi", "data": {"roi":[roi_x, roi_y, roi_x+roi_w, roi_y+roi_h]}}}
 
-    #print(self.frames[self.fn])
-    self.fn+=1
     return objects, debug
 
 class cevo_mlpipe_tracker:
@@ -150,7 +149,7 @@ class cevo_mlpipe_tracker:
 
         assert os.path.isdir(cevo_out_folder), "Failed to create output cevo data"
 
-        self.frames=load_cevo_json(cevo_out_folder+"/"+os.path.basename(h264_file))
+        self.frames, self.frame_times=load_cevo_json(cevo_out_folder+"/"+os.path.basename(h264_file))
 
         if h264_file_temp is not None:
             stuff.rm(h264_file_temp)
@@ -164,6 +163,9 @@ class cevo_mlpipe_tracker:
         except Exception as e:
             print("ERROR :: ", "cevo_tracker", e)
 
+    def get_frame_times(self):
+        return self.frame_times
+
     def track_frame(self, frame, time, debug_enable=False):
         return cevo_parse_next_frame(self, frame, time, debug_enable)
 
@@ -171,9 +173,12 @@ class cevo_analyser:
     def __init__(self, params, track_min_interval, debug_enable=False, cache_h264=True, classes=["person","face"]):
         cevo_out_folder=params["json_debug_path"]
         assert os.path.isdir(cevo_out_folder), "Failed to find folder with JSON"
-        self.frames=load_cevo_json(cevo_out_folder)
+        self.frames, self.frame_times=load_cevo_json(cevo_out_folder)
         self.fn=0
         self.classes=classes
+
+    def get_frame_times(self):
+        return self.frame_times
 
     def track_frame(self, frame, time, debug_enable=False):
         return cevo_parse_next_frame(self, frame, time, debug_enable)

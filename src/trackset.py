@@ -331,6 +331,10 @@ class TrackSet:
         param_dict["original_trackset"]=video
         tracker=trackers.create_tracker(param_dict, track_min_interval=track_min_interval, debug_enable=debug_enable)
 
+        frame_times=None
+        if hasattr(tracker, 'get_frame_times'):
+            frame_times=tracker.get_frame_times()
+
         cap=None
 
         if isinstance(video, TrackSet):
@@ -376,8 +380,15 @@ class TrackSet:
         if debug:
             display=stuff.Display(width=1280, height=720)
 
+        if frame_times is None:
+            frame_times=[]
+            t=0
+            while t<=duration:
+                frame_times.append(t)
+                t+=(1.0/fps)
+
         fn=0
-        while t<=duration:
+        for t in frame_times:
             if cap is not None:
                 success, frame = cap.read()
                 if success is False:
@@ -401,7 +412,6 @@ class TrackSet:
                 img_path=video.img_path_at_time(t) if cap is None else None
                 self.add_frame(objects, t, img_path=img_path, tracker_debug=tracker_debug)
             #print(t, objects is not None, tracker_debug is not None)
-            t+=(1.0/fps)
             fn+=1
             if pbar is not None:
                 pbar.update(1)

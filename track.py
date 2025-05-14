@@ -62,7 +62,7 @@ def test_track(t, config_file, display=False, output=None):
     trackset=ts.TrackSet()
     start_time=time.time()
     trackset.import_create(trackset_gt,
-                           track_min_interval=0.159, #-1,
+                           track_min_interval=0.159,
                            debug=False,
                            config_file=config_file,
                            debug_enable=True)
