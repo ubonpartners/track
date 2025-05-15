@@ -57,7 +57,6 @@ def compare_track(t, compare_config=None, display=True):
         ts.display_trackset(trackset_list=trackset_compare, trackset_gt=trackset_gt, frame_events=frame_events, output=None)
 
 def test_track(t, config_file, display=False, output=None):
-    print(ts)
     trackset_gt=ts.TrackSet(t)
     trackset=ts.TrackSet()
     start_time=time.time()

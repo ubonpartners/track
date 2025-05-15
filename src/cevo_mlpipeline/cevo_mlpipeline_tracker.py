@@ -102,9 +102,10 @@ class cevo_mlpipe_tracker:
         with open(self.tmp_config_file, 'w') as outfile:
             yaml.dump(self.params, outfile, default_flow_style=False)
         video=trackset.metadata["original_video"]
-        fps=int(trackset.metadata["frame_rate"]+0.5)
+        fps=trackset.metadata["frame_rate"]
         divisor=1
-        while(divisor/fps<track_min_interval):
+        eps=0.002 # 2ms error tolerance
+        while(divisor/fps+eps<track_min_interval):
             divisor+=1
 
         exe_debug=debug_enable
