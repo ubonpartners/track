@@ -140,7 +140,7 @@ class cevo_mlpipe_tracker:
             "-c", self.tmp_config_file,
             "-n", "1", "-p", "1", "-d", cevo_out_folder,
             "--pix_fmt", "H264",
-            "-f",f"{fps}/{divisor}",
+            "-f", f"{fps}", "-s", f"{divisor}",
             "-v", h264_file,
             "--trt-enginefile", params["trt"],
             "--display", "0x02", "--dbg-level", "0"]
