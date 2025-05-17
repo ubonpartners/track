@@ -134,16 +134,18 @@ class cevo_mlpipe_tracker:
 
         cevo_out_folder=tempfile.NamedTemporaryFile(delete=False, suffix=".out").name
         stuff.rm(cevo_out_folder)
+        trt_engine = self.check_and_get_filepath_or_default(params["trt"], "model.trt")
+        exe = self.check_and_get_filepath_or_default(params["exe"], "mlpipeline.bin")
 
         # run Cevo video_dec_trt; runs tracker and outputs JSON annotations
 
-        cmd=[params["exe"],
+        cmd=[exe,
             "-c", self.tmp_config_file,
             "-n", "1", "-p", "1", "-d", cevo_out_folder,
             "--pix_fmt", "H264",
             "-f", f"{fps}", "-s", f"{divisor}",
             "-v", h264_file,
-            "--trt-enginefile", params["trt"],
+            "--trt-enginefile", trt_engine,
             "--display", "0x02", "--dbg-level", "0"]
 
         stuff.run_cmd(cmd, debug=exe_debug)
@@ -163,6 +165,19 @@ class cevo_mlpipe_tracker:
             os.remove(self.tmp_config_file)
         except Exception as e:
             print("ERROR :: ", "cevo_tracker", e)
+
+    # This function checks the file_path and if it is not present
+    # checks a given default_path with respect to the PWD.  When
+    # both are not present, raise and exception
+    def check_and_get_filepath_or_default(self, file_path, default_path):
+        if os.path.isfile(file_path):
+            return os.path.realpath(file_path)
+
+        default_path = os.path.join(os.getcwd(), default_path)
+        if os.path.isfile(default_path):
+            return os.path.realpath(default_path)
+
+        raise FileNotFoundError(f"File not found {file_path} or {default_path}")
 
     def get_frame_times(self):
         return self.frame_times
