@@ -289,7 +289,7 @@ def get_avg_scores(results, test, param, group=None):
     else:
         return 0
 
-def display_results(results, columns, sort_key):
+def display_results(config, results, columns, sort_key):
     out_sort=[]
     out_txt=[]
     datasets=[result["params"]["ds_key"] for result in results]
@@ -382,7 +382,10 @@ def display_results(results, columns, sort_key):
     for z in Z:
         print(z)
 
-    result_location="/mldata/results/track"
+    if "results_location" in config:
+        result_location=config["results_location"]
+    else:
+        result_location="/mldata/results/track"
     directory=os.path.join(result_location, datetime.date.today().strftime('%Y-%m-%d'))
     stuff.makedir(directory)
     out_file=os.path.join(directory, "results_spreadsheet.xlsx")
@@ -547,7 +550,7 @@ def track_test(config, split=None, desc="track test"):
         if "group" in config["datasets"][o["params"]["ds_key"]]:
             o["group"]=config["datasets"][o["params"]["ds_key"]]["group"]
 
-    results2=display_results(output_results, columns, config["sort_key"])
+    results2=display_results(config, output_results, columns, config["sort_key"])
     elapsed=time.time()-start_time
     print(f"All done: Evaluated {len(tests_to_run)} tests in {stuff.timestr(elapsed)}")
     return results2
