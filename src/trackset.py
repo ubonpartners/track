@@ -594,7 +594,7 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl
                                 prefix="[TRANS]"
                             else:
                                 prefix="[??]"
-                                print(f"weird gt event type {events[e]["Type"]}")
+                                print(f"weird gt event type ", events[e]["Type"])
                     o.draw(display, clr=clr, thickness=thickness, label_prefix=prefix)
 
             if trackset and show_det:
@@ -629,7 +629,7 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl
                                 prefix="[ASC]"
                             else:
                                 prefix="[??]"
-                                print(f"weird det event type {events[e]["Type"]}")
+                                print(f"weird det event type ", events[e]["Type"])
                     o.draw(display, clr=clr, thickness=thickness, label_prefix=prefix)
 
             debug, debug_time=trackset.debug_at_time(t, nearest=True)
@@ -656,7 +656,7 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl
                                         class_names=debug_entry_data["class_names"])
                         if ts["show"]:
                             for i,d in enumerate(debug_entry_data["detections"]): #print(debug_entry_data["detections"])
-                                print(f"{i} {d["confidence"]}")
+                                print(f"{i} ", d["confidence"])
                             ts["show"]=False
                     if debug_entry_type=="motion_track":
                         flow=debug_entry_data["motion_array"]
@@ -725,7 +725,8 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl
                     sstats+=f"{s:20}: {stats[s]}\n"
                 display.draw_text(sstats, 0.8, 0.1)
 
-            display.show(img, title=f"{ts["name"]} time={t:5.2f}")
+            title=ts["name"]+f"time={t:5.2f}"
+            display.show(img, title=title)
 
 
         #end tss loop
