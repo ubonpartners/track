@@ -370,8 +370,15 @@ class TrackSet:
             if "original_video" in video.metadata:
                 self.metadata["original_video"]=video.metadata["original_video"]
 
+        if frame_times is None:
+            frame_times=[]
+            t=0
+            while t<=duration:
+                frame_times.append(t)
+                t+=(1.0/fps)
+
         if pbar is None and mpwq_progress_fn is None:
-            pbar=tqdm(total=int(duration*fps)+1,
+            pbar=tqdm(total=len(frame_times),
                       desc=f"{display:35s}",
                       colour="#ffcc00")
         elif mpwq_progress_fn is not None:
@@ -379,13 +386,6 @@ class TrackSet:
 
         if debug:
             display=stuff.Display(width=1280, height=720)
-
-        if frame_times is None:
-            frame_times=[]
-            t=0
-            while t<=duration:
-                frame_times.append(t)
-                t+=(1.0/fps)
 
         fn=0
         for t in frame_times:

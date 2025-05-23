@@ -149,8 +149,7 @@ class cevo_mlpipe_tracker:
             "-f", f"{fps}", "-s", f"{divisor}",
             "-v", h264_file,
             "--trt-enginefile", trt_engine,
-            "--json-mdata", "1",
-            "--display", "0x02", "--dbg-level", "0"]
+            "--json-mdata", "1"]
 
         log=logging.getLogger('cevo')
         log.debug(f"Cevo Pipeline Command:: {cmd}")
