@@ -4,6 +4,7 @@ import stuff
 import src.track_util as tu
 import os
 import yaml
+import logging
 from pathlib import Path
 
 def load_cevo_json(json_folder):
@@ -136,6 +137,8 @@ class cevo_mlpipe_tracker:
         stuff.rm(cevo_out_folder)
         trt_engine = self.check_and_get_filepath_or_default(params["trt"], "model.trt")
         exe = self.check_and_get_filepath_or_default(params["exe"], "mlpipeline.bin")
+        env = os.environ.copy()
+        env["UNIQUE_LOG"] = "1"
 
         # run Cevo video_dec_trt; runs tracker and outputs JSON annotations
 
@@ -146,13 +149,20 @@ class cevo_mlpipe_tracker:
             "-f", f"{fps}", "-s", f"{divisor}",
             "-v", h264_file,
             "--trt-enginefile", trt_engine,
+            "--json-mdata", "1",
             "--display", "0x02", "--dbg-level", "0"]
 
-        stuff.run_cmd(cmd, debug=exe_debug)
+        log=logging.getLogger('cevo')
+        log.debug(f"Cevo Pipeline Command:: {cmd}")
+        result = stuff.run_cmd(cmd, env=env, debug=exe_debug)
+        if result != 0:
+            log.error(f"ERROR :: {result} for video {video}")
 
+        json_folder = cevo_out_folder+"/"+"json_mdata"
         assert os.path.isdir(cevo_out_folder), "Failed to create output cevo data"
+        assert os.path.isdir(json_folder), "Failed to create output cevo json data"
 
-        self.frames, self.frame_times=load_cevo_json(cevo_out_folder+"/"+os.path.basename(h264_file))
+        self.frames, self.frame_times=load_cevo_json(json_folder)
 
         if h264_file_temp is not None:
             stuff.rm(h264_file_temp)

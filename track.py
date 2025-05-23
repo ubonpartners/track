@@ -2,6 +2,7 @@ import src.trackset as ts
 import src.track_test as track_test
 import src.track_search as track_search
 import src.utrack.motion_track as mt
+import os
 import stuff
 import argparse
 import time
@@ -93,7 +94,10 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=str, default=None, help='output mp4 name')
     parser.add_argument('--motiontracker-test',action='store_true', help='run motiontracker test')
     opt = parser.parse_args()
-    stuff.configure_root_logger(opt.logging)
+    stuff.rmdir(os.path.join(os.getcwd(), "tmp"))
+    log_dir = os.path.join(os.getcwd(), "tmp/log")
+    stuff.makedir(log_dir)
+    stuff.configure_root_logger(opt.logging, log_dir=log_dir)
     if opt.motiontracker_test:
         mt.motiontracker_test()
         exit()
