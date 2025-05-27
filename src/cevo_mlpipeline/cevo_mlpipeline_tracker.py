@@ -55,33 +55,21 @@ def cevo_parse_next_frame(self, frame, time, debug_enable=False):
     debug=None
 
     if "bbox_organised_dets" in det_frame:
-        inter_w,inter_h=det_frame["inter_width"], det_frame["inter_height"]
-        infer_w,infer_h=det_frame["infer_width"], det_frame["infer_height"]
-        roi_x=det_frame["roi"]["x"]/inter_w
-        roi_y=det_frame["roi"]["y"]/inter_h
-        roi_w=det_frame["roi"]["w"]/inter_w
-        roi_h=det_frame["roi"]["h"]/inter_h
+        roi=[det_frame["roi_normalised"]["l"],
+              det_frame["roi_normalised"]["t"],
+              det_frame["roi_normalised"]["r"],
+              det_frame["roi_normalised"]["b"]]
         dets=[]
         for d in det_frame["bbox_organised_dets"]:
             if d["class_id"]=='Person' or d["class_id"]=='Face':
-                x0=d["bbox"]["cx"]
-                y0=d["bbox"]["cy"]
-                w=d["bbox"]["w"]
-                h=d["bbox"]["h"]
-                x1=x0+w/2
-                y1=y0+h/2
-                x0=x0-w/2
-                y0=y0-h/2
-                conf=d["confidence"]
-                x0=x0/infer_w
-                y0=y0/infer_h
-                x1=x1/infer_w
-                y1=y1/infer_h
-                box=[roi_x+roi_w*x0, roi_y+roi_h*y0, roi_x+roi_w*x1, roi_y+roi_h*y1]
+                box=[d["bbox_normalised"]["l"],
+                     d["bbox_normalised"]["t"],
+                     d["bbox_normalised"]["r"],
+                     d["bbox_normalised"]["b"]]
                 det={"box":box, "class":(self.classes.index(d["class_id"].lower())), "confidence":conf}
                 dets.append(det)
         debug={"detections": {"type": "yolo_detections", "data":{"detections":dets, "class_names":["person"], "attributes":None}}}
-        debug|={"detection_roi": {"type": "roi", "data": {"roi":[roi_x, roi_y, roi_x+roi_w, roi_y+roi_h]}}}
+        debug|={"detection_roi": {"type": "roi", "data": {"roi":roi}}}
 
     return objects, debug
 
