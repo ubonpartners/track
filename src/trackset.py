@@ -382,7 +382,7 @@ class TrackSet:
                       desc=f"{display:35s}",
                       colour="#ffcc00")
         elif mpwq_progress_fn is not None:
-            mpwq_progress_fn(mpwq_context, desc=f"{display:35s}", total=int(duration*fps))
+            mpwq_progress_fn(mpwq_context, desc=f"{display:35s}", total=len(frame_times))
 
         if debug:
             display=stuff.Display(width=1280, height=720)

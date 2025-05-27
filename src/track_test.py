@@ -370,45 +370,77 @@ def display_results(config, results, columns, sort_key):
 
     datasets.sort()
 
-    for result in results+results2:
-        ds_index=datasets.index(result["params"]["ds_key"])
-        rs,rh=result_string(result["result"], columns)
-        rh=" "*63+rh
-        rs=f"{result['params']['ds_key']:30s} {result['params']['test_key']:32}"+rs
-        out_txt.append(rs)
-        out_sort.append(result["result"][sort_key]+ds_index*1000)
-    print(rh)
-    Z = [x for _,x in sorted(zip(out_sort, out_txt), reverse = True)]
-    for z in Z:
-        print(z)
+    if True:
+        all_results=results+results2
 
-    if "results_location" in config:
-        result_location=config["results_location"]
-    else:
-        result_location="/mldata/results/track"
-    directory=os.path.join(result_location, datetime.date.today().strftime('%Y-%m-%d'))
-    stuff.makedir(directory)
-    out_file=os.path.join(directory, "results_spreadsheet.xlsx")
-    workbook = xlsxwriter.Workbook(out_file)
-    worksheet = workbook.add_worksheet()
-    worksheet.set_column(0, 0, 20)
-    worksheet.set_column(1, 1, 30)
-    for i,c in enumerate(columns):
-        cs=c.split(",")
-        worksheet.write(0, i+2,  cs[1])
-    for i,result in enumerate(results+results2):
-        worksheet.write(i+1, 0, result["params"]["ds_key"])
-        worksheet.write(i+1, 1, result["params"]["test_key"])
-        for j,c in enumerate(columns):
+        column_text=[]
+        column_keys=[]
+        for c in columns:
+            column_text.append(c.split(",")[1])
+            column_keys.append(c.split(",")[0])
+
+        result=[]
+        for r in all_results:
+            rc=copy.deepcopy(r["result"])
+            ds=r["params"]["ds_key"]
+            ds=ds[:2]+ds[2:].replace("_", "")
+            rc["dataset"]=ds
+            rc["test"]=r['params']['test_key']
+            result.append(rc)
+
+        unique_datasets = list(dict.fromkeys(r["dataset"] for r in result))
+        unique_datasets.sort()
+
+        for r in result:
+            assert "dataset" in r
+
+        def sort_fn(r):
+            return unique_datasets.index(r["dataset"]) *1000 + r[sort_key]
+
+        stuff.show_data(result, ["dataset","test"]+column_keys,
+                        ["dataset","test"]+column_text, sort_fn)
+        #result["params"]["ds_key"]
+
+    if False:
+        for result in results+results2:
+            ds_index=datasets.index(result["params"]["ds_key"])
+            rs,rh=result_string(result["result"], columns)
+            rh=" "*63+rh
+            rs=f"{result['params']['ds_key']:30s} {result['params']['test_key']:32}"+rs
+            out_txt.append(rs)
+            out_sort.append(result["result"][sort_key]+ds_index*1000)
+        print(rh)
+        Z = [x for _,x in sorted(zip(out_sort, out_txt), reverse = True)]
+        for z in Z:
+            print(z)
+
+        if "results_location" in config:
+            result_location=config["results_location"]
+        else:
+            result_location="/mldata/results/track"
+        directory=os.path.join(result_location, datetime.date.today().strftime('%Y-%m-%d'))
+        stuff.makedir(directory)
+        out_file=os.path.join(directory, "results_spreadsheet.xlsx")
+        workbook = xlsxwriter.Workbook(out_file)
+        worksheet = workbook.add_worksheet()
+        worksheet.set_column(0, 0, 20)
+        worksheet.set_column(1, 1, 30)
+        for i,c in enumerate(columns):
             cs=c.split(",")
-            val = result["result"][cs[0]] if cs[0] in result["result"] else 0
-            if math.isinf(val):
-                worksheet.write(i+1, j+2, "INF")
-            elif math.isnan(val):
-                worksheet.write(i+1, j+2, "NAN")
-            else:
-                worksheet.write(i+1, j+2, round(val, 3))
-    workbook.close()
+            worksheet.write(0, i+2,  cs[1])
+        for i,result in enumerate(results+results2):
+            worksheet.write(i+1, 0, result["params"]["ds_key"])
+            worksheet.write(i+1, 1, result["params"]["test_key"])
+            for j,c in enumerate(columns):
+                cs=c.split(",")
+                val = result["result"][cs[0]] if cs[0] in result["result"] else 0
+                if math.isinf(val):
+                    worksheet.write(i+1, j+2, "INF")
+                elif math.isnan(val):
+                    worksheet.write(i+1, j+2, "NAN")
+                else:
+                    worksheet.write(i+1, j+2, round(val, 3))
+        workbook.close()
 
     return results2
 
