@@ -66,6 +66,7 @@ def cevo_parse_next_frame(self, frame, time, debug_enable=False):
                      d["bbox_normalised"]["t"],
                      d["bbox_normalised"]["r"],
                      d["bbox_normalised"]["b"]]
+                conf=d["confidence"]
                 det={"box":box, "class":(self.classes.index(d["class_id"].lower())), "confidence":conf}
                 dets.append(det)
         debug={"detections": {"type": "yolo_detections", "data":{"detections":dets, "class_names":["person"], "attributes":None}}}
