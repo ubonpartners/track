@@ -43,16 +43,17 @@ def cevo_parse_next_frame(self, frame, time, debug_enable=False):
     #h,w,_=frame.shape
     objects=[]
 
-    for det in det_frame["bbox"]:
-        b=det["bbox_normalised"]
-        conf=det["confidence"]
-        track_id=det["track_id"]
-        box=[b["l"], b["t"], b["r"], b["b"]]
-        # currently JSON only contains person tracks and no class field
-        d={"box":box, "class":self.classes.index("person"), "confidence":conf}
-        o=tu.Object(detection=d, time=time)
-        o.track_id=track_id
-        objects.append(o)
+    if "bbox" in det_frame:
+        for det in det_frame["bbox"]:
+            b=det["bbox_normalised"]
+            conf=det["confidence"]
+            track_id=det["track_id"]
+            box=[b["l"], b["t"], b["r"], b["b"]]
+            # currently JSON only contains person tracks and no class field
+            d={"box":box, "class":self.classes.index("person"), "confidence":conf}
+            o=tu.Object(detection=d, time=time)
+            o.track_id=track_id
+            objects.append(o)
 
     if "bbox_organised_dets" in det_frame:
         dets=[]
@@ -70,6 +71,7 @@ def cevo_parse_next_frame(self, frame, time, debug_enable=False):
         debug|={"detections": {"type": "yolo_detections", "data":{"detections":dets, "class_names":["person"], "attributes":None}}}
 
     if stuff.box_a(roi)<0.00001:
+        assert len(objects)==0, "cevo frame has empty ROI but still contains objects"
         objects=None # signal skipped frame if ROI is empty
 
     return objects, debug
