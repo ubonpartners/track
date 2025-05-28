@@ -585,7 +585,10 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl
                                 prefix="[SW]"
                             elif events[e]["Type"]=="MATCH":
                                 clr=(a,0,128,0)
-                                prefix="[OK]"
+                                if show_det:
+                                    prefix=None # don't double-label OK if we show detections
+                                else:
+                                    prefix="[OK]"
                             elif events[e]["Type"]=="MISS":
                                 clr=(a,128,0,0)
                                 prefix="[MISS]"
@@ -595,7 +598,8 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events=None, cl
                             else:
                                 prefix="[??]"
                                 print(f"weird gt event type ", events[e]["Type"])
-                    o.draw(display, clr=clr, thickness=thickness, label_prefix=prefix)
+                    if prefix!=None:
+                        o.draw(display, clr=clr, thickness=thickness, label_prefix=prefix)
 
             if trackset and show_det:
                 objs=trackset.objects_at_time(t)
