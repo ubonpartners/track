@@ -30,35 +30,31 @@ def cevo_parse_next_frame(self, frame, time, debug_enable=False):
     det_frame=self.frames[self.fn]
     assert abs(det_frame["test_time"]-time)<0.1, "cevo frame time error"
 
-    h,w,_=frame.shape
+    debug={}
+
+    assert "roi_normalised" in det_frame, "cevo frame does not contain ROI"
+
+    roi=[det_frame["roi_normalised"]["l"],
+         det_frame["roi_normalised"]["t"],
+         det_frame["roi_normalised"]["r"],
+         det_frame["roi_normalised"]["b"]]
+    debug|={"detection_roi": {"type": "roi", "data": {"roi":roi}}}
+
+    #h,w,_=frame.shape
     objects=[]
-    if det_frame["bbox"] is None:
-        return [], None
 
     for det in det_frame["bbox"]:
-        b=det["bbox"]
+        b=det["bbox_normalised"]
         conf=det["confidence"]
         track_id=det["track_id"]
-        bx=b["x"]
-        by=b["y"]
-        bw=b["w"]
-        bh=b["h"]
-        box=[stuff.clip01((bx)/w),
-                stuff.clip01((by)/h),
-                stuff.clip01((bx+bw)/w),
-                stuff.clip01((by+bh)/h)]
+        box=[b["l"], b["t"], b["r"], b["b"]]
         # currently JSON only contains person tracks and no class field
         d={"box":box, "class":self.classes.index("person"), "confidence":conf}
         o=tu.Object(detection=d, time=time)
         o.track_id=track_id
         objects.append(o)
-    debug=None
 
     if "bbox_organised_dets" in det_frame:
-        roi=[det_frame["roi_normalised"]["l"],
-              det_frame["roi_normalised"]["t"],
-              det_frame["roi_normalised"]["r"],
-              det_frame["roi_normalised"]["b"]]
         dets=[]
         for d in det_frame["bbox_organised_dets"]:
             if d["class_id"]=='Person' or d["class_id"]=='Face':
@@ -67,10 +63,14 @@ def cevo_parse_next_frame(self, frame, time, debug_enable=False):
                      d["bbox_normalised"]["r"],
                      d["bbox_normalised"]["b"]]
                 conf=d["confidence"]
-                det={"box":box, "class":(self.classes.index(d["class_id"].lower())), "confidence":conf}
+                det={"box":box,
+                     "class":(self.classes.index(d["class_id"].lower())),
+                     "confidence":conf}
                 dets.append(det)
-        debug={"detections": {"type": "yolo_detections", "data":{"detections":dets, "class_names":["person"], "attributes":None}}}
-        debug|={"detection_roi": {"type": "roi", "data": {"roi":roi}}}
+        debug|={"detections": {"type": "yolo_detections", "data":{"detections":dets, "class_names":["person"], "attributes":None}}}
+
+    if stuff.box_a(roi)<0.00001:
+        objects=None # signal skipped frame if ROI is empty
 
     return objects, debug
 
