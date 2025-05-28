@@ -43,7 +43,7 @@ def cevo_parse_next_frame(self, frame, time, debug_enable=False):
     #h,w,_=frame.shape
     objects=[]
 
-    if "bbox" in det_frame:
+    if "bbox" in det_frame and det_frame["bbox"] is not None:
         for det in det_frame["bbox"]:
             b=det["bbox_normalised"]
             conf=det["confidence"]
@@ -55,7 +55,7 @@ def cevo_parse_next_frame(self, frame, time, debug_enable=False):
             o.track_id=track_id
             objects.append(o)
 
-    if "bbox_organised_dets" in det_frame:
+    if "bbox_organised_dets" in det_frame and det_frame["bbox_organised_dets"] is not None:
         dets=[]
         for d in det_frame["bbox_organised_dets"]:
             if d["class_id"]=='Person' or d["class_id"]=='Face':
