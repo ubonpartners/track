@@ -380,7 +380,8 @@ class TrackSet:
         if pbar is None and mpwq_progress_fn is None:
             pbar=tqdm(total=len(frame_times),
                       desc=f"{display:35s}",
-                      colour="#ffcc00")
+                      colour="#ffcc00",
+                      leave=False)
         elif mpwq_progress_fn is not None:
             mpwq_progress_fn(mpwq_context, desc=f"{display:35s}", total=len(frame_times))
 

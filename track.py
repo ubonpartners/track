@@ -67,7 +67,7 @@ def test_track(t, config_file, display=False, output=None):
                            config_file=config_file,
                            debug_enable=True)
     import_time=time.time()
-    metrics, frame_events=track_test.compute_metrics(trackset_gt, trackset, frame_metrics=True, eval_rate_divisor=1)
+    metrics, frame_events=track_test.compute_metrics(trackset_gt, trackset, frame_metrics=True, eval_rate_divisor=1, show_pbar=True)
     metrics_time=time.time()
     elapsed_import=import_time-start_time
     elapsed_metrics=metrics_time-import_time

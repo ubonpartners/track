@@ -52,7 +52,8 @@ def compute_metrics(gt, test,
                     match_iou=0.45,
                     classes_to_test=["person"],
                     classes_for_det_map=["person","face"],
-                    eval_rate_divisor=1):
+                    eval_rate_divisor=1,
+                    show_pbar=False):
     assert match_iou<0.9 and match_iou>0.1, f"stupid match_iou {match_iou}"
     duration=min(max_duration, max(gt.duration_seconds(), test.duration_seconds()))
     t=0
@@ -66,6 +67,12 @@ def compute_metrics(gt, test,
 
     frame_events=[]
     frame_index=0
+
+    if show_pbar:
+        pbar=tqdm(total=int(duration/time_incr),
+              desc=f"Computing metrics...",
+              colour="#ffcc00",
+              leave=False)
 
     while t<duration:
         # get GT and Test objects at time
@@ -94,10 +101,14 @@ def compute_metrics(gt, test,
         acc.update(gt_dets[:,0].astype('int').tolist() if len(gt_dets)>0 else [], \
                    t_dets[:,0].astype('int').tolist() if len(t_dets)>0 else [], C)
         t+=time_incr
+        if show_pbar:
+            pbar.update(1)
         frame_index=0
 
     mh = mm.metrics.create()
 
+    if show_pbar:
+        pbar.set_description("PyMOT processing...")
     summary = mh.compute(acc, metrics=['num_frames', 'idf1', 'idp', 'idr', \
                                     'recall', 'precision', 'num_objects', \
                                     'mostly_tracked', 'partially_tracked', \
@@ -109,6 +120,9 @@ def compute_metrics(gt, test,
                         name='acc')
 
     metrics_dict=summary.loc['acc'].to_dict()
+    if show_pbar:
+        pbar.close()
+
 
     # add some extra metrics like
     # 'fp_tracks' - number of detected track IDs that correspond to no GT
