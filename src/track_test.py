@@ -411,9 +411,17 @@ def display_results(config, results, columns, sort_key):
         def sort_fn(r):
             return unique_datasets.index(r["dataset"]) *1000 + r[sort_key]
 
-        stuff.show_data(result, ["dataset","test"]+column_keys,
+        data_out = stuff.show_data(result, ["dataset","test"]+column_keys,
                         ["dataset","test"]+column_text, sort_fn)
         #result["params"]["ds_key"]
+        if "results_location" in config:
+            result_location=config["results_location"]
+            stuff.makedir(result_location)
+            out_file=result_location+"/results-"+ \
+                datetime.datetime.now().strftime('%Y%m%d-%H%M')+".txt"
+            with open(out_file, "w") as f:
+                f.write(data_out)
+                f.write("\n")
 
     if False:
         for result in results+results2:
