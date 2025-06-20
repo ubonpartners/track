@@ -100,7 +100,7 @@ class cevo_mlpipe_tracker:
         while(divisor/fps+eps<track_min_interval):
             divisor+=1
 
-        exe_debug=debug_enable
+        exe_debug=False#debug_enable
 
         # convert mp4 file into h264 using ffmpeg
         # by default we will put the converted file in a "generated" subfolder

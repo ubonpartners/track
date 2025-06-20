@@ -179,7 +179,8 @@ class TrackSet:
         if self.videoreader is None and "original_video" in self.metadata:
             self.videoreader=stuff.RandomAccessVideoReader(self.metadata["original_video"])
         if self.videoreader is not None:
-            return self.videoreader.get_frame_at_time(t)
+            img, _=self.videoreader.get_frame_at_time(t)
+            return img
         path=self.img_path_at_time(t)
         if path is not None:
             return cv2.imread(path)

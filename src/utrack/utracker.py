@@ -1,5 +1,5 @@
 import copy
-import ultralytics
+import stuff.inference_wrapper
 import src.utrack.kalman as kalman
 import src.track_util as tu
 import src.utrack.motion_track as motion_track
@@ -83,9 +83,17 @@ class utracker:
     def __init__(self, params, track_min_interval, debug_enable=False):
         self.logger=logging.getLogger('utracker')
         self.params=params
-        self.yolo = ultralytics.YOLO(params["model"])
+        self.class_names=["person", "face"]
+        self.infer=stuff.inference_wrapper(params["model"],
+                                          half=True,
+                                          rect=True,
+                                          thr=0.05,
+                                          nms_iou=self.params["nms_iou"],
+                                          max_det=1000,
+                                          class_names=self.class_names,
+                                          face_kp=True,
+                                          pose_kp=True)
         self.track_min_interval=track_min_interval
-        self.class_names=[self.yolo.names[i] for i in range(len(self.yolo.names))]
         self.last_track_time=-1000
         self.motiontracker=motion_track.MotionTracker(params=self.params)
         self.attributes=[]
@@ -344,22 +352,7 @@ class utracker:
         self.motiontracker.set_roi_detected(detection_roi)
         #print(roi_l,roi_t,roi_r,roi_b)
         img_roi=frame[roi_t:roi_b, roi_l:roi_r]
-        result=self.yolo(img_roi,
-                         half=True,
-                         conf=0.05,
-                         iou=self.params["nms_iou"],
-                         max_det=600,
-                         verbose=False,
-                         rect=True)
-
-        out_det=stuff.yolo_results_to_dets(result[0],
-                                        det_thr=0.05,
-                                        yolo_class_names=self.class_names,
-                                        class_names=self.class_names,
-                                        attributes=self.attributes,
-                                        face_kp=True,
-                                        pose_kp=True,
-                                        fold_attributes=True)
+        out_det=self.infer.infer([img_roi])[0]
 
         detected_objects=[]
         for d in out_det:

@@ -8,6 +8,7 @@ import copy
 import src.bytetrack.byte_tracker as bt
 import src.utrack.utracker as ut
 import src.cevo_mlpipeline.cevo_mlpipeline_tracker as cm
+import src.upyc_tracker.upyc_tracker as upyct
 
 class ultralytics_tracker:
 
@@ -196,6 +197,8 @@ def create_tracker(param_dict, track_min_interval, debug_enable=False):
         tracker=cm.cevo_mlpipe_tracker(param_dict, track_min_interval=track_min_interval, debug_enable=debug_enable)
     elif tracker_type=="cevo_analyser":
         tracker=cm.cevo_analyser(param_dict, track_min_interval=track_min_interval, debug_enable=debug_enable)
+    elif tracker_type=="upyc":
+        tracker=upyct.upyc_tracker(param_dict, track_min_interval=track_min_interval, debug_enable=debug_enable)
     else:
         print(f"Unkown tracker type {tracker_type}")
         exit()
