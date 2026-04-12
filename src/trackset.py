@@ -27,6 +27,9 @@ class TrackSet:
         if path is not None:
             self.name=f"Import {path}"
             self.source_name=path
+            if path.endswith(".ubtrk2") or stuff.is_ubtrk2_file(path):
+                self.import_track_file(path)
+                return
             if path.endswith(".ini"):
                 self.import_mot(path)
                 return
@@ -36,6 +39,22 @@ class TrackSet:
             if path.endswith(".yml") or path.endswith(".yaml") or path.endswith(".json"):
                 self.import_yaml(path)
                 return
+
+    def _encode_frame_objects_for_storage(self, objects):
+        if objects is None:
+            return None
+        out = {}
+        for track_id, record in objects.items():
+            out[str(int(track_id))] = record
+        return out
+
+    def _decode_frame_objects_from_storage(self, objects):
+        if objects is None:
+            return None
+        out = {}
+        for track_id, record in objects.items():
+            out[int(track_id)] = record
+        return out
 
     def frame_index_at_time(self, t, nearest=False):
         if len(self.frame_times)==0:
@@ -78,36 +97,115 @@ class TrackSet:
         self.frame_times=new_frame_times
         self.frames=new_frames
 
+    def _decode_jpeg_blob(self, blob):
+        if blob is None:
+            return None
+        data = blob.get("data")
+        if isinstance(data, str):
+            data = base64.b64decode(data)
+        return {
+            "time": blob.get("time"),
+            "quality": blob.get("quality"),
+            "data": data,
+        }
+
+    def _normalise_object_record(self, obj):
+        if obj is None:
+            return None
+        out = {
+            "box": obj["box"],
+            "class": obj["class"],
+            "confidence": obj.get("confidence", obj.get("conf")),
+        }
+        if "pose_points" in obj:
+            out["pose_points"] = obj["pose_points"]
+        elif "pose_pos" in obj and "pose_conf" in obj:
+            pose_points = []
+            for pos, conf in zip(obj["pose_pos"], obj["pose_conf"]):
+                pose_points.extend([pos[0], pos[1], conf])
+            out["pose_points"] = pose_points
+        if "face_points" in obj:
+            out["face_points"] = obj["face_points"]
+        elif "face_pos" in obj and "face_conf" in obj:
+            face_points = []
+            for pos, conf in zip(obj["face_pos"], obj["face_conf"]):
+                face_points.extend([pos[0], pos[1], conf])
+            out["face_points"] = face_points
+        if "attrs" in obj:
+            out["attrs"] = obj["attrs"]
+        elif "attr" in obj:
+            out["attrs"] = obj["attr"]
+        for key in [
+            "subbox",
+            "subbox_conf",
+            "reid_vector",
+            "face_embedding",
+            "clip_embedding",
+            "fiqa_score",
+        ]:
+            if key in obj:
+                out[key] = obj[key]
+        if "face_jpeg" in obj:
+            out["face_jpeg"] = self._decode_jpeg_blob(obj["face_jpeg"])
+        if "clip_jpeg" in obj:
+            out["clip_jpeg"] = self._decode_jpeg_blob(obj["clip_jpeg"])
+        return out
+
+    def _object_to_storage_dict(self, obj):
+        record = {
+            "box": obj.box,
+            "class": obj.cl,
+            "confidence": obj.confidence,
+            "attrs": obj.attr,
+            "subbox": obj.subbox,
+            "subbox_conf": obj.subbox_conf,
+        }
+        if obj.num_pose > 0:
+            pose_points = []
+            for pos, conf in zip(obj.pose_pos, obj.pose_conf):
+                pose_points.extend([pos[0], pos[1], conf])
+            record["pose_points"] = pose_points
+        if obj.num_face_points > 0:
+            face_points = []
+            for pos, conf in zip(obj.face_pos, obj.face_conf):
+                face_points.extend([pos[0], pos[1], conf])
+            record["face_points"] = face_points
+        if obj.reid_vector is not None:
+            record["reid_vector"] = obj.reid_vector
+        if obj.face_jpeg is not None:
+            record["face_jpeg"] = obj.face_jpeg
+        if obj.clip_jpeg is not None:
+            record["clip_jpeg"] = obj.clip_jpeg
+        if obj.face_embedding is not None:
+            record["face_embedding"] = obj.face_embedding
+        if obj.clip_embedding is not None:
+            record["clip_embedding"] = obj.clip_embedding
+        if hasattr(obj, "fiqa_score") and obj.fiqa_score is not None:
+            record["fiqa_score"] = obj.fiqa_score
+        return {k: v for k, v in record.items() if v is not None}
+
+    def _frame_overlay_debug(self, frame):
+        debug = {}
+        for key, value in (frame.get("debug") or {}).items():
+            if isinstance(value, dict) and "type" in value and "data" in value:
+                debug[key] = value
+        if frame.get("inference_roi") is not None:
+            debug.setdefault("inference_roi", {"type": "roi", "data": {"roi": frame["inference_roi"]}})
+        if frame.get("motion_roi") is not None:
+            debug.setdefault("motion_roi", {"type": "roi", "data": {"roi": frame["motion_roi"]}})
+        return debug if len(debug) > 0 else None
+
     def get_Object(self, index, track_id, class_remap_table=None):
         frame=self.frames[index]
-        o=frame["objects"][track_id]
+        o=self._normalise_object_record(frame["objects"][track_id])
         cl=o["class"]
         if class_remap_table is not None:
             cl=class_remap_table[cl]
-        obj=tu.Object(box=o["box"],
-                      cl=cl,
-                      conf=o["conf"],
-                      pose_pos=o["pose_pos"] if "pose_pos" in o else None,
-                      pose_conf=o["pose_conf"] if "pose_conf" in o else None,
-                      face_pos=o["face_pos"] if "face_pos" in o else None,
-                      face_conf=o["face_conf"] if "face_conf" in o else None,
-                      attr=o["attr"] if "attr" in o else None,
-                      subbox=o["subbox"] if "subbox" in o else None,
-                      subbox_conf=o["subbox_conf"] if "subbox_conf" in o else 0.0,
-                      time=frame["frame_time"])
-        if "face_jpeg" in o:
-            obj.face_jpeg={"time":o["face_jpeg"]["time"], "data":base64.b64decode(o["face_jpeg"]["data"])}
-        if "clip_jpeg" in o:
-            obj.clip_jpeg={"time":o["clip_jpeg"]["time"], "data":base64.b64decode(o["clip_jpeg"]["data"])}
-        if "face_embedding" in o:
-            obj.face_embedding={"time":o["face_embedding"]["time"],
-                                "quality":o["face_embedding"]["quality"],
-                                "data":o["face_embedding"]["data"]}
-        if "clip_embedding" in o:
-            obj.clip_embedding={"time":o["clip_embedding"]["time"],
-                                "quality":o["clip_embedding"]["quality"],
-                                "data":o["clip_embedding"]["data"]}
+        obj=tu.Object(detection=o, time=frame["frame_time"])
+        obj.cl=cl
         obj.track_id=track_id
+        if "fiqa_score" in o:
+            obj.fiqa_score = o["fiqa_score"]
         return obj
 
     def object_class_name(self, object):
@@ -232,8 +330,9 @@ class TrackSet:
             return None, t
 
         frame=self.frames[index]
-        if "tracker_debug" in frame:
-            return frame["tracker_debug"], frame["frame_time"]
+        debug = self._frame_overlay_debug(frame)
+        if debug is not None:
+            return debug, frame["frame_time"]
         return None, frame["frame_time"]
 
     def skip_at_time(self,t, nearest=False):
@@ -241,42 +340,46 @@ class TrackSet:
         if index is None:
             return True
         frame=self.frames[index]
+        result_type = frame.get("result_type")
+        if result_type is not None:
+            return str(result_type).startswith("skip")
         return frame["objects"] is None
 
-    def add_frame(self, object_list, time, img_path=None, tracker_debug=None):
+    def add_frame(self, object_list, time, img_path=None, debug=None,
+                  result_type=None, motion_score=None, motion_roi=None, inference_roi=None,
+                  inference_dets=None):
         if object_list is None:
             objects=None
         else:
             objects={}
             for o in object_list:
-                objects[o.track_id]={"box":o.box,
-                                    "class":o.cl,
-                                    "conf":o.confidence,
-                                    "pose_pos":o.pose_pos,
-                                    "pose_conf":o.pose_conf,
-                                    "face_pos":o.face_pos,
-                                    "face_conf":o.face_conf,
-                                    "attr":o.attr,
-                                    "subbox":o.subbox,
-                                    "subbox_conf":o.subbox_conf}
-                if o.face_jpeg is not None:
-                    objects[o.track_id]["face_jpeg"]={"time":o.face_jpeg["time"], "data":base64.b64encode(o.face_jpeg["data"])}
-                if o.face_embedding is not None:
-                    objects[o.track_id]["face_embedding"]={"time":o.face_embedding["time"],
-                                                           "data":o.face_embedding["data"],
-                                                           "quality":o.face_embedding["quality"]}
-                if o.clip_embedding is not None:
-                    objects[o.track_id]["clip_embedding"]={"time":o.clip_embedding["time"],
-                                                           "data":o.clip_embedding["data"],
-                                                           "quality":o.clip_embedding["quality"]}
+                objects[o.track_id]=self._object_to_storage_dict(o)
         assert len(self.frame_times)==0 or time>self.frame_times[-1]
         self.frame_times.append(time)
         self.frames.append({
                 "frame_time": time,
+                "result_type": result_type,
+                "motion_score": motion_score,
+                "motion_roi": motion_roi,
+                "inference_roi": inference_roi,
+                "inference_dets": inference_dets,
                 "objects": objects,
                 "image_path": img_path,
-                "tracker_debug": tracker_debug
+                "debug": debug
             })
+
+    def add_frame_result(self, frame_result, img_path=None):
+        self.add_frame(
+            frame_result.get("objects"),
+            frame_result["frame_time"],
+            img_path=img_path,
+            debug=frame_result.get("debug"),
+            result_type=frame_result.get("result_type"),
+            motion_score=frame_result.get("motion_score"),
+            motion_roi=frame_result.get("motion_roi"),
+            inference_roi=frame_result.get("inference_roi"),
+            inference_dets=frame_result.get("inference_dets"),
+        )
 
     def export_yaml(self, file, output_video=None):
         file=file.replace(",","-")
@@ -307,13 +410,91 @@ class TrackSet:
             with open(file, 'w') as outfile:
                 yaml.dump(dict, outfile, default_flow_style=False)
 
+    def export_track_file(self, path):
+        """Write the canonical UBTRK2 binary track/debug run format.
+
+        The output file contains one metadata box followed by one self-contained
+        frame box per processed frame. It is intended for both durable storage
+        and network transport of tracker runs.
+        """
+        metadata = {
+            "schema_version": 2,
+            "kind": "trackset",
+            "container": "UBTRK2",
+            "source_video": self.metadata.get("original_video"),
+            "frame_rate": self.metadata.get("frame_rate"),
+            "width": self.metadata.get("width"),
+            "height": self.metadata.get("height"),
+            "classes": self.metadata.get("classes", []),
+            "payload_encoding": {
+                "array_codec": stuff.CODEC_RAW,
+                "container": "ubtrk2-value-v1",
+            },
+        }
+        with stuff.UBTRK2Writer(path, metadata) as writer:
+            for frame in self.frames:
+                record = {
+                    "frame_time": frame["frame_time"],
+                    "result_type": frame.get("result_type"),
+                    "motion_score": frame.get("motion_score"),
+                    "motion_roi": frame.get("motion_roi"),
+                    "inference_roi": frame.get("inference_roi"),
+                    "inference_dets": frame.get("inference_dets"),
+                    "objects": self._encode_frame_objects_for_storage(frame.get("objects")),
+                    "debug": frame.get("debug"),
+                    "image_path": frame.get("image_path"),
+                }
+                writer.write_frame(record)
+
     def import_yaml(self, yaml_file):
         config=stuff.load_dictionary(yaml_file)
         self.metadata=config["metadata"]
-        self.frames=config["frames"]
+        self.frames=[]
         self.videoreader=None
-        for f in self.frames:
-            self.frame_times.append(f["frame_time"])
+        self.frame_times=[]
+        for frame in config["frames"]:
+            normalised = {
+                "frame_time": frame["frame_time"],
+                "result_type": frame.get("result_type"),
+                "motion_score": frame.get("motion_score"),
+                "motion_roi": frame.get("motion_roi"),
+                "inference_roi": frame.get("inference_roi"),
+                "inference_dets": frame.get("inference_dets"),
+                "objects": frame.get("objects"),
+                "image_path": frame.get("image_path"),
+                "debug": frame.get("debug"),
+            }
+            self.frames.append(normalised)
+            self.frame_times.append(normalised["frame_time"])
+
+    def import_track_file(self, path):
+        """Read the canonical UBTRK2 binary track/debug run format."""
+        reader = stuff.UBTRK2Reader(path)
+        metadata = reader.metadata
+        self.metadata = {
+            "frame_rate": metadata.get("frame_rate"),
+            "width": metadata.get("width"),
+            "height": metadata.get("height"),
+            "classes": metadata.get("classes", []),
+        }
+        if metadata.get("source_video") is not None:
+            self.metadata["original_video"] = metadata["source_video"]
+        self.frames = []
+        self.frame_times = []
+        for frame in reader.iter_frames():
+            normalised = {
+                "frame_time": frame["frame_time"],
+                "result_type": frame.get("result_type"),
+                "motion_score": frame.get("motion_score"),
+                "motion_roi": frame.get("motion_roi"),
+                "inference_roi": frame.get("inference_roi"),
+                "inference_dets": frame.get("inference_dets"),
+                "objects": self._decode_frame_objects_from_storage(frame.get("objects")),
+                "image_path": frame.get("image_path"),
+                "debug": frame.get("debug"),
+            }
+            self.frames.append(normalised)
+            self.frame_times.append(normalised["frame_time"])
 
     def import_create(self,
                       video,
@@ -435,7 +616,8 @@ class TrackSet:
                 if frame is None:
                     break
 
-            objects, tracker_debug=tracker.track_frame(frame, t, debug_enable=debug_enable)
+            frame_result=tracker.track_frame(frame, t, debug_enable=debug_enable)
+            objects=frame_result.get("objects")
 
             if debug:
                 display.clear()
@@ -445,10 +627,9 @@ class TrackSet:
                 display.show(frame, title=f"time={t:5.2f}")
                 events=display.get_events(0)
 
-            if objects is not None or tracker_debug is not None:
+            if frame_result is not None:
                 img_path=video.img_path_at_time(t) if cap is None else None
-                self.add_frame(objects, t, img_path=img_path, tracker_debug=tracker_debug)
-            #print(t, objects is not None, tracker_debug is not None)
+                self.add_frame_result(frame_result, img_path=img_path)
             fn+=1
             if pbar is not None:
                 pbar.update(1)
@@ -699,18 +880,18 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events_list=Non
                     debug_entry_data=debug_entry["data"]
                     if not d in debug_overlays_enabled or debug_overlays_enabled[d]==False:
                         continue
-                    if debug_entry_type=="yolo_detections":
+                    if debug_entry_type=="detections":
                         stuff.draw_boxes(display,
                                         debug_entry_data["detections"],
-                                        attributes=debug_entry_data["attributes"],
+                                        attributes=debug_entry_data.get("attribute_names"),
                                         highlight_index=None,
                                         class_names=debug_entry_data["class_names"])
                         if ts["show"]:
                             for i,d in enumerate(debug_entry_data["detections"]): #print(debug_entry_data["detections"])
                                 print(f"{i} ", d["confidence"])
                             ts["show"]=False
-                    if debug_entry_type=="motion_track":
-                        flow=debug_entry_data["motion_array"]
+                    if debug_entry_type=="motion_field":
+                        flow=stuff.decode_payload(debug_entry_data["flow"]) if "flow" in debug_entry_data else debug_entry_data.get("motion_array")
                         if flow is not None:
                             grid_w=flow.shape[1]
                             grid_h=flow.shape[0]
@@ -725,13 +906,18 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events_list=Non
                                         display.draw_line([cx,cy],
                                                         [cx+vx, cy+vy],
                                                         clr=(128,255,255,0), thickness=1)
-                            if "delta_array" in debug_entry_data:
+                            delta_array = None
+                            if "delta" in debug_entry_data:
+                                delta_array = stuff.decode_payload(debug_entry_data["delta"])
+                            elif "delta_array" in debug_entry_data:
+                                delta_array = debug_entry_data["delta_array"]
+                            if delta_array is not None:
                                 for y in range(grid_h):
                                     for x in range(grid_w):
-                                        clr=max(0,min(255,int(debug_entry_data["delta_array"][y][x])))
+                                        clr=max(0,min(255,int(delta_array[y][x])))
                                         box=[x/grid_w, y/grid_h, (x+1)/grid_w, (y+1)/grid_h]
                     if debug_entry_type=="cost_map":
-                        cost_map=debug_entry_data["cost_map"]
+                        cost_map=stuff.decode_payload(debug_entry_data["cost_map"])
                         scale=debug_entry_data["scale"]
                         if cost_map is not None:
                             grid_w=cost_map.shape[1]

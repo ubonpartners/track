@@ -1,189 +1,210 @@
-# 🛰️ Track
+# Track
 
-Track is a comprehensive toolkit for working with annotated tracking datasets. It provides:
+`track` is now a thin Python tool around the `ubon_cstuff` / `ubon_pycstuff`
+tracking pipeline. It is responsible for:
 
-- **Trackset management**: import/export MOT, Ubon, or Caltech sequences, trim intervals, and replay frames with annotation overlays.
-- **Tracker execution**: drive Ultralytics/ByteTrack, the motion-aware Python `utrack`, or the optimized C `upyc` tracker through a consistent YAML config interface.
-- **Evaluation & comparison**: compute MOT metrics (MOTA, IDF1, switches, FP/FN, detection AP) in Python or C, run benchmark suites, and display per-frame debugging events.
-- **Optimization**: automatically jitters tracker/motion parameters using coordinate descent until a chosen metric (fitness, MOTA, etc.) is maximized.
+- loading input sequence metadata files such as MOT-style JSON/INI annotations
+- running the `upyc` tracker on those inputs
+- evaluating results with MOT metrics
+- replaying tracked runs with debug overlays
+- comparing configs and searching parameters
+- reading and writing the canonical UBTRK2 tracker-run format
 
-This README covers:
+The repo no longer supports `utrack`, `bytetrack`, or `botsort`.
 
-1. Getting started (env + dependencies)
-2. Repository layout
-3. Supported formats (MOT & Ubon explained)
-4. CLI workflows (view, track, test, compare, search)
-5. Parameter optimization details
-6. Ubon format deep dive
-7. Testing & licenses
+## Getting Started
 
----
+```bash
+git clone https://github.com/ubonpartners/track.git
+cd track
+conda env create -f environment.yml
+conda activate track
+python track.py --help
+```
 
-## 1. Getting Started
+Runtime requirements:
 
-1. **Clone the repo**
-   ```bash
-   git clone https://github.com/ubonpartners/track.git
-   cd track
-   ```
+- `ubon_pycstuff` / `ubon_cstuff` for tracking and optional C metrics
+- `ffmpeg` on `PATH` for MP4 → H.264 conversion in the `upyc` path
+- datasets reachable under `/mldata/...` or via equivalent local layout
 
-2. **Create the Conda environment**
-   ```bash
-   conda env create -f environment.yml
-   conda activate track
-   ```
-   - `environment.yml` pins Python ≥3.10, PyTorch ≥2.4, CUDA 12.4, numpy 1.26.4, pandas, matplotlib, plus pip extras (OpenCV, scipy, motmetrics, lap/`lapx`, tabulate, albumentations, etc.).
-   - The pip extras are also listed in `requirements.txt` for pip-only installations; duplicate entries (e.g., `cython_bbox`, `numpy=1.26.4`) have been deduplicated.
-
-3. **Optional dependencies**
-   - Install `ubon_pycstuff`, `ubon_cproxy`, and `ubon_cstuff` to run the `utrack` and `upyc` pipelines.
-   - Ensure `ffmpeg` is accessible on your `PATH`; `utrack` converts MP4 → H.264 for the decoder.
-   - Point datasets at `/mldata/...` (internal default) or override via config/symlink.
-
-4. **Verify the CLI**
-   ```bash
-   python track.py --help
-   ```
-
----
-
-## 2. Repository Layout
+## Repository Layout
 
 | Path | Purpose |
 |------|---------|
-| `track.py` | CLI entry point that dispatches to visualizing, tracking, testing, comparing, searching, and dataset conversions (`--caltech`, `--mot`, `--cevo`). |
-| `environment.yml` & `requirements.txt` | Conda and pip dependency manifests (pip file mirrors the pip block). |
-| `src/trackset.py` | `TrackSet`: import/export MOT/MOT→JSON/Ubon, trim time ranges, handle frames/objects, and visualize overlays (`display_trackset`). |
-| `src/track_util.py` | Detection `Object`, interpolation helpers, class remapping, and utilities for pose/face/subbox data. |
-| `src/trackers.py` | Tracker factory (`create_tracker`) that initializes `ultralytics_tracker`, `utrack`, or `upyc_tracker` from YAML configs. |
-| `src/track_test.py` | MOT metric computation (Python `motmetrics` accumulator / optional C via `ubon_pycstuff`), test runner, caching, and result display. |
-| `src/track_search.py` | Parameter search logic that tweaks tracker/motion settings and optimizes a chosen dataset metric. |
-| `src/utrack/` | Motion tracker, Kalman filter, and matching logic for the custom Python tracker (`utracker`, `motion_track`, `kalman`). |
-| `src/upyc_tracker/` | Wrapper for the optimized C-based Ubon tracker (`upyc_tracker`). |
-| `REVIEW.md` | Living review covering system understanding, discovered bugs, refactors, and fixes. |
+| `track.py` | CLI entry point for view/track/test/compare/search and dataset conversion helpers |
+| `src/trackset.py` | `TrackSet` input loader, UBTRK2 run import/export, and replay viewer |
+| `src/track_util.py` | Detection/track object helpers, interpolation, drawing |
+| `src/trackers.py` | `upyc`-only tracker factory |
+| `src/upyc_tracker/` | Python wrapper over `ubon_pycstuff` tracking results |
+| `src/track_test.py` | MOT metrics, detection metrics, benchmark/test orchestration |
+| `src/track_search.py` | Parameter search over `ubon_cstuff` config values |
+| `TRACKER_DEBUG.md` | Detailed tracker-result/debug format and migration/design notes |
 
----
+## Supported Formats
 
-## 3. Supported Trackset Formats
+### Input sequence metadata
 
-### 3.1 MOT format
+These remain supported as tracking inputs:
 
-- Standard MOT layout: `seqinfo.ini`, `gt/gt.txt`, `img1/`.
-- `TrackSet.import_mot` normalizes boxes, sets metadata (`classes` include `person`, `vehicle`, `other`), and stores `frame_times` + per-frame `objects`.
-- Good for benchmarking against MOT Challenge data; you can also convert MOT sequences into the Ubon format via `TrackSet.export_yaml`.
+- MOT `seqinfo.ini` + `gt/gt.txt`
+- JSON/YAML annotation files used as input sequence metadata, for example `/mldata/tracking/mot/annotation/MOT17-05.json`
+- Caltech `.vbb`
 
-### 3.2 Ubon format (native)
+These are input formats, not the canonical stored tracker-result format.
 
-The “Ubon” format pairs a video (MP4 or similar) with a JSON/YAML annotation file produced by `TrackSet.export_yaml`.
+### Stored tracker-result format
 
-#### Annotation structure
+Tracked runs are stored in the canonical UBTRK2 container implemented in
+`stuff.ubtrk2`.
 
-- `metadata`: `frame_rate`, `width`, `height`, `classes`, optional `original_video`.
-- `frames`: each entry contains `frame_id`, `frame_time`, `objects`, `image_path`, `tracker_debug`.
-- `objects`: map from `track_id` to detection dicts with `box`, `class`, `conf`, optional pose/face, subboxes, embeddings, attributes, and JPEG crops.
-- `tracker_debug`: stores ROIs, detection arrays, motion fields, and predictions for `display_trackset`.
+Container layout:
 
-Use this format to persist full tracker outputs, replay them later, or share annotated videos without rerunning detection.
+1. top-level `ubtf` box (file header/version)
+2. top-level `meta` box (UTF-8 YAML metadata payload)
+3. repeated top-level `fram` boxes (one frame per processed frame)
 
----
+The same frame-record schema is intended for:
 
-## 4. CLI Workflows
+- disk persistence
+- network transport
+- offline tracker-component analysis
 
-### 🔍 View annotated sequences
+### Metadata (`meta` box)
+
+The metadata payload is UTF-8 YAML with stable string keys. Current keys written by `track` include:
+
+- `schema_version`
+- `kind`
+- `source_video`
+- `frame_rate`
+- `width`
+- `height`
+- `classes`
+- `payload_encoding`
+
+### Frame record
+
+Each `fram` box contains typed child boxes. Current frame payload includes:
+
+- `fhdr`: frame header (`frame_time`, `result_type`, `motion_score`, `motion_roi`, `inference_roi`)
+- `trks`: tracked objects map
+- `dets`: optional detector output list
+- `dbug`: debug entry map
+- `imgp`: source image path (optional)
+- `xtra`: extension map for forward-compatible fields
+
+### Objects
+
+`objects` is a map keyed by `track_id`.
+
+Current stored object fields use detector-aligned names:
+
+- `class`
+- `confidence`
+- `box`
+- `subbox`
+- `subbox_conf`
+- `face_points`
+- `pose_points`
+- `attrs`
+- `reid_vector`
+- `face_embedding`
+- `clip_embedding`
+- `face_jpeg`
+- `clip_jpeg`
+- `fiqa_score`
+
+### Debug
+
+`debug` is a map of named debug entries. Viewer-supported typed entries currently include:
+
+- `detections`
+- `roi`
+- `box_prediction`
+- `motion_field`
+- `cost_map`
+
+Large arrays, vectors, embeddings, and JPEG blobs are stored inline as typed
+payload wrappers rather than in sidecar files.
+
+For low-level container and payload wrapper documentation, see the
+`stuff` repo README and `stuff/stuff/ubtrk2.py`.
+
+## CLI Workflows
+
+### View a sequence or tracked run
 
 ```bash
-python track.py --view --trackset /path/to/annotation.json
+python track.py --view --trackset /path/to/input.json
+python track.py --view --trackset /path/to/run.ubtrk2
 ```
 
-- Opens the GUI with GT/detection overlays, MOT event stats, and debug toggles (`g`, `d`, `h`, numbers to toggle overlays).
-- Works with MOT `.ini` (imports before rendering) or Ubon `.json`.
+The viewer accepts:
 
-### 🚀 Run tracking + evaluation
+- input sequence metadata files
+- UBTRK2 tracked-run files
+
+### Run tracking, evaluate, and save a tracked run
 
 ```bash
-python track.py --track --trackset /mldata/.../annotation.json --config configs/trackers/uc_v8.yaml
+python track.py \
+  --track \
+  --trackset /mldata/tracking/mot/annotation/MOT17-05.json \
+  --config /mldata/config/track/trackers/uc_v10.yaml \
+  --save-trackset /tmp/MOT17-05.ubtrk2 \
+  --display
 ```
 
-- Instantiates the YAML-defined tracker, runs it over the trackset, computes metrics, and optionally displays the result (`--display`).
-- Supported tracker types: `bytetrack`/`botsort` (Ultralytics) and the custom `utrack` and `upyc` pipelines.
-- Metrics include MOTA, IDF1, switches/fragmentations, `fp_per_frame`, detection AP, ROI area, etc.
+This will:
 
-### 📊 Benchmark suites
+- load the input sequence metadata
+- run the `upyc` tracker
+- compute metrics
+- optionally display the run
+- optionally save the full tracked run in UBTRK2 format
+
+### Benchmark suites
 
 ```bash
 python track.py --test configs/tests.yaml
 ```
 
-- Executes dataset/test pairs defined in YAML via a multiprocessing workqueue.
-- Caches results in pickle files, aggregates across datasets/groups (`overall`, `__mean`, `_arithmean`), and writes tables via `display_results`.
-- Columns can include fitness, mismatches, `fp_tracks`, detection AP, and more.
-
-### 📈 Compare tracker outputs
+### Compare configs
 
 ```bash
 python track.py --compare compare.yaml --trackset /mldata/.../annotation.json
 ```
 
-- Runs all configs from `configs_to_compare` on the same GT and prints per-frame MOTA deltas, summary tables, and optionally visualizes them sequentially.
-
-### 🔧 Parameter search
+### Parameter search
 
 ```bash
 python track.py --search configs/search.yaml
 ```
 
-- Executes `search_track`, which tweaks parameters from a YAML-defined search space and optimizes a selected metric.
-- Logs every iteration, validates on a split (`train`/`val`), and caches evaluated vectors.
-- Uses helper functions (`_update_initial_parameters`, `_round_numeric_metrics`) to keep initial values consistent and avoid rounding non-numeric fields.
+Search now assumes `upyc`-style configs only. Parameters are found by key name
+within the loaded config tree, and ambiguous repeated keys are rejected.
 
----
+## Testing And Validation
 
-## 5. Parameter Optimization Flow
+- `--test` benchmarks tracker configs over datasets with caching and summary tables
+- `--metrics c` uses `ubon_pycstuff.c_mota_metrics` for faster metric computation
+- the replay viewer can inspect saved UBTRK2 runs directly
+- the UBTRK2 run format is tested in the shared `stuff` repo
 
-1. **Define the search**
-   - `search_params`: name + `min`/`max`/`step`/`initial`.
-   - `tests.search_config.config`: base tracker config. Parameters can appear at the top level or inside `utrack`/`motiontrack`.
-   - `result_test_opt_key`, `result_dataset_opt_key`, `result_dataset_opt_param`: specify the metric to optimize.
+## Format Documentation
 
-2. **Evaluate candidate vectors**
-   - `search_test` updates the config with the candidate vector, runs `track_test`, and inspects the selected metric.
-   - Metrics are rounded only for numeric values via `_round_numeric_metrics`.
-   - Results map tuples → scores in `all_results` to dedupe repeats.
+Format documentation is intentionally split by ownership:
 
-3. **Coordinate descent**
-   - Loop over parameters, attempting `+step` and `-step` (scaled by a dynamic multiplier starting at 4 and halving when no improvements occur).
-   - Accept moves that improve the metric. After a prescribed number of improvements, move to the next parameter.
-   - Optionally validate the best vector on a split (`val`) every few iterations.
+- `stuff`: authoritative low-level UBTRK2 container and payload encoding docs
+- `track`: how tracker runs use that format for replay, metrics, and analysis
+- `ubon_cstuff`: runtime result/debug schema emitted before serialization
 
-4. **Logging**
-   - `search_log_<timestamp>.txt` records the vector, score, validation summary, and parameter progression.
-   - `track_test.summary_string` highlights MOTA, fitness, FP/FN counts, etc., for more context.
+See also:
 
----
+- `TRACKER_DEBUG.md`
 
-## 6. Ubon Format Deep Dive
-
-The Ubon format is the repository’s native serialized annotation style.
-
-- Track IDs persist across frames for consistent referencing.
-- Each object can carry pose keypoints, face points, embeddings, JPEG crops, attributes, and subboxes.
-- Per-frame `tracker_debug` includes detection arrays, ROI/motion fields, Kalman predictions, and additional overlays used by `display_trackset`.
-- Timestamps (`frame_time`) align with the original video so you can replay recorded outputs or compute per-frame metrics without rerunning the tracker.
-
-Use `TrackSet.export_yaml` to regenerate this format from any tracker run (including `utrack`/`upyc`), optionally writing a rendered video via OpenCV.
-
----
-
-## 7. Testing & Validation
-
-- Use `--test` to benchmark trackers across datasets with caching and summarized tables.
-- The `--metrics c` option leverages `ubon_pycstuff.c_mota_metrics` for faster metric computation (requires the Ubon C stack).
-- `--compare` prints per-frame stats and invoked a visualization workflow for side-by-side diagnostics.
-- `--motiontracker-test` exercises the `MotionTracker` to verify ROI predictions and optical flow behavior.
-
----
-
-## 8. License
+## License
 
 Dual license:
 - **AGPL** (non-commercial)

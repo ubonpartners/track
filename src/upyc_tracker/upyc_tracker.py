@@ -8,6 +8,15 @@ import logging
 from pathlib import Path
 import ubon_pycstuff.ubon_pycstuff as upyc
 
+
+RESULT_TYPE_NAMES = {
+    upyc.TRACK_FRAME_SKIP_FRAMERATE: "skip_framerate",
+    upyc.TRACK_FRAME_SKIP_NO_MOTION: "skip_no_motion",
+    upyc.TRACK_FRAME_SKIP_NO_IMG: "skip_no_img",
+    upyc.TRACK_FRAME_TRACKED_ROI: "tracked_roi",
+    upyc.TRACK_FRAME_TRACKED_FULL_REFRESH: "tracked_full_refresh",
+}
+
 class upyc_tracker:
     def __init__(self, params,
                  track_min_interval,
@@ -52,19 +61,19 @@ class upyc_tracker:
 
         assert os.path.isfile(h264_file), "Failed to create h264 file"
 
-        # disable a bunch of stuff not needed to measure MOTA stats
-        # this makes it quite a bit faster to run
-
-        params["main_jpeg"]["enabled"]=False
-        if "faces" in params:
-            params["faces"]["embeddings_enabled"]=False
-            params["faces"]["jpegs_enabled"]=False
-        if "clip" in params:
-            params["clip"]["frame_embeddings_enabled"]=False
-            params["clip"]["object_embeddings_enabled"]=False
-            params["clip"]["jpegs_enabled"]=False
-        if "fiqa" in params:
-            params["fiqa"]["enabled"]=False
+        # By default we trim auxiliary outputs for faster metric runs.
+        # If debug is enabled, preserve the full configured detector/tracker output.
+        if debug_enable is False:
+            params["main_jpeg"]["enabled"]=False
+            if "faces" in params:
+                params["faces"]["embeddings_enabled"]=False
+                params["faces"]["jpegs_enabled"]=False
+            if "clip" in params:
+                params["clip"]["frame_embeddings_enabled"]=False
+                params["clip"]["object_embeddings_enabled"]=False
+                params["clip"]["jpegs_enabled"]=False
+            if "fiqa" in params:
+                params["fiqa"]["enabled"]=False
 
         yaml_string=yaml.dump(params)
 
@@ -95,7 +104,7 @@ class upyc_tracker:
             track_stream.run_on_video_file(h264_file, upyc.SIMPLE_DECODER_CODEC_H264, fps, False)
 
         logging.debug(f"get results")
-        self.track_results=track_stream.get_results(120.0)
+        self.track_results=track_stream.get_results(120.0, include_full_debug=debug_enable)
         del track_stream
         del track_shared
         self.frame_times=[]
@@ -137,10 +146,6 @@ class upyc_tracker:
         idx=self.frame_indexes[self.frame_times.index(time)]
         r=self.track_results[idx]
 
-        debug={}
-        debug|={"detection_roi": {"type": "roi", "data": {"roi":r['inference_roi']}}}
-        debug|={"motion_roi": {"type": "roi", "data": {"roi":r['motion_roi']}}}
-
         objects=None
         if 'track_dets' in r and r['track_dets'] is not None:
             objects=[]
@@ -151,17 +156,43 @@ class upyc_tracker:
                 if o.cl is not None:
                     objects.append(o)
 
-        if 'inference_dets' in r and r['inference_dets'] is not None:
-            # remap classes to target class set
+        debug=dict(r.get("debug") or {})
+        inference_dets=r.get("inference_dets")
+        if inference_dets is not None and "detector_output" not in debug:
+            debug["detector_output"] = {
+                "type": "detections",
+                "data": {
+                    "detections": inference_dets,
+                    "class_names": self.md["class_names"],
+                    "attribute_names": self.md["person_attribute_names"],
+                },
+            }
+        if inference_dets is not None:
+            # Convenience mapped overlay for current target classes, while retaining
+            # the full detector output above for analysis.
             out_dets=[]
-            for d in r['inference_dets']:
+            for d in inference_dets:
                 cl=self.class_remap[d["class"]]
                 if cl is not None:
-                    d["class"]=cl
-                    out_dets.append(d)
-            debug|={"detections": {"type": "yolo_detections",
-                                   "data":{"detections":out_dets,
-                                           "class_names":self.classes,
-                                           "attributes":self.md['person_attribute_names']}}}
+                    mapped=dict(d)
+                    mapped["class"]=cl
+                    out_dets.append(mapped)
+            debug["detector_output_mapped"] = {
+                "type": "detections",
+                "data": {
+                    "detections": out_dets,
+                    "class_names": self.classes,
+                    "attribute_names": self.md["person_attribute_names"],
+                },
+            }
 
-        return objects, debug
+        return {
+            "frame_time": time,
+            "result_type": RESULT_TYPE_NAMES.get(r["result_type"], str(r["result_type"])),
+            "motion_score": r.get("motion_score", 0.0),
+            "motion_roi": r.get("motion_roi"),
+            "inference_roi": r.get("inference_roi"),
+            "inference_dets": inference_dets,
+            "objects": objects,
+            "debug": debug if len(debug) > 0 else None,
+        }
