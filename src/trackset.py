@@ -17,7 +17,7 @@ import time
 from scipy.io import loadmat
 
 class TrackSet:
-    def __init__(self, path=None):
+    def __init__(self, path=None, decode_payloads=True, analysis_mode=False):
         self.name="No name"
         self.source_name=None
         self.frame_times=[]
@@ -28,7 +28,11 @@ class TrackSet:
             self.name=f"Import {path}"
             self.source_name=path
             if path.endswith(".ubtrk2") or stuff.is_ubtrk2_file(path):
-                self.import_track_file(path)
+                self.import_track_file(
+                    path,
+                    decode_payloads=decode_payloads,
+                    analysis_mode=analysis_mode,
+                )
                 return
             if path.endswith(".ini"):
                 self.import_mot(path)
@@ -347,7 +351,7 @@ class TrackSet:
 
     def add_frame(self, object_list, time, img_path=None, debug=None,
                   result_type=None, motion_score=None, motion_roi=None, inference_roi=None,
-                  inference_dets=None):
+                  inference_dets=None, clip_embedding=None):
         if object_list is None:
             objects=None
         else:
@@ -363,6 +367,7 @@ class TrackSet:
                 "motion_roi": motion_roi,
                 "inference_roi": inference_roi,
                 "inference_dets": inference_dets,
+                "clip_embedding": clip_embedding,
                 "objects": objects,
                 "image_path": img_path,
                 "debug": debug
@@ -379,6 +384,7 @@ class TrackSet:
             motion_roi=frame_result.get("motion_roi"),
             inference_roi=frame_result.get("inference_roi"),
             inference_dets=frame_result.get("inference_dets"),
+            clip_embedding=frame_result.get("clip_embedding"),
         )
 
     def export_yaml(self, file, output_video=None):
@@ -440,6 +446,7 @@ class TrackSet:
                     "motion_roi": frame.get("motion_roi"),
                     "inference_roi": frame.get("inference_roi"),
                     "inference_dets": frame.get("inference_dets"),
+                    "clip_embedding": frame.get("clip_embedding"),
                     "objects": self._encode_frame_objects_for_storage(frame.get("objects")),
                     "debug": frame.get("debug"),
                     "image_path": frame.get("image_path"),
@@ -460,6 +467,7 @@ class TrackSet:
                 "motion_roi": frame.get("motion_roi"),
                 "inference_roi": frame.get("inference_roi"),
                 "inference_dets": frame.get("inference_dets"),
+                "clip_embedding": frame.get("clip_embedding"),
                 "objects": frame.get("objects"),
                 "image_path": frame.get("image_path"),
                 "debug": frame.get("debug"),
@@ -467,7 +475,7 @@ class TrackSet:
             self.frames.append(normalised)
             self.frame_times.append(normalised["frame_time"])
 
-    def import_track_file(self, path):
+    def import_track_file(self, path, decode_payloads=True, analysis_mode=False):
         """Read the canonical UBTRK2 binary track/debug run format."""
         reader = stuff.UBTRK2Reader(path)
         metadata = reader.metadata
@@ -481,7 +489,10 @@ class TrackSet:
             self.metadata["original_video"] = metadata["source_video"]
         self.frames = []
         self.frame_times = []
-        for frame in reader.iter_frames():
+        for frame in reader.iter_frames(
+            decode_nested=decode_payloads,
+            analysis_mode=analysis_mode,
+        ):
             normalised = {
                 "frame_time": frame["frame_time"],
                 "result_type": frame.get("result_type"),
@@ -489,6 +500,7 @@ class TrackSet:
                 "motion_roi": frame.get("motion_roi"),
                 "inference_roi": frame.get("inference_roi"),
                 "inference_dets": frame.get("inference_dets"),
+                "clip_embedding": frame.get("clip_embedding"),
                 "objects": self._decode_frame_objects_from_storage(frame.get("objects")),
                 "image_path": frame.get("image_path"),
                 "debug": frame.get("debug"),

@@ -193,6 +193,7 @@ class upyc_tracker:
             "motion_roi": r.get("motion_roi"),
             "inference_roi": r.get("inference_roi"),
             "inference_dets": inference_dets,
+            "clip_embedding": r.get("clip_embedding"),
             "objects": objects,
             "debug": debug if len(debug) > 0 else None,
         }
