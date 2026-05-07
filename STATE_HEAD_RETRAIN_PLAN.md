@@ -879,15 +879,56 @@ Files staged at `/mldata/config/track/trackers/`:
 
 uc_v11.yaml NOT yet flipped — awaiting user sign-off.
 
+### Phase 2e.7 — wider bench (176 v6 clips, all splits)
+
+Re-ran v9 vs v14 across the full v6 yaml (all 178 sequences regardless
+of split tag — gives us 7 MOT17 + 4 MOT20 + 133 PP22 + 18 UKof + 14
+INof). Result (CSV: `runs/state_head_retrain/bench_v14_wide.csv`):
+
+| variant   | mean MOTA |
+|-----------|----------:|
+| v9_prod   |   0.4192  |
+| **v14_joint** | **0.4256  (+0.0064 vs v9)** |
+
+v14 wins on 103/176 (58.5%), loses on 61, ties on 12.
+
+Per family:
+
+| family | n   | v9     | v14    | Δ      | v14 wins |
+|--------|----:|-------:|-------:|-------:|---------:|
+| MOT17  |   7 | 0.3526 | 0.3534 | +0.001 |    2 / 7 |
+| MOT20  |   4 | 0.6891 | 0.6865 | −0.003 |    2 / 4 |
+| **PP22**| 133 | 0.3682 | **0.3745** | **+0.006** | **83 / 133** |
+| **UKof**|  18 | 0.5673 | **0.5861** | **+0.019** | **11 / 18** |
+| INof   |  14 | 0.6695 | 0.6661 | −0.003 |    5 / 14 |
+
+Robust — narrower than the 37-clip number (+0.008 → +0.006) but the
+direction holds and the per-family pattern is the same: PP22 + UKof
+carry the win, MOT/INof are wash.
+
+Top 5 v14 wins:
+- UKof_LD_Indoor_Light_OHcam_006: +0.094 (0.743 → 0.837)
+- PP22_00041: +0.068
+- UKof_LD_Indoor_Light_OHcam_001: +0.059
+- PP22_00084: +0.054
+- PP22_00015: +0.052
+
+Top 5 v14 regressions:
+- PP22_00120: −0.114 (0.349 → 0.235) — worth a look
+- PP22_00022: −0.060
+- UKof_LD_Indoor_Light_OHcam_004: −0.058
+- PP22_00070: −0.045
+- PP22_00148: −0.041
+
 ### Open items
 
-- **GRU/perdim aggregator productionisation**: AUC win is small, but
-  the architecture sweep showed real signal — gru +0.00096 over fixed.
-  C-runtime aggregator schema bump + new export format. ~1 week of
-  work for a tiny expected MOTA delta. Filed not blocking.
-- **PP22 test split (98 clips)**: the v6 yaml only has PP22 train+val.
-  Adding the held-out test split (per official splits.json) would let
-  us bench v14 against the 95-clip table v9 was reported on. Filed.
-- **MOT clips**: this bench used only 2 MOT17 + 2 MOT20 (val/test
-  tagged). The original v9 plan benchmarked all 11 MOT clips. Worth
-  re-running v14 against all-MOT for a wider read.
+- **PP22_00120 regression (−0.114)**: investigate the worst clip; if
+  it's a head over-promoting failure mode, may inform a future
+  cost-ratio re-tune.
+- **GRU/perdim aggregator productionisation**: AUC win is small but
+  real (+0.00096 gru vs ema_fixed). C-runtime aggregator schema bump
+  + new export format. ~1 week of work for an expected MOTA delta in
+  the noise. Filed not blocking.
+- **PP22 test split (98 clips per official splits.json)**: not yet in
+  v6 yaml; adding it would let us reproduce the v9 plan's 95-clip
+  PP22-test bench against v14. Filed.
