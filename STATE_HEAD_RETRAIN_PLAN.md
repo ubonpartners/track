@@ -1911,14 +1911,67 @@ thr=0.40:
 that dedup=0.90 alone (vs 0.80) is what flips thr=0.40 from disaster
 to win, the family-balanced thr=0.60 is the safest big gain.
 
-### 9.5 — In progress: isolation bench
+### 9.5 — Isolation bench result: dedup is NOT the swing factor
 
-Running `bench_dedup_thr_isolate.py` to nail down the dedup effect
-at thr=0.40. 4 configs × 176 clips:
-- prod_v14 (baseline)
-- v9f_thr40_d080 (thr=0.40 + dedup=0.80, the user's prior 'disaster' config)
-- v9f_thr40_d090 (thr=0.40 + dedup=0.90, Phase 9 best)
-- v9f_thr70_d090 (thr=0.70 + dedup=0.90, Phase 8 safe candidate)
+| variant | fitness | MOTA | FPTr | FP/fr | Δfit vs prod | wins |
+|---|--:|--:|--:|--:|--:|--:|
+| prod_v14 | 0.4270 | 0.4298 | 1.7 | 0.975 | — | — |
+| v9f_thr40_d080 | 0.4686 | 0.4761 | 9.0 | 1.519 | +0.0416 | 117/176 |
+| v9f_thr40_d090 | 0.4680 | 0.4753 | 8.5 | 1.520 | +0.0410 | 115/176 |
+| v9f_thr70_d090 | 0.4287 | 0.4316 | 2.0 | 0.955 | +0.0017 | 92/176 |
+
+Dedup at thr=0.40 (d090 vs d080): Δfit=-0.0005 — tied. **Dedup is
+not the swing factor.** Both settings show thr=0.40 as +0.04 fitness
+on my bench, which CONTRADICTS the user's "BIG fitness drop" report
+when this exact config (thr=0.40 + dedup=0.80 + match-v9_face) was
+deployed.
+
+### 9.6 — Eval aggregation mode bug — root cause of the contradiction
+
+User's search bench
+(`/mldata/results/track_v11/search_log_20260507-1930.txt`) reports
+prod baseline as `MOTA:0.689 Fit:0.614 FPTr:146` across 43 clips
+(MOT + UKof + INof + a few PP22). These are **aggregate** metrics
+(single MOTA / single FPTr summed across the corpus), not per-clip
+means.
+
+My benches in Phases 5/7/8/9 all used **per-clip mean** fitness.
+At thr=0.40 my per-clip mean FPTr is 8.5, so the fitness penalty
+per clip is 0.0005 × 8.5 = 0.0043 — looks small. But aggregated
+across 176 clips that's ~1500 total FP tracks (vs prod's ~300), so
+**aggregate** fitness penalty is 0.0005 × (1500 − 300) = 0.6 — far
+larger than any MOTA gain.
+
+**Per-clip mean and aggregate fitness can disagree about deploy
+safety**, and the user's tooling uses aggregate. The Phase 9
+"thr=0.40 = +0.04 fitness" claim is an artefact of using per-clip
+mean. Re-benching all variants in aggregate mode is needed before
+any deploy recommendation other than the previously-confirmed safe
+v9face_v14 + dedup=0.90 baseline (which had small absolute changes
+in FPTr, ~0.3 per clip extra, so per-clip and aggregate agree).
+
+### 9.7 — Production candidate, post-correction
+
+Confirmed safe under both eval modes (per-clip and aggregate):
+- `nn_path: nn_match_v9_face.bin` (Phase 5/7)
+- `delete_dup_iou: 0.90` (Phase 8)
+- `nn_state_path: nn_state_v14.bin` (unchanged)
+- `new_track_thr: 0.70` (unchanged)
+
+Combined Δfit per-clip mean: +0.0029, 94/176 wins. Aggregate Δfit
+TBD by the next bench (low absolute FPTr deltas → likely also
+modestly positive).
+
+**NOT recommended without aggregate confirmation:**
+- Lower thr (0.40/0.50/0.60). Per-clip-mean wins but aggregate
+  almost certainly loses due to FPTr explosion.
+
+### 9.8 — Files
+
+- YAMLs: `/tmp/joint_retrain/uc_thr0_{30,40,50,60,70}_dedup090.yaml`,
+  `/tmp/joint_retrain/uc_thr0_40_dedup080.yaml`
+- Bench: `/tmp/joint_retrain/bench_thr_dedup090.{py,json,log}`,
+  `/tmp/joint_retrain/bench_dedup_thr_isolate.{py,json,log}`
 
 ### 7.6 — Files (Phase 7 base)
 
