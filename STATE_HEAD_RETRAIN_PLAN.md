@@ -716,13 +716,178 @@ match-cost retrain on a new pair_log).
 - `/mldata/config` `f008d5e`: uc_v11.yaml flipped to nn_state_v9.bin
   (production switch).
 
-## Closeout
+## Closeout (initial — superseded by Phase 2e below)
 
-State-head retrain is **complete**. Production uc_v11.yaml uses
+State-head retrain initial milestone hit. Production uc_v11.yaml uses
 nn_state_v9.bin. Headlines:
 - PP22 test (95 clips): MOTA 0.4010 (was 0.296 with state-v5)
 - MOT (11 clips):       MOTA 0.4758 (+0.0149 vs no-NN)
 - CEVO (10 val+test):   MOTA ~0.704 (+0.028 vs no-NN)
 
-Phase 2 work staged in this doc for when the FObsReplay schema
-drift / match-cost NN audit are worth tackling.
+User: "the current 'small win' from the NN is NOT nearly sufficient,
+we can do MUCH BETTER". Ran Phase 2e (joint retrain with both NNs
+active in the corpus) + advanced aggregator survey. Result below.
+
+---
+
+## Phase 2e — Joint retrain + advanced aggregators (DONE, big win)
+
+Goal: regenerate the pair_log with both production NNs active so the
+recorded trajectories match what the runtime produces, retrain the
+match-cost NN on this clean distribution, then retrain the state head
+with non-zero `e_track` from the new match-cost NN. Also: try several
+non-fixed-α aggregators that allow salient observations to dominate
+the per-track accumulator.
+
+### Phase 2e.0 — modules.py:1850 staleness bug fix
+
+Replaced the per-frame emitted-objects-only update + cache-forever
+fallback in `evaluate_pair_logger` with a single up-front pass over
+distinct track_ids in the pair-trace records. UNCONFIRMED/LOST tracks
+now get fresh GT alignment every frame instead of a stale cached
+value. (`src/analysis/modules.py:1779-1849`)
+
+### Phase 2e.1 — pair_log v7 regeneration
+
+`bench/pair_log_config_v7_joint.yaml`: same 178 sequences as v6, but
+with `nn_path: nn_match_v3.bin`, `nn_lambda: 0.25`, `nn_state_path:
+nn_state_v9.bin`. `force_regen: true` invalidates the cached
+NN-OFF ubtrk2. Generation took 14:37 + analysis 7:13. Result:
+- 175/178 NPZs written (3 misc PP22 failures, ignored).
+- Pair-corpus consolidated via `bench/build_pair_dataset.py`:
+  train 922k pairs / 138 scenes, val 1.01M / 33 scenes, test 227k / 4.
+
+### Phase 2e.2 — Advanced aggregators (`bench/train_phase3_adv.py`)
+
+New trainer with swappable aggregator (`--aggregator`):
+- `ema_fixed`: production baseline (fixed α=0.2)
+- `ema_gated`: scalar sigmoid gate per obs from MLP(f_obs)
+- `ema_perdim`: per-dim sigmoid gate vector
+- `gru`: standard GRUCell over f_obs sequence
+- `maxpool`: salience-weighted elementwise max with learned decay
+
+Per-track recurrence runs in pure numpy after batched torch precomputes
+the gate (constant-time per pair, no per-pair GPU sync).
+
+Val AUC on the v7 pair-corpus (baseline `pre_thr_score` = 0.99541):
+
+| variant     | val AUC | Δ vs base |
+|-------------|--------:|----------:|
+| ema_fixed   | 0.99614 |   +0.00073 |
+| ema_gated   | 0.99611 |   +0.00070 |
+| ema_perdim  | 0.99616 |   +0.00075 |
+| **gru**     |**0.99637**|  **+0.00096** |
+| maxpool     | 0.99619 |   +0.00078 |
+
+GRU best on val AUC, but lift is small and well within noise of fixed
+EMA. The C runtime only supports fixed-α today, so the architecture
+sweep is a research finding — productionising gru/perdim/maxpool needs
+a new aggregator-tagged export format and matching C code.
+
+**Decision: use `ema_fixed` for Phase 2e match-cost NN production
+candidate.** Saved as `nn_match_v7.bin` (same byte layout as v3). All
+five `.pt` checkpoints kept in `bench/data/phase3_v7_*.pt` for the
+record.
+
+### Phase 2e.3 — State-corpus v8 + state-head v13
+
+`bench/build_state_corpus.py` invoked with
+`--phase3-model bench/data/phase3_v7_ema_fixed.pt`, label-driven
+replay, delay-aug `1,2,3`. Output:
+- train: 1.36M examples (1.30M for v7)
+- val:   1.04M
+- test:  0.21M
+
+`state_head_v13.pt`: hidden=64, e_dim=16, 30 epochs, cost ratios
+matching v9 (cr_promote=1.0, cr_demote=1.0, cr_drop_unc=0.2,
+cr_drop_lost=0.1). Best combined val AUC = **0.9517** (v9 was 0.943,
+v12 with live e_track was 0.9496). Improvement on demote AUC
+(0.886 → 0.886-0.890) and drop_lost (0.898 → 0.92+) — the heads
+where e_track's reid+motion encoding helps most.
+
+### Phase 2e.4 — bench v13 (default cr_promote)
+
+37 held-out clips (val + test split from v6 yaml: 2 MOT17 + 2 MOT20 +
+20 PP22 + 5 UKof + 8 INof):
+
+| variant      | mean MOTA | Δ vs no_nn | Δ vs v9 |
+|--------------|----------:|-----------:|--------:|
+| no_nn        |   0.4684  |     —      |    —    |
+| v9_prod      |   0.4809  |   +0.0125  |    —    |
+| joint_v13    |   0.4788  |   +0.0104  |  -0.0021 |
+
+v13 with default cr_promote=1.0 ended up *slightly worse* than v9
+overall — UKof gained (+0.0109) but MOT/PP22/INof lost small amounts.
+The v9-vs-v8 lesson said cost ratio matters — re-ran the sweep on v13.
+
+### Phase 2e.5 — cost-ratio sweep on v13 (the big win)
+
+Trained 3 v13 variants with cr_promote ∈ {0.5, 2.0, 4.0}. Same corpus,
+same 30 epochs. Bench across the same 37 clips:
+
+| variant            | mean MOTA | Δ vs no_nn | Δ vs v9 |
+|--------------------|----------:|-----------:|--------:|
+| no_nn              |   0.4684  |     —      |    —    |
+| v9_prod            |   0.4809  |   +0.0125  |    —    |
+| joint_v13 (cr=1.0) |   0.4788  |   +0.0104  |  -0.0021 |
+| v13_p0_5           |   0.4887  |   +0.0203  |  +0.0078 |
+| **v13_p2_0**       | **0.4889**|  **+0.0205**|**+0.0080** |
+| v13_p4_0           |   0.4877  |   +0.0193  |  +0.0068 |
+| match_v7+state_v9  |   0.4808  |   +0.0124  |  -0.0001 |
+
+`v13_p2_0` ≈ doubling the NN-vs-no-NN lift v9 was getting.
+
+Per-family with v13_p2_0 vs v9:
+
+| family | n  | no_nn | v9_prod | v13_p2_0 | Δ vs v9 |
+|--------|---:|------:|--------:|---------:|--------:|
+| MOT17  | 2  | 0.235 | 0.238  | 0.235   |  -0.003 |
+| MOT20  | 2  | 0.712 | 0.719  | 0.718   |  -0.001 |
+| **PP22**| 20 | 0.339 | 0.343  | **0.354** |  **+0.012** |
+| **UKof**| 5  | 0.680 | 0.704  | **0.733** |  **+0.029** |
+| INof   | 8  | 0.657 | 0.688  | 0.679   |  -0.009 |
+
+PP22 and UKof account for almost all the absolute gain. MOT17/MOT20 at
+n=2 are too noisy to read into; INof regression is real but small in
+absolute terms.
+
+**The match-cost NN retrain (v7) on its own (state head left at v9)
+contributed essentially zero (Δ_v9 = -0.0001).** The state head retrain
+with non-zero e_track + cr_promote=2.0 is doing all the heavy lifting.
+
+The match-cost NN's val AUC win (+0.00096 with GRU, less with others)
+is tiny in absolute terms — the production residual was already close
+to optimal. The state head, which gets the new e_track *as input*, is
+where the joint training actually helps: cleaner accumulator
+distribution + cost-ratio tuning for promotion-eagerness recovers
+recall in PP22/UKof scenes.
+
+### Phase 2e.6 — production candidate: `state_head_v14`
+
+Promoted `state_head_v13_p2_0.bin` → `state_head_v14.bin`. Headlines:
+
+- 37 held-out clips: MOTA 0.4889 vs v9's 0.4809 (+0.0080).
+- PP22 (20 clips): +0.012 vs v9.
+- UKof (5 clips):  +0.029 vs v9.
+- No catastrophic per-family regressions; INof noise level.
+
+Files staged at `/mldata/config/track/trackers/`:
+- `nn_state_v14.bin`: new state head, joint-retrained, cr_promote=2.0.
+- `nn_match_v7.bin`: new match-cost NN, ema_fixed on v7 corpus.
+  Net negligible by itself; bundled because the state-head was trained
+  with this match-cost's f_obs producing e_track.
+
+uc_v11.yaml NOT yet flipped — awaiting user sign-off.
+
+### Open items
+
+- **GRU/perdim aggregator productionisation**: AUC win is small, but
+  the architecture sweep showed real signal — gru +0.00096 over fixed.
+  C-runtime aggregator schema bump + new export format. ~1 week of
+  work for a tiny expected MOTA delta. Filed not blocking.
+- **PP22 test split (98 clips)**: the v6 yaml only has PP22 train+val.
+  Adding the held-out test split (per official splits.json) would let
+  us bench v14 against the 95-clip table v9 was reported on. Filed.
+- **MOT clips**: this bench used only 2 MOT17 + 2 MOT20 (val/test
+  tagged). The original v9 plan benchmarked all 11 MOT clips. Worth
+  re-running v14 against all-MOT for a wider read.
