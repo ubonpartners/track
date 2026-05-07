@@ -962,3 +962,145 @@ average across the 176-clip set.
 - **PP22 test split (98 clips per official splits.json)**: not yet in
   v6 yaml; adding it would let us reproduce the v9 plan's 95-clip
   PP22-test bench against v14. Filed.
+
+---
+
+## Phase 3 — Unified-lifecycle creation head (attempted, NEGATIVE result)
+
+User architectural argument: creation/promote/destroy decisions are
+not independent — they're one lifecycle problem. The hard-coded
+`param_new_track_thr = 0.70` is the input filter that defines what
+the rest of the pipeline sees, and it shouldn't be a manual knob.
+
+Tried the simplest path (DAgger Option A, see "user-facing reply" in
+session log): a small *creation head* that takes 7 det+scene features
+and outputs 3-way softmax over {discard, start_unconfirmed,
+start_tracked}, replacing both `new_track_thr` and `immediate_confirm_thr`.
+
+### 3.1 — Pair-log v8 with thr=0.30 + immediate_confirm=2.0
+
+`bench/pair_log_config_v8_lowthr.yaml`. Production v14 NNs in the
+loop, but creation gate effectively wide open. 175 NPZs generated
+(15 min) + analysis (8 min). The drop in `new_track_thr` (0.70 →
+0.30) plus the hike in `immediate_confirm_thr` (0.93 → 2.0,
+disabled) means many more tracks get created and the immediate-
+confirm shortcut never fires.
+
+### 3.2 — Creation corpus
+
+`bench/build_creation_corpus.py`: walks emitted tracks, labels each
+by GT-lookahead lifecycle outcome:
+- `discard` (0): no consecutive-aligned-with-same-GT run ≥ 3 frames
+- `tracked` (2): aligned from frame 1 at IoU ≥ 0.6 + frame 2 still aligned
+- `unconfirmed` (1): useful but didn't qualify for immediate confirm
+
+10.9k train / 4.8k val / 0.9k test examples. Class balance:
+~27% discard, ~15% unconfirmed, ~58% tracked.
+
+### 3.3 — Creation head training
+
+`bench/train_creation_head.py`: small MLP (7 → 32 → 32 → 3),
+class-weighted CE (3.5, 4.0, 1.0). Best val score 0.6663,
+accuracy 0.55. Confusion:
+
+| true \ pred | discard | unc | tracked |
+|---|---:|---:|---:|
+| discard (n=928) | 459 | 277 | 192 |
+| unc (n=838)     | 221 | 413 | 204 |
+| tracked (n=3006)| 545 | 750 | 1711 |
+
+Discard-prediction precision: 459/(459+221+545) = **37%**. The head
+calls "discard" wrongly on many useful tracks.
+
+For comparison, the production hard threshold rule
+`conf<0.57 → discard, conf<0.93 → unc, else tracked` gets 22%
+accuracy on the v8 corpus (because lowthr=0.30 has many useful tracks
+the rule mislabels). Neither is a good fit when the input
+distribution shifts.
+
+### 3.4 — Two end-to-end MOTA tests
+
+**(a) thr=0.30 alone (no head, just lower threshold):**
+
+| variant | mean MOTA | Δ vs v14 |
+|---|--:|--:|
+| v14 prod (thr=0.70) | 0.4256 | — |
+| **thr=0.30 (no head)** | **0.4608** | **+0.0352** |
+
+Per-family Δ vs v14:
+- **PP22** (133): **+0.0614** ✓ — biggest single signal in the
+  whole retrain effort, comparable in magnitude to v9→v14.
+- MOT17 (7): −0.0501
+- MOT20 (4): −0.0100
+- UKof (18): −0.0545
+- INof (14): −0.0427
+
+**(b) thr=0.30 + creation head v2 as post-hoc suppression:**
+
+Sweep `P(discard) > τ` for τ ∈ {0.5..0.9}:
+
+| τ | mean MOTA | Δ vs v14 | avg suppress |
+|---|--:|--:|--:|
+| 0.5 | 0.3942 | −0.0314 | 29.6% |
+| 0.6 | 0.4254 | −0.0002 | 17.4% |
+| 0.7 | 0.4506 | +0.0250 | 6.3% |
+| 0.8 | 0.4597 | +0.0341 | 0.6% |
+| 0.9 | 0.4599 | +0.0343 | 0.1% |
+
+The head adds **zero value** at any operating point: at τ ≤ 0.7 it
+suppresses too many useful tracks; at τ ≥ 0.8 it barely fires (back
+to "lowthr alone" performance). The head's discriminative signal
+isn't strong enough to recover the per-family regressions.
+
+### 3.5 — Verdict
+
+7-feature head insufficient. Likely culprits:
+- **Feature poverty**: det_conf carries most of the signal; the
+  other 6 (size, aspect, pose count, density, y-position) add little
+  for "spurious vs genuine".
+- **Distribution-shift labelling**: corpus labels come from a
+  runtime that already used v14 NNs — any "would-have-been-good
+  track that v14 killed" is invisible.
+- **Deep coupling with downstream NNs**: a creation decision's
+  "rightness" depends on what `drop_unconfirmed` does next. Joint
+  training is essential; per-head supervision is not enough.
+
+### 3.6 — What we know now
+
+1. **Lowering `new_track_thr` to 0.30 buys +0.0352 mean MOTA**
+   (mostly from PP22 +0.06). Worth deploying *if* the per-family
+   regressions are acceptable.
+2. **A static threshold has different optima per scene type** —
+   PP22 wants ~0.30, UKof wants ~0.70. A scene-density-conditioned
+   threshold may be the cheapest principled fix.
+3. **The 7-feature creation head can't replace the threshold** with
+   the current corpus and feature set. Real progress probably
+   requires either:
+   - much richer features (subbox conf, attr scores, reid quality,
+     local motion residual), AND/OR
+   - joint retrain of state head's `drop_unconfirmed` on the lowthr
+     distribution so weak FPs get killed downstream instead of at
+     the gate, AND/OR
+   - DAgger iteration with all NNs in the loop, multiple cycles to
+     convergence.
+
+### 3.7 — Recommended next steps
+
+- **Quick win available**: lower `new_track_thr` to 0.30 in a
+  controlled rollout. PP22 win is real and large; the per-family
+  regressions are smaller in absolute terms. User decides on
+  acceptance criteria.
+- **Better Phase 3**: pair_log v9 with thr=0.30 + retrained
+  match/state heads on that distribution. The state head's
+  `drop_unconfirmed` should learn to kill the new flood of weak
+  FPs. If this works, the creation head is optional. Estimate: a
+  full DAgger cycle, similar effort to Phase 2e.
+- **Creation head v3**: only after a joint state-retrain has
+  tightened the rest of the pipeline; needs richer features.
+
+Files left in repo for follow-up:
+- `bench/build_creation_corpus.py`
+- `bench/train_creation_head.py`
+- `bench/pair_log_config_v8_lowthr.yaml`
+- `bench/data/creation_corpus_v1_{train,val,test}.npz`
+- `bench/data/creation_head_v{1,2}.pt`
