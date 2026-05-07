@@ -36,10 +36,11 @@ import torch.nn.functional as F
 
 
 N_E_TRACK = 16
-# 3 prior_state + 9 scalar trackers + 5 spatial/quality + 16 e_track = 33
-# Note: the legacy comment in the header (28) was off by one; the actual
-# v1 in_dim was 27 and v2 (with the 5 spatial features below) is 32.
-N_INPUT = 3 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 5 + N_E_TRACK   # = 32
+# 3 prior_state + 9 scalar trackers + 5 spatial/quality + 5 history-agg + 16 e_track = 37
+# History-agg fields (added 2026-05-07): ema_match_x_conf,
+# log_sum_det_conf, min_match_score, mean_match_score, n_strong_matches.
+# v1 in_dim was 27, v2 was 32, v3 is 37.
+N_INPUT = 3 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 5 + 5 + N_E_TRACK   # = 37
 
 
 def build_input_matrix(rec: np.ndarray) -> np.ndarray:
@@ -70,6 +71,18 @@ def build_input_matrix(rec: np.ndarray) -> np.ndarray:
         rec["det_h"].astype(np.float32).reshape(-1, 1),
         rec["log_aspect"].astype(np.float32).reshape(-1, 1),
         rec["log_pose_kp"].astype(np.float32).reshape(-1, 1),
+        # v3 (history aggregates) — fall back to zeros for old corpora
+        # that don't have these fields.
+        (rec["ema_match_x_conf"] if "ema_match_x_conf" in rec.dtype.names
+         else np.zeros(len(rec), np.float32)).astype(np.float32).reshape(-1, 1),
+        (rec["log_sum_det_conf"] if "log_sum_det_conf" in rec.dtype.names
+         else np.zeros(len(rec), np.float32)).astype(np.float32).reshape(-1, 1),
+        (rec["min_match_score"] if "min_match_score" in rec.dtype.names
+         else np.zeros(len(rec), np.float32)).astype(np.float32).reshape(-1, 1),
+        (rec["mean_match_score"] if "mean_match_score" in rec.dtype.names
+         else np.zeros(len(rec), np.float32)).astype(np.float32).reshape(-1, 1),
+        (rec["n_strong_matches"] if "n_strong_matches" in rec.dtype.names
+         else np.zeros(len(rec), np.float32)).astype(np.float32).reshape(-1, 1),
         rec["e_track"].astype(np.float32),
     ]
     return np.concatenate(cols, axis=1)

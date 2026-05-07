@@ -216,6 +216,20 @@ EXAMPLE_DTYPE = np.dtype([
     ("det_h",            "<f4"),  # detection box height in [0, 1]
     ("log_aspect",       "<f4"),  # log(w / max(eps, h)), clamped to [-3, 3]
     ("log_pose_kp",      "<f4"),  # log1p(pose_kp_visible)
+    # 2026-05-07: track-history aggregate features. e_track encodes
+    # match-cost residuals via a 16-dim learned compression; these are
+    # explicit signals of accumulated track quality that the state-head
+    # was previously seeing only through e_track and prior_state.
+    #
+    # The Bayesian-like log_sum_det_conf accumulator captures "has this
+    # track been seen confidently many times". The match_score_*
+    # aggregates capture how good the matches themselves were over the
+    # track's history.
+    ("ema_match_x_conf", "<f4"),  # EMA(match_cost_score * det_conf), α=0.3
+    ("log_sum_det_conf", "<f4"),  # log1p(Σ det_conf over matched obs)
+    ("min_match_score",  "<f4"),  # min match_cost_score over last 8 matches
+    ("mean_match_score", "<f4"),  # mean match_cost_score over last 8 matches
+    ("n_strong_matches", "<f4"),  # count where match_cost_score > 0.6 in last 8
     # e_track[16] from Phase 3 f_obs replay — zeros if --phase3-model not given
     ("e_track",          "<f4", (16,)),
 
@@ -915,6 +929,9 @@ def extract_sequence_label_driven(
         # Per-track f_obs EMA accumulator (e_track[16]) — updated on every
         # matched obs when f_obs_replay is supplied. Zeros otherwise.
         e_track_state: Dict[int, Tuple[np.ndarray, bool]] = {}
+        # Per-track history accumulators for the v17.5 aggregate features.
+        # See EXAMPLE_DTYPE: ema_match_x_conf etc.
+        match_score_history: Dict[int, Dict] = {}
 
         for fi in range(n_frames):
             frame = run.frames[fi]
@@ -1000,6 +1017,36 @@ def extract_sequence_label_driven(
                         e_track_cur, obs_row, e_seen)
                 e_track_state[tid] = (e_track_cur, e_seen)
 
+                # Track-history aggregates: ema(match_score*det_conf),
+                # log_sum(det_conf), min/mean/count over recent matches.
+                # Stats are emitted PRE-update (state-head decision uses
+                # accumulated history through previous frame, not this
+                # one) — matches how a runtime would call the head.
+                hist = match_score_history.get(tid, {
+                    "ema_mxc": 0.0, "sum_det_conf": 0.0,
+                    "recent_match_scores": [],   # rolling window of last 8
+                })
+                ema_mxc = hist["ema_mxc"]
+                log_sum_dc = float(np.log1p(hist["sum_det_conf"]))
+                rec_scores = hist["recent_match_scores"]
+                if rec_scores:
+                    min_match = min(rec_scores)
+                    mean_match = sum(rec_scores) / len(rec_scores)
+                    n_strong = sum(1 for s in rec_scores if s > 0.6)
+                else:
+                    min_match = 0.0; mean_match = 0.0; n_strong = 0
+                # Update for next frame (NOT used in this row's emit).
+                if matched and match_rec is not None:
+                    s = float(match_rec["match_cost_score"])
+                    c = float(match_rec["det_conf"])
+                    hist["ema_mxc"] = 0.7 * hist["ema_mxc"] + 0.3 * (s * c)
+                    hist["sum_det_conf"] += c
+                    rec = list(rec_scores)
+                    rec.append(s)
+                    if len(rec) > 8: rec = rec[-8:]
+                    hist["recent_match_scores"] = rec
+                match_score_history[tid] = hist
+
                 valid_promote = 1 if prior_state == STATE_UNCONFIRMED else 0
                 valid_demote  = 1 if prior_state == STATE_TRACKED else 0
                 valid_drop    = 1 if prior_state in (STATE_UNCONFIRMED, STATE_LOST) else 0
@@ -1021,6 +1068,11 @@ def extract_sequence_label_driven(
                     phase3_pair_score=float(phase3_pair_score),
                     near_edge=near_edge, det_w=det_w, det_h=det_h,
                     log_aspect=log_aspect, log_pose_kp=log_pose_kp,
+                    ema_match_x_conf=float(ema_mxc),
+                    log_sum_det_conf=float(log_sum_dc),
+                    min_match_score=float(min_match),
+                    mean_match_score=float(mean_match),
+                    n_strong_matches=float(n_strong),
                     e_track=e_track_cur.copy(),
                     promote_label=0, demote_label=0, drop_label=0,
                     gt_id_now=-1,

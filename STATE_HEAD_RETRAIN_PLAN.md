@@ -1462,3 +1462,118 @@ C-side changes (uncommitted in ubon_cstuff, need separate commit):
 - `utrack.c`: face fields populated in match_cost trace + nn_build_obs
   + nn_build_pair + nn_build_obs_post_match
 - `nn.h`: UTRACK_NN_OBS_IN 13→16, UTRACK_NN_PAIR_IN 15→19
+
+---
+
+## Phase 6 — Track-history aggregates in state head (offline NEGATIVE-marginal)
+
+User intuition (2026-05-07): the state head currently has no aggregate
+across observations beyond `e_track` (16-dim EMA of per-obs match-cost
+NN backbone activations). Things like "consistent weak detection over
+many frames is a strong signal" are not directly fed in. Test offline
+whether explicitly-aggregated features improve val AUC.
+
+### 6.1 — Five history aggregates added
+
+Per track, accumulated only on matches:
+- `ema_match_x_conf` — EMA(α=0.3) of `match_cost_score × det_conf`
+- `log_sum_det_conf` — `log1p(Σ det_conf over matched obs)`
+- `min_match_score` — min over last 8 match scores
+- `mean_match_score` — mean over last 8 match scores
+- `n_strong_matches` — count where match score > 0.6 in last 8
+
+Emitted PRE-update (state-head decision uses history through previous
+frame, matching what a runtime call would see).
+
+Code changes:
+- `bench/build_state_corpus.py`: +5 fields in EXAMPLE_DTYPE,
+  per-track `match_score_history` accumulator
+- `bench/train_state_head.py`: N_INPUT 32→37 (3+9+5+5+16), input
+  builder appends 5 history columns with backward-compat fallback
+  to zeros for old corpora
+
+### 6.2 — Corpus + sweep
+
+state_corpus_v11 built from `runs/track_analysis/pair_log_v9_face`
+(label-driven, immediate_confirm=0.93, delay-aug 1/2/3/τ=2.0):
+- train: 2.67M, val: 2.38M, test: 0.41M examples
+- 31% of rows have non-zero history (need ≥1 prior match)
+- aggregate stats: `ema_match_x_conf` mean=0.21 max=1.67;
+  `log_sum_det_conf` mean=0.92 max=6.34; `n_strong_matches` mean=1.78
+
+Train sweep cr_promote ∈ {1.0, 2.0, 3.0}, hidden=64, e_dim=16, 30 epochs:
+
+| variant | best val combined AUC | vs v17 same cp |
+|---|--:|--:|
+| v18_p1.0 | 0.9488 | +0.0007 |
+| v18_p2.0 | 0.9446 | +0.0008 |
+| **v18_p3.0** | **0.9498** | **+0.0041** |
+
+Best across all retrains so far (v15/v16/v17/v18): 0.9498. The +0.0003
+margin over v16's best (0.9495) is essentially noise.
+
+### 6.3 — Ablation: do the new features carry signal?
+
+Re-evaluate v18 val AUC with the 5 history columns zeroed:
+
+| variant | full | masked | Δ combined |
+|---|--:|--:|--:|
+| v18_p1.0 | 0.9488 | 0.9252 | +0.0237 |
+| v18_p2.0 | 0.9446 | 0.9297 | +0.0149 |
+| **v18_p3.0** | **0.9498** | **0.9073** | **+0.0425** |
+
+Per-head for v18_p3.0:
+- promote: 0.9973 → 0.9953  (+0.0020)
+- demote:  0.9020 → 0.7679  (**+0.1341**)
+- drop_unconfirmed: 0.9958 → 0.9907  (+0.0051)
+- drop_lost: 0.9041 → 0.8753  (+0.0288)
+
+The new features carry **substantial signal** for `demote`
+(TRACKED→LOST) and meaningful signal for `drop_lost`. The model has
+learned to use them — masking drops combined AUC by up to 4 points.
+
+### 6.4 — Verdict
+
+User's intuition is *correct*: aggregate match-confidence history is a
+strong cue, especially for demote and drop-lost decisions. But it does
+**not** translate into a meaningfully better head on this corpus —
+v18_p3.0 (+0.0003 combined AUC over v16) is statistical noise.
+Interpretation: the prior heads were already extracting much of this
+signal indirectly via `observations`, `num_missed`, `prev_det_conf`,
+`time_since_det`, and the 16-dim `e_track`; adding it explicitly trades
+*where* the signal sits but doesn't add capacity.
+
+### 6.5 — Runtime bench: NOT executed this round
+
+Runtime requires C-side changes:
+- 5 fields on `utdet_t` (ema_match_x_conf, sum_det_conf,
+  recent_match_scores[8], recent_count) initialised on track creation
+- Carry forward + update on match (mirror Python: state-head input is
+  PRE-update, then update for next frame)
+- Bump `UTRACK_NN_STATE_IN_DIM` 32→37 in `nn_state.h`
+- Append 5 floats to `utrack_build_state_features` (after
+  `log_pose_kp`, before `e_track[16]`)
+- Update three call sites (lines 1725/1823/1887 in utrack.c) to pass
+  the new struct values
+
+Given (a) val-AUC parity with v16/v17 and (b) the v15/v16/v17 pattern
+of state-head retrains underperforming v14 prod end-to-end on MOTA, I
+held off on the C-side work. The exploration the user asked for is
+complete; runtime test is gated on user signal that they want to invest
+in deploying it.
+
+### 6.6 — Files committed
+
+- `bench/data/state_head_v18_p{1.0,2.0,3.0}.pt`
+- `bench/data/state_head_v18_p{1.0,2.0,3.0}.bin`
+- `/mldata/config/track/trackers/nn_state_v18_p{1_0,2_0,3_0}.bin`
+- `bench/data/state_corpus_v11_{train,val,test}.npz`
+
+Python source changes (uncommitted, on `master`):
+- `bench/build_state_corpus.py`: +5 EXAMPLE_DTYPE fields, history
+  accumulator, pre-update emit
+- `bench/train_state_head.py`: N_INPUT 32→37, build_input_matrix
+  consumes new fields with backward-compat fallback
+
+C-side: NOT modified (runtime cannot consume v18 head until 32→37
+extension lands in `nn_state.h` and `utrack.c`).
