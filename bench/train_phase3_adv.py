@@ -37,7 +37,8 @@ import torch.nn as nn
 
 from bench.explore_score import auc
 from bench.train_phase3 import (
-    OBS_FEATURE_NAMES, DET_FEATURE_NAMES, PAIR_FEATURE_NAMES,
+    OBS_FEATURE_NAMES, OBS_FEATURE_NAMES_V2,
+    DET_FEATURE_NAMES, PAIR_FEATURE_NAMES,
     build_obs_matrix, build_det_matrix, build_pair_matrix,
     standardise, apply_norm, MLP, TwoTower,
 )
@@ -389,10 +390,12 @@ def train(args):
         w[fam_tr == f] = fam_target.get(f, 1.0) / max(1, n)
     w *= len(s_tr) / w.sum()
 
-    print("building features...")
-    obs_tr = build_obs_matrix(r_tr); obs_va = build_obs_matrix(r_va)
+    print(f"building features (with_face={args.with_face})...")
+    obs_tr = build_obs_matrix(r_tr, with_face=args.with_face)
+    obs_va = build_obs_matrix(r_va, with_face=args.with_face)
     det_tr = build_det_matrix(r_tr); det_va = build_det_matrix(r_va)
-    pair_tr = build_pair_matrix(r_tr); pair_va = build_pair_matrix(r_va)
+    pair_tr = build_pair_matrix(r_tr, with_face=args.with_face)
+    pair_va = build_pair_matrix(r_va, with_face=args.with_face)
 
     obs_tr_n, obs_mean, obs_std = standardise(obs_tr)
     det_tr_n, det_mean, det_std = standardise(det_tr)
@@ -557,7 +560,9 @@ def train(args):
             "tower_hidden": args.tower_hidden,
             "alpha": args.alpha, "lambda": lam,
             "aggregator": args.aggregator,
-            "obs_feature_names": OBS_FEATURE_NAMES,
+            "with_face": bool(args.with_face),
+            "obs_feature_names": (OBS_FEATURE_NAMES_V2
+                                   if args.with_face else OBS_FEATURE_NAMES),
             "det_feature_names": DET_FEATURE_NAMES,
             "pair_feature_names": PAIR_FEATURE_NAMES,
             "best_va_auc": float(best_va),
@@ -581,6 +586,10 @@ def main():
     p.add_argument("--aggregator", default="ema_gated",
                    choices=["ema_fixed", "ema_gated", "ema_perdim", "gru", "maxpool"])
     p.add_argument("--no_skip", action="store_true")
+    p.add_argument("--with_face", action="store_true",
+                   help="Include v2 face/subbox features (det_subbox_conf, "
+                        "track_subbox_conf, det_fiqa_score in f_obs; "
+                        "+ subbox_iou in pair head)")
     p.add_argument("--save", default=None)
     p.add_argument("--data_dir", default="bench/data")
     args = p.parse_args()

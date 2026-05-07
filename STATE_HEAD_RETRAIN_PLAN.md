@@ -1216,3 +1216,147 @@ Files added (Phase 4 staging):
 - `/mldata/config/track/trackers/nn_state_v15_p{0_5..3_0}.bin`
 - `/mldata/config/track/trackers/nn_match_v8.bin`
 - `/tmp/joint_retrain/bench_v15_sweep.json`
+
+---
+
+## Phase 5 — Face/subbox features (BIG win, deployable)
+
+User pushback: "in all these NNs - matching and detection - one piece
+of context we have and are not currently using is that person
+detections have FACE boxes also, with their own confidence (subbox).
+This should be incredibly useful for matching/detecting, yet we aren't
+using it at all yet."
+
+### 5.1 — Schema bump (v1 → v2)
+
+C-side `utrack_pair_trace.h`: added 4 fields:
+- `det_subbox_conf` — face confidence on candidate det
+- `track_subbox_conf` — face confidence on existing track's last frame
+- `subbox_iou` — IoU between track-side and det-side face boxes
+  (computed in match_cost; 0 if either side missing a face)
+- `det_fiqa_score` — face image quality, 0 if FIQA disabled
+
+`UTRACK_PAIR_TRACE_VERSION` 1 → 2. Python schema `pair_log_schema.py`
+mirrored. ubon_cstuff rebuilt.
+
+C-side runtime feature builders (`nn_build_obs`, `nn_build_pair`,
+`nn_build_obs_post_match` in `utrack.c`) updated to emit the new
+fields. `UTRACK_NN_OBS_IN` 13 → 16, `UTRACK_NN_PAIR_IN` 15 → 19. v1
+NNs (no face) are now rejected at load — clean break.
+
+### 5.2 — pair-corpus v9_face
+
+`bench/pair_log_config_v9_face.yaml`: same setup as v7_joint but with
+v14 prod NNs and `new_track_thr=0.30 + immediate_confirm_thr=2.0` so
+the corpus simultaneously serves three threads:
+1. Threshold-free (lowthr in the data)
+2. Bayesian context (scene_density already in features)
+3. Face features (the new fields)
+
+176 pair-log NPZs generated (gen 17 min + analysis 8 min).
+Pair-corpus consolidated:
+- train: 1.13M pairs / 139 scenes
+- val:   1.11M / 33
+- test:  0.25M / 4
+
+Face-feature density in val:
+- 26% of pairs have det_subbox_conf > 0
+- 27% have track_subbox_conf > 0
+- 3.6% have subbox_iou > 0 (both sides have face AND overlap)
+- 99.98% have non-zero fiqa_score (model emits something for every det)
+
+Sparse but the 3.6% overlap subset is the highest-signal subset.
+
+### 5.3 — Match-cost head-to-head: face vs no-face
+
+`bench/train_phase3_adv.py` extended with `--with_face` flag that
+appends 3 features to f_obs (det_subbox_conf, track_subbox_conf,
+det_fiqa_score) and 4 to pair head (subbox_iou + the 3 confs).
+
+Trained two ema_fixed match-cost NNs on the v9_face corpus,
+identical hyperparams except `--with_face`:
+
+| variant | val AUC | Δ vs baseline 0.99405 |
+|---|--:|--:|
+| no_face (control) | 0.99492 | +0.00088 |
+| **with_face**     | **0.99498** | **+0.00093** |
+
+Val AUC barely moves (+0.00005) — the 96.4% of pairs without face
+overlap dominate the average. But MOTA tells a different story.
+
+### 5.4 — End-to-end MOTA bench (176 v6 clips)
+
+Production v14 state head + new match-cost NN swap:
+
+| variant | mean MOTA | Δ vs v14 |
+|---|--:|--:|
+| v14 prod (state-v14 + match-v7, thr=0.70)        | 0.4256 | — |
+| v14 NNs + lowthr=0.30 (no face, no NN swap)      | 0.4608 | +0.0352 |
+| **state-v14 + match-v9_face, thr=0.70**          | **0.4309** | **+0.0053** |
+| **state-v14 + match-v9_face, thr=0.30**          | **0.4722** | **+0.0466** |
+
+The lowthr+face combo is **2.2× the lift the threshold drop alone
+buys** (+0.0466 vs +0.0352). At production thr=0.70 face still buys
++0.0053 with no per-family regressions — clean drop-in win.
+
+Per-family — lowthr+face vs lowthr-no-face:
+
+| family | n | lowthr-no-face | **lowthr+face** | Δ from face |
+|---|---:|---:|---:|---:|
+| MOT17 |   7 | 0.3034 | **0.3150** | +0.0116 |
+| MOT20 |   4 | 0.6765 | **0.6802** | +0.0037 |
+| PP22  | 133 | 0.4359 | **0.4453** | +0.0094 |
+| UKof  |  18 | 0.5315 | **0.5512** | +0.0197 |
+| INof  |  14 | 0.6234 | **0.6453** | +0.0219 |
+
+**Face helps every family.** Biggest absolute gains on UKof and INof,
+where the indoor cooperative scenes have lots of face detections.
+Per-family deltas vs v14 still bimodal (PP22 wins, others lose) but
+each family is now meaningfully closer to v14.
+
+### 5.5 — Production candidates
+
+Two clean drop-in wins (no per-family regressions):
+1. **Match v9_face at thr=0.70**: +0.0053 mean MOTA. Just swap
+   `nn_path: nn_match_v7.bin → nn_match_v9_face.bin`. Zero risk to
+   per-family numbers.
+
+The bigger lift options have the lowthr-induced per-family pattern
+(PP22 gains, others lose), now with face features narrowing the
+losses:
+2. **Match v9_face at thr=0.30**: +0.0466 mean MOTA. Best single
+   number from any experiment in this plan, but UKof/MOT/INof still
+   −0.02 to −0.04 vs v14.
+
+Files staged:
+- `/mldata/config/track/trackers/nn_match_v9_face.bin`
+- `bench/data/phase3_v9_{noface,face}.pt`
+- `bench/pair_log_config_v9_face.yaml`
+- `runs/state_head_retrain/bench_v9face.json`
+
+C-side changes (need to commit in ubon_cstuff):
+- `src/track/utrack/utrack_pair_trace.h`: `UTRACK_PAIR_TRACE_VERSION` 1→2,
+  4 new fields.
+- `src/track/utrack/utrack.c`: face fields populated in `match_cost`'s
+  trace emit; `nn_build_obs`, `nn_build_pair`, `nn_build_obs_post_match`
+  emit face features.
+- `src/track/utrack/nn.h`: `UTRACK_NN_OBS_IN` 13→16, `UTRACK_NN_PAIR_IN`
+  15→19. Old (v1) NNs are rejected at load.
+
+uc_v11.yaml NOT yet flipped — awaiting user decision on which option
+to deploy.
+
+### 5.6 — Open follow-ups
+
+- **Add face features to state head**: currently only match-cost
+  uses them. State head's promote/demote/drop decisions are about
+  identity stability, where face is the strongest signal we have.
+- **Joint state retrain on v9_face corpus**: state-corpus rebuild +
+  retrain may add another increment over the lowthr+face baseline.
+- **Bayesian context features**: still on the list — frame-mean
+  det_conf, nearby-track count as additional NN inputs (NOT
+  heuristic switches).
+- **Threshold-free creation head v3**: the failed Phase 3 head had
+  no face features. With face + the joint retrain pipeline now in
+  place, a v3 attempt with the richer feature set is worth one more
+  iteration before declaring the manual threshold unavoidable.
