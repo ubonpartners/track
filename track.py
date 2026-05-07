@@ -158,13 +158,15 @@ if __name__ == '__main__':
     parser.add_argument('--view', action='store_true', help='view a trackset')
     parser.add_argument('--caltech', action='store_true', help='make caltech pedestrian sequences')
     parser.add_argument('--mot', action='store_true', help='make MOT sequences')
+    parser.add_argument('--personpath22', action='store_true', help='make PersonPath22 sequences')
+    parser.add_argument('--personpath22-amodal', action='store_true', help='use amodal (occluded) boxes for PersonPath22 instead of visible')
     parser.add_argument('--cevo', action='store_true', help='make new CEVO videos')
     parser.add_argument('--test', type=str, default=None, help='test yaml file')
     parser.add_argument('--search', type=str, default=None, help='search config yaml file')
     parser.add_argument('--track', action='store_true', help='test tracker on a single sequence')
     parser.add_argument('--compare', type=str, default=None, help='compare multiple sets of tracking results')
     parser.add_argument('--display', action='store_true', help='visualise results')
-    parser.add_argument('--config', type=str, default="/mldata/config/track/trackers/uc_v10.yaml", help="config")
+    parser.add_argument('--config', type=str, default="/mldata/config/track/trackers/uc_v11.yaml", help="config")
     parser.add_argument('--output', type=str, default=None, help='output mp4 name')
     parser.add_argument('--save-trackset', type=str, default=None, help='save tracked run as UBTRK2 trackset file')
     parser.add_argument('--metrics', type=str, default="python", help='metric computation: python or c')
@@ -179,6 +181,10 @@ if __name__ == '__main__':
         exit()
     if opt.mot:
         ts.convert_mot()
+        exit()
+    if opt.personpath22:
+        variant = "amodal" if opt.personpath22_amodal else "visible"
+        ts.convert_personpath22(anno_variant=variant)
         exit()
     if opt.cevo:
         ts.convert_cevo()
