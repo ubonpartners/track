@@ -1,0 +1,2120 @@
+{
+  "v16_p1_0_thr40": {
+    "MOT20-05": {
+      "mota": 0.73643847134449,
+      "split": "val"
+    },
+    "MOT20-01": {
+      "mota": 0.6605157847932415,
+      "split": "train"
+    },
+    "MOT20-02": {
+      "mota": 0.6877035339524786,
+      "split": "test"
+    },
+    "MOT20-03": {
+      "mota": 0.6639170959768916,
+      "split": "train"
+    },
+    "MOT17-02": {
+      "mota": 0.2014660676282809,
+      "split": "val"
+    },
+    "MOT17-04": {
+      "mota": 0.5169170776465191,
+      "split": "train"
+    },
+    "MOT17-05": {
+      "mota": 0.2346430547869397,
+      "split": "train"
+    },
+    "MOT17-09": {
+      "mota": 0.5015353121801434,
+      "split": "train"
+    },
+    "MOT17-10": {
+      "mota": 0.29240506329113924,
+      "split": "val"
+    },
+    "MOT17-11": {
+      "mota": 0.44416403785488956,
+      "split": "train"
+    },
+    "MOT17-13": {
+      "mota": 0.12890792291220554,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_002": {
+      "mota": 0.5666666666666667,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_001": {
+      "mota": 0.8529411764705882,
+      "split": "val"
+    },
+    "UKof_LD_Indoor_Light_FFcam_001": {
+      "mota": 1.0,
+      "split": "test"
+    },
+    "UKof_HD_Indoor_Light_OHcam_001": {
+      "mota": 0.7866738312735089,
+      "split": "train"
+    },
+    "UKof_HD_Indoor_Light_OHcam_002": {
+      "mota": 0.7725245316681535,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_010": {
+      "mota": 0.23913043478260865,
+      "split": "val"
+    },
+    "UKof_MD_Indoor_Light_OHcam_001": {
+      "mota": 0.6184256971408402,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_004": {
+      "mota": 0.36237373737373735,
+      "split": "train"
+    },
+    "UKof_MD_Indoor_LLight_OHcam_001": {
+      "mota": 0.7381111855324849,
+      "split": "train"
+    },
+    "INof_MD_Indoor_Night_OHcam_001": {
+      "mota": 0.7231108659680088,
+      "split": "val"
+    },
+    "INof_MD_Indoor_Night_OHcam_002": {
+      "mota": 0.609251968503937,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_006": {
+      "mota": 0.8304195804195804,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_009": {
+      "mota": 0.40312965722801786,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_008": {
+      "mota": 0.541241890639481,
+      "split": "val"
+    },
+    "UKof_LD_Indoor_Light_OHcam_007": {
+      "mota": 0.8620689655172413,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_011": {
+      "mota": 0.149171270718232,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_003": {
+      "mota": 0.18627450980392157,
+      "split": "train"
+    },
+    "UKof_MD_Indoor_Light_FFcam_001": {
+      "mota": 0.93158953722334,
+      "split": "val"
+    },
+    "UKof_LD_Indoor_Light_FFcam_002": {
+      "mota": 0.5974842767295597,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_005": {
+      "mota": 0.25287356321839083,
+      "split": "train"
+    },
+    "INof_LD_IN_LLight_FFcam_001": {
+      "mota": 0.7658175842235004,
+      "split": "train"
+    },
+    "INof_LD_Out_Light_FFcam_001": {
+      "mota": 0.6799999999999999,
+      "split": "val"
+    },
+    "INof_MD_Out_Light_FFcam_001": {
+      "mota": 0.7263427109974425,
+      "split": "test"
+    },
+    "INof_FD_OutFD_Light_FFcam_001": {
+      "mota": 0.8356545961002786,
+      "split": "val"
+    },
+    "INof_LD_OutLD_Light_FFcam_001": {
+      "mota": 0.31666666666666665,
+      "split": "train"
+    },
+    "INof_LD_Out_Light_FFcam_002": {
+      "mota": 0.6617647058823529,
+      "split": "val"
+    },
+    "INof_MD_Out_Light_FFcam_002": {
+      "mota": 0.6704610130904951,
+      "split": "train"
+    },
+    "INof_LD_IN_Light_FFcam_002": {
+      "mota": 0.49650756693830034,
+      "split": "val"
+    },
+    "INof_LD_OutLD_Light_FFcam_002": {
+      "mota": 0.6752827140549273,
+      "split": "train"
+    },
+    "INof_MD_Out_Light_FFcam_003": {
+      "mota": 0.7606915377616015,
+      "split": "test"
+    },
+    "INof_LD_Out_Light_FFcam_004": {
+      "mota": 0.5913461538461539,
+      "split": "train"
+    },
+    "INof_MD_Out_Light_FFcam_004": {
+      "mota": 0.5932642487046632,
+      "split": "val"
+    },
+    "PP22_00000": {
+      "mota": 0.0,
+      "split": "train"
+    },
+    "PP22_00001": {
+      "mota": 0.2560869565217392,
+      "split": "train"
+    },
+    "PP22_00002": {
+      "mota": 0.44886363636363635,
+      "split": "train"
+    },
+    "PP22_00003": {
+      "mota": 0.31985164252914167,
+      "split": "train"
+    },
+    "PP22_00004": {
+      "mota": 0.3585434173669467,
+      "split": "train"
+    },
+    "PP22_00005": {
+      "mota": 0.5815602836879432,
+      "split": "train"
+    },
+    "PP22_00006": {
+      "mota": 0.5034293552812071,
+      "split": "train"
+    },
+    "PP22_00007": {
+      "mota": 0.3616183315431436,
+      "split": "train"
+    },
+    "PP22_00010": {
+      "mota": 0.11346026123533315,
+      "split": "train"
+    },
+    "PP22_00012": {
+      "mota": 0.5925925925925926,
+      "split": "train"
+    },
+    "PP22_00014": {
+      "mota": 0.6625903279599777,
+      "split": "train"
+    },
+    "PP22_00015": {
+      "mota": 0.34213362068965514,
+      "split": "train"
+    },
+    "PP22_00016": {
+      "mota": 0.2716602316602317,
+      "split": "train"
+    },
+    "PP22_00017": {
+      "mota": 0.7463524130190797,
+      "split": "train"
+    },
+    "PP22_00021": {
+      "mota": 0.3614944463143722,
+      "split": "train"
+    },
+    "PP22_00022": {
+      "mota": 0.5214035087719298,
+      "split": "train"
+    },
+    "PP22_00023": {
+      "mota": 0.2744305657604702,
+      "split": "train"
+    },
+    "PP22_00025": {
+      "mota": 0.407496977025393,
+      "split": "train"
+    },
+    "PP22_00026": {
+      "mota": 0.24069767441860468,
+      "split": "train"
+    },
+    "PP22_00027": {
+      "mota": 0.37033939990162323,
+      "split": "train"
+    },
+    "PP22_00029": {
+      "mota": 0.3483483483483484,
+      "split": "train"
+    },
+    "PP22_00032": {
+      "mota": 0.665314401622718,
+      "split": "train"
+    },
+    "PP22_00033": {
+      "mota": 0.3225530092096809,
+      "split": "train"
+    },
+    "PP22_00034": {
+      "mota": 0.8139059304703476,
+      "split": "train"
+    },
+    "PP22_00037": {
+      "mota": 0.29881337648327944,
+      "split": "train"
+    },
+    "PP22_00039": {
+      "mota": 0.4149335151721787,
+      "split": "train"
+    },
+    "PP22_00040": {
+      "mota": 0.5160183066361557,
+      "split": "train"
+    },
+    "PP22_00041": {
+      "mota": 0.36661911554921545,
+      "split": "train"
+    },
+    "PP22_00042": {
+      "mota": 0.4653102068045364,
+      "split": "train"
+    },
+    "PP22_00044": {
+      "mota": 0.5074955908289241,
+      "split": "train"
+    },
+    "PP22_00047": {
+      "mota": 0.3113513513513514,
+      "split": "train"
+    },
+    "PP22_00049": {
+      "mota": 0.40368663594470044,
+      "split": "train"
+    },
+    "PP22_00050": {
+      "mota": 0.31142261792006065,
+      "split": "train"
+    },
+    "PP22_00052": {
+      "mota": 0.32833655705996134,
+      "split": "train"
+    },
+    "PP22_00053": {
+      "mota": 0.2973785473785474,
+      "split": "train"
+    },
+    "PP22_00054": {
+      "mota": 0.4349011588275392,
+      "split": "train"
+    },
+    "PP22_00055": {
+      "mota": 0.2584786053882726,
+      "split": "train"
+    },
+    "PP22_00058": {
+      "mota": 0.43070104754230454,
+      "split": "train"
+    },
+    "PP22_00059": {
+      "mota": 0.2591213700670142,
+      "split": "train"
+    },
+    "PP22_00060": {
+      "mota": 0.12275132275132272,
+      "split": "train"
+    },
+    "PP22_00061": {
+      "mota": 0.3724643936124299,
+      "split": "train"
+    },
+    "PP22_00062": {
+      "mota": 0.4576271186440678,
+      "split": "train"
+    },
+    "PP22_00065": {
+      "mota": 0.8486882245271508,
+      "split": "train"
+    },
+    "PP22_00070": {
+      "mota": 0.29569308722403187,
+      "split": "train"
+    },
+    "PP22_00072": {
+      "mota": 0.5215469613259669,
+      "split": "train"
+    },
+    "PP22_00073": {
+      "mota": 0.4880348078317621,
+      "split": "train"
+    },
+    "PP22_00074": {
+      "mota": 0.641025641025641,
+      "split": "train"
+    },
+    "PP22_00075": {
+      "mota": 0.3622448979591837,
+      "split": "train"
+    },
+    "PP22_00077": {
+      "mota": 0.44999999999999996,
+      "split": "train"
+    },
+    "PP22_00081": {
+      "mota": 0.3710958178930651,
+      "split": "train"
+    },
+    "PP22_00083": {
+      "mota": 0.2181870586539847,
+      "split": "train"
+    },
+    "PP22_00084": {
+      "mota": -0.10397387044093631,
+      "split": "train"
+    },
+    "PP22_00088": {
+      "mota": 0.6903225806451613,
+      "split": "train"
+    },
+    "PP22_00089": {
+      "mota": 0.10620525059665875,
+      "split": "train"
+    },
+    "PP22_00091": {
+      "mota": 0.3440993788819876,
+      "split": "train"
+    },
+    "PP22_00093": {
+      "mota": 0.23427395649617877,
+      "split": "train"
+    },
+    "PP22_00094": {
+      "mota": 0.2567669172932331,
+      "split": "train"
+    },
+    "PP22_00095": {
+      "mota": 0.6524064171122994,
+      "split": "train"
+    },
+    "PP22_00097": {
+      "mota": 0.2924242424242425,
+      "split": "train"
+    },
+    "PP22_00101": {
+      "mota": 0.3793503480278422,
+      "split": "train"
+    },
+    "PP22_00103": {
+      "mota": 0.7866774230724904,
+      "split": "train"
+    },
+    "PP22_00104": {
+      "mota": 0.6669905270828274,
+      "split": "train"
+    },
+    "PP22_00106": {
+      "mota": 0.7388781431334623,
+      "split": "train"
+    },
+    "PP22_00108": {
+      "mota": 0.6363904452963727,
+      "split": "train"
+    },
+    "PP22_00110": {
+      "mota": 0.8745980707395499,
+      "split": "train"
+    },
+    "PP22_00111": {
+      "mota": 0.7353542234332425,
+      "split": "train"
+    },
+    "PP22_00112": {
+      "mota": 0.7686247514150222,
+      "split": "train"
+    },
+    "PP22_00115": {
+      "mota": 0.858286252354049,
+      "split": "train"
+    },
+    "PP22_00116": {
+      "mota": 0.8696780893042575,
+      "split": "train"
+    },
+    "PP22_00119": {
+      "mota": 0.5532846715328468,
+      "split": "train"
+    },
+    "PP22_00120": {
+      "mota": 0.3274240231548481,
+      "split": "train"
+    },
+    "PP22_00123": {
+      "mota": 0.33258678611422177,
+      "split": "train"
+    },
+    "PP22_00128": {
+      "mota": 0.593859412873687,
+      "split": "train"
+    },
+    "PP22_00129": {
+      "mota": 0.25269533615990314,
+      "split": "train"
+    },
+    "PP22_00132": {
+      "mota": 0.3871177618737801,
+      "split": "train"
+    },
+    "PP22_00135": {
+      "mota": 0.5833333333333333,
+      "split": "train"
+    },
+    "PP22_00136": {
+      "mota": 0.25086079685194296,
+      "split": "train"
+    },
+    "PP22_00137": {
+      "mota": 0.3398470688190315,
+      "split": "train"
+    },
+    "PP22_00140": {
+      "mota": 0.09505862646566166,
+      "split": "train"
+    },
+    "PP22_00142": {
+      "mota": 0.40564971751412426,
+      "split": "train"
+    },
+    "PP22_00143": {
+      "mota": 0.44134078212290506,
+      "split": "train"
+    },
+    "PP22_00145": {
+      "mota": 0.4886379877090181,
+      "split": "train"
+    },
+    "PP22_00146": {
+      "mota": 0.4241681260945709,
+      "split": "train"
+    },
+    "PP22_00148": {
+      "mota": 0.2746031746031746,
+      "split": "train"
+    },
+    "PP22_00151": {
+      "mota": 0.27116297468354433,
+      "split": "train"
+    },
+    "PP22_00152": {
+      "mota": 0.37882403992189195,
+      "split": "train"
+    },
+    "PP22_00154": {
+      "mota": 0.5640584694754944,
+      "split": "train"
+    },
+    "PP22_00155": {
+      "mota": 0.5210628645495787,
+      "split": "train"
+    },
+    "PP22_00156": {
+      "mota": 0.29581652155447014,
+      "split": "train"
+    },
+    "PP22_00157": {
+      "mota": 0.46415489272632127,
+      "split": "train"
+    },
+    "PP22_00159": {
+      "mota": 0.49007009345794394,
+      "split": "train"
+    },
+    "PP22_00160": {
+      "mota": 0.3249355854566276,
+      "split": "train"
+    },
+    "PP22_00164": {
+      "mota": 0.4126984126984127,
+      "split": "train"
+    },
+    "PP22_00165": {
+      "mota": 0.2940033314825097,
+      "split": "train"
+    },
+    "PP22_00168": {
+      "mota": 0.4779735682819384,
+      "split": "train"
+    },
+    "PP22_00171": {
+      "mota": 0.3540332906530089,
+      "split": "train"
+    },
+    "PP22_00176": {
+      "mota": 0.5872825434913018,
+      "split": "train"
+    },
+    "PP22_00177": {
+      "mota": 0.30274548602522877,
+      "split": "train"
+    },
+    "PP22_00180": {
+      "mota": 0.5848013816925735,
+      "split": "train"
+    },
+    "PP22_00181": {
+      "mota": 0.3445032333921223,
+      "split": "train"
+    },
+    "PP22_00182": {
+      "mota": 0.5351351351351351,
+      "split": "train"
+    },
+    "PP22_00184": {
+      "mota": 0.2758169934640523,
+      "split": "train"
+    },
+    "PP22_00185": {
+      "mota": 0.4242574257425743,
+      "split": "train"
+    },
+    "PP22_00186": {
+      "mota": 0.802547770700637,
+      "split": "train"
+    },
+    "PP22_00187": {
+      "mota": 0.5669487307117969,
+      "split": "train"
+    },
+    "PP22_00188": {
+      "mota": 0.4159100734976221,
+      "split": "train"
+    },
+    "PP22_00192": {
+      "mota": 0.4593716143011918,
+      "split": "train"
+    },
+    "PP22_00194": {
+      "mota": 0.7714681440443213,
+      "split": "train"
+    },
+    "PP22_00195": {
+      "mota": 0.3813121272365805,
+      "split": "train"
+    },
+    "PP22_00196": {
+      "mota": 0.016487455197132572,
+      "split": "train"
+    },
+    "PP22_00197": {
+      "mota": 0.1512430939226519,
+      "split": "train"
+    },
+    "PP22_00199": {
+      "mota": 0.46464646464646464,
+      "split": "train"
+    },
+    "PP22_00202": {
+      "mota": 0.38779256539697105,
+      "split": "train"
+    },
+    "PP22_00203": {
+      "mota": 0.4935810810810811,
+      "split": "val"
+    },
+    "PP22_00204": {
+      "mota": 0.39444735463593505,
+      "split": "val"
+    },
+    "PP22_00206": {
+      "mota": 0.4398516163222046,
+      "split": "val"
+    },
+    "PP22_00208": {
+      "mota": 0.5246449456975772,
+      "split": "val"
+    },
+    "PP22_00209": {
+      "mota": 0.318359375,
+      "split": "val"
+    },
+    "PP22_00210": {
+      "mota": 0.4715047150471505,
+      "split": "val"
+    },
+    "PP22_00211": {
+      "mota": 0.4173377546186642,
+      "split": "val"
+    },
+    "PP22_00213": {
+      "mota": 0.5505836575875487,
+      "split": "val"
+    },
+    "PP22_00214": {
+      "mota": 0.6078773767947225,
+      "split": "val"
+    },
+    "PP22_00215": {
+      "mota": 0.4648212226066898,
+      "split": "val"
+    },
+    "PP22_00216": {
+      "mota": 0.5001937233630376,
+      "split": "val"
+    },
+    "PP22_00217": {
+      "mota": 0.6211000321646831,
+      "split": "val"
+    },
+    "PP22_00220": {
+      "mota": 0.4199424736337488,
+      "split": "val"
+    },
+    "PP22_00223": {
+      "mota": 0.37045860631328176,
+      "split": "val"
+    },
+    "PP22_00224": {
+      "mota": 0.5775335775335775,
+      "split": "val"
+    },
+    "PP22_00225": {
+      "mota": 0.46909827760891587,
+      "split": "val"
+    },
+    "PP22_00227": {
+      "mota": 0.48936466008619495,
+      "split": "val"
+    },
+    "PP22_00229": {
+      "mota": 0.2222554591684116,
+      "split": "val"
+    },
+    "PP22_00231": {
+      "mota": 0.13876437341648806,
+      "split": "val"
+    },
+    "PP22_99999": {
+      "mota": 0.44433299899699097,
+      "split": "val"
+    }
+  },
+  "v16_p2_0_thr40": {
+    "MOT20-05": {
+      "mota": 0.7448262768179229,
+      "split": "val"
+    },
+    "MOT20-01": {
+      "mota": 0.6702979101823032,
+      "split": "train"
+    },
+    "MOT20-02": {
+      "mota": 0.6902665540948016,
+      "split": "test"
+    },
+    "MOT20-03": {
+      "mota": 0.6662845061195319,
+      "split": "train"
+    },
+    "MOT17-02": {
+      "mota": 0.20855994324899507,
+      "split": "val"
+    },
+    "MOT17-04": {
+      "mota": 0.520587223305425,
+      "split": "train"
+    },
+    "MOT17-05": {
+      "mota": 0.25484228002213616,
+      "split": "train"
+    },
+    "MOT17-09": {
+      "mota": 0.5046059365404298,
+      "split": "train"
+    },
+    "MOT17-10": {
+      "mota": 0.2932489451476793,
+      "split": "val"
+    },
+    "MOT17-11": {
+      "mota": 0.4233438485804416,
+      "split": "train"
+    },
+    "MOT17-13": {
+      "mota": 0.1293361884368308,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_002": {
+      "mota": 0.5,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_001": {
+      "mota": 0.8529411764705882,
+      "split": "val"
+    },
+    "UKof_LD_Indoor_Light_FFcam_001": {
+      "mota": 1.0,
+      "split": "test"
+    },
+    "UKof_HD_Indoor_Light_OHcam_001": {
+      "mota": 0.7826437399247717,
+      "split": "train"
+    },
+    "UKof_HD_Indoor_Light_OHcam_002": {
+      "mota": 0.7766874814154029,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_010": {
+      "mota": 0.23022095509622242,
+      "split": "val"
+    },
+    "UKof_MD_Indoor_Light_OHcam_001": {
+      "mota": 0.6191316625485351,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_004": {
+      "mota": 0.36237373737373735,
+      "split": "train"
+    },
+    "UKof_MD_Indoor_LLight_OHcam_001": {
+      "mota": 0.7361018084393838,
+      "split": "train"
+    },
+    "INof_MD_Indoor_Night_OHcam_001": {
+      "mota": 0.7214561500275787,
+      "split": "val"
+    },
+    "INof_MD_Indoor_Night_OHcam_002": {
+      "mota": 0.609251968503937,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_006": {
+      "mota": 0.8269230769230769,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_009": {
+      "mota": 0.4217585692995529,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_008": {
+      "mota": 0.5384615384615384,
+      "split": "val"
+    },
+    "UKof_LD_Indoor_Light_OHcam_007": {
+      "mota": 0.8620689655172413,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_011": {
+      "mota": 0.147329650092081,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_003": {
+      "mota": 0.17647058823529416,
+      "split": "train"
+    },
+    "UKof_MD_Indoor_Light_FFcam_001": {
+      "mota": 0.8470824949698189,
+      "split": "val"
+    },
+    "UKof_LD_Indoor_Light_FFcam_002": {
+      "mota": 0.5974842767295597,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_005": {
+      "mota": 0.25287356321839083,
+      "split": "train"
+    },
+    "INof_LD_IN_LLight_FFcam_001": {
+      "mota": 0.7329498767460969,
+      "split": "train"
+    },
+    "INof_LD_Out_Light_FFcam_001": {
+      "mota": 0.6799999999999999,
+      "split": "val"
+    },
+    "INof_MD_Out_Light_FFcam_001": {
+      "mota": 0.7289002557544757,
+      "split": "test"
+    },
+    "INof_FD_OutFD_Light_FFcam_001": {
+      "mota": 0.8133704735376044,
+      "split": "val"
+    },
+    "INof_LD_OutLD_Light_FFcam_001": {
+      "mota": 0.31999999999999995,
+      "split": "train"
+    },
+    "INof_LD_Out_Light_FFcam_002": {
+      "mota": 0.6764705882352942,
+      "split": "val"
+    },
+    "INof_MD_Out_Light_FFcam_002": {
+      "mota": 0.6522481502561184,
+      "split": "train"
+    },
+    "INof_LD_IN_Light_FFcam_002": {
+      "mota": 0.4930151338766007,
+      "split": "val"
+    },
+    "INof_LD_OutLD_Light_FFcam_002": {
+      "mota": 0.7027463651050081,
+      "split": "train"
+    },
+    "INof_MD_Out_Light_FFcam_003": {
+      "mota": 0.7543221110100091,
+      "split": "test"
+    },
+    "INof_LD_Out_Light_FFcam_004": {
+      "mota": 0.5913461538461539,
+      "split": "train"
+    },
+    "INof_MD_Out_Light_FFcam_004": {
+      "mota": 0.5906735751295337,
+      "split": "val"
+    },
+    "PP22_00000": {
+      "mota": 0.0,
+      "split": "train"
+    },
+    "PP22_00001": {
+      "mota": 0.2669565217391304,
+      "split": "train"
+    },
+    "PP22_00002": {
+      "mota": 0.4521780303030303,
+      "split": "train"
+    },
+    "PP22_00003": {
+      "mota": 0.3247968915577535,
+      "split": "train"
+    },
+    "PP22_00004": {
+      "mota": 0.35966386554621854,
+      "split": "train"
+    },
+    "PP22_00005": {
+      "mota": 0.5793036750483559,
+      "split": "train"
+    },
+    "PP22_00006": {
+      "mota": 0.5020576131687242,
+      "split": "train"
+    },
+    "PP22_00007": {
+      "mota": 0.34514858575008955,
+      "split": "train"
+    },
+    "PP22_00010": {
+      "mota": 0.10648660615452732,
+      "split": "train"
+    },
+    "PP22_00012": {
+      "mota": 0.5964912280701755,
+      "split": "train"
+    },
+    "PP22_00014": {
+      "mota": 0.670372429127293,
+      "split": "train"
+    },
+    "PP22_00015": {
+      "mota": 0.3410560344827587,
+      "split": "train"
+    },
+    "PP22_00016": {
+      "mota": 0.263011583011583,
+      "split": "train"
+    },
+    "PP22_00017": {
+      "mota": 0.7194163860830527,
+      "split": "train"
+    },
+    "PP22_00021": {
+      "mota": 0.3460114439582632,
+      "split": "train"
+    },
+    "PP22_00022": {
+      "mota": 0.4442105263157895,
+      "split": "train"
+    },
+    "PP22_00023": {
+      "mota": 0.2799412196914034,
+      "split": "train"
+    },
+    "PP22_00025": {
+      "mota": 0.4022571543732366,
+      "split": "train"
+    },
+    "PP22_00026": {
+      "mota": 0.2790697674418605,
+      "split": "train"
+    },
+    "PP22_00027": {
+      "mota": 0.3769798327594688,
+      "split": "train"
+    },
+    "PP22_00029": {
+      "mota": 0.35950235950235954,
+      "split": "train"
+    },
+    "PP22_00032": {
+      "mota": 0.697261663286004,
+      "split": "train"
+    },
+    "PP22_00033": {
+      "mota": 0.3428999785821375,
+      "split": "train"
+    },
+    "PP22_00034": {
+      "mota": 0.8225971370143149,
+      "split": "train"
+    },
+    "PP22_00037": {
+      "mota": 0.3063646170442287,
+      "split": "train"
+    },
+    "PP22_00039": {
+      "mota": 0.44357313331060344,
+      "split": "train"
+    },
+    "PP22_00040": {
+      "mota": 0.4588100686498856,
+      "split": "train"
+    },
+    "PP22_00041": {
+      "mota": 0.3780313837375179,
+      "split": "train"
+    },
+    "PP22_00042": {
+      "mota": 0.46756170780520345,
+      "split": "train"
+    },
+    "PP22_00044": {
+      "mota": 0.5,
+      "split": "train"
+    },
+    "PP22_00047": {
+      "mota": 0.34108108108108104,
+      "split": "train"
+    },
+    "PP22_00049": {
+      "mota": 0.41290322580645167,
+      "split": "train"
+    },
+    "PP22_00050": {
+      "mota": 0.3208941087327145,
+      "split": "train"
+    },
+    "PP22_00052": {
+      "mota": 0.33413926499032887,
+      "split": "train"
+    },
+    "PP22_00053": {
+      "mota": 0.2923280423280423,
+      "split": "train"
+    },
+    "PP22_00054": {
+      "mota": 0.4551238354919337,
+      "split": "train"
+    },
+    "PP22_00055": {
+      "mota": 0.2621236133122029,
+      "split": "train"
+    },
+    "PP22_00058": {
+      "mota": 0.44238517324738114,
+      "split": "train"
+    },
+    "PP22_00059": {
+      "mota": 0.26259617771159094,
+      "split": "train"
+    },
+    "PP22_00060": {
+      "mota": 0.12328042328042332,
+      "split": "train"
+    },
+    "PP22_00061": {
+      "mota": 0.36728528269313765,
+      "split": "train"
+    },
+    "PP22_00062": {
+      "mota": 0.48174706649282917,
+      "split": "train"
+    },
+    "PP22_00065": {
+      "mota": 0.8566198901769372,
+      "split": "train"
+    },
+    "PP22_00070": {
+      "mota": 0.27651103872602245,
+      "split": "train"
+    },
+    "PP22_00072": {
+      "mota": 0.5298342541436465,
+      "split": "train"
+    },
+    "PP22_00073": {
+      "mota": 0.4974619289340102,
+      "split": "train"
+    },
+    "PP22_00074": {
+      "mota": 0.6470588235294117,
+      "split": "train"
+    },
+    "PP22_00075": {
+      "mota": 0.3639455782312925,
+      "split": "train"
+    },
+    "PP22_00077": {
+      "mota": 0.4492647058823529,
+      "split": "train"
+    },
+    "PP22_00081": {
+      "mota": 0.3829186518440092,
+      "split": "train"
+    },
+    "PP22_00083": {
+      "mota": 0.23965989335639137,
+      "split": "train"
+    },
+    "PP22_00084": {
+      "mota": -0.08056614044638,
+      "split": "train"
+    },
+    "PP22_00088": {
+      "mota": 0.657258064516129,
+      "split": "train"
+    },
+    "PP22_00089": {
+      "mota": 0.10143198090692129,
+      "split": "train"
+    },
+    "PP22_00091": {
+      "mota": 0.3631469979296066,
+      "split": "train"
+    },
+    "PP22_00093": {
+      "mota": 0.24221046443268668,
+      "split": "train"
+    },
+    "PP22_00094": {
+      "mota": 0.25864661654135335,
+      "split": "train"
+    },
+    "PP22_00095": {
+      "mota": 0.7219251336898396,
+      "split": "train"
+    },
+    "PP22_00097": {
+      "mota": 0.3075757575757576,
+      "split": "train"
+    },
+    "PP22_00101": {
+      "mota": 0.4396751740139211,
+      "split": "train"
+    },
+    "PP22_00103": {
+      "mota": 0.7871384118935116,
+      "split": "train"
+    },
+    "PP22_00104": {
+      "mota": 0.649016273985912,
+      "split": "train"
+    },
+    "PP22_00106": {
+      "mota": 0.7320438426821405,
+      "split": "train"
+    },
+    "PP22_00108": {
+      "mota": 0.6376355712834627,
+      "split": "train"
+    },
+    "PP22_00110": {
+      "mota": 0.8766559485530546,
+      "split": "train"
+    },
+    "PP22_00111": {
+      "mota": 0.7329700272479565,
+      "split": "train"
+    },
+    "PP22_00112": {
+      "mota": 0.7625057365764112,
+      "split": "train"
+    },
+    "PP22_00115": {
+      "mota": 0.859934086629002,
+      "split": "train"
+    },
+    "PP22_00116": {
+      "mota": 0.8655244029075805,
+      "split": "train"
+    },
+    "PP22_00119": {
+      "mota": 0.5518248175182482,
+      "split": "train"
+    },
+    "PP22_00120": {
+      "mota": 0.30788712011577424,
+      "split": "train"
+    },
+    "PP22_00123": {
+      "mota": 0.34042553191489366,
+      "split": "train"
+    },
+    "PP22_00128": {
+      "mota": 0.5987072448155131,
+      "split": "train"
+    },
+    "PP22_00129": {
+      "mota": 0.2525741974560872,
+      "split": "train"
+    },
+    "PP22_00132": {
+      "mota": 0.3929733246584255,
+      "split": "train"
+    },
+    "PP22_00135": {
+      "mota": 0.5842524509803921,
+      "split": "train"
+    },
+    "PP22_00136": {
+      "mota": 0.2572552877520905,
+      "split": "train"
+    },
+    "PP22_00137": {
+      "mota": 0.33857264231096007,
+      "split": "train"
+    },
+    "PP22_00140": {
+      "mota": 0.09505862646566166,
+      "split": "train"
+    },
+    "PP22_00142": {
+      "mota": 0.4112994350282486,
+      "split": "train"
+    },
+    "PP22_00143": {
+      "mota": 0.44134078212290506,
+      "split": "train"
+    },
+    "PP22_00145": {
+      "mota": 0.4707731885093611,
+      "split": "train"
+    },
+    "PP22_00146": {
+      "mota": 0.41173380035026275,
+      "split": "train"
+    },
+    "PP22_00148": {
+      "mota": 0.1328042328042328,
+      "split": "train"
+    },
+    "PP22_00151": {
+      "mota": 0.1681170886075949,
+      "split": "train"
+    },
+    "PP22_00152": {
+      "mota": 0.37600347146886526,
+      "split": "train"
+    },
+    "PP22_00154": {
+      "mota": 0.5666380051590714,
+      "split": "train"
+    },
+    "PP22_00155": {
+      "mota": 0.5217109526895658,
+      "split": "train"
+    },
+    "PP22_00156": {
+      "mota": 0.3072839244000849,
+      "split": "train"
+    },
+    "PP22_00157": {
+      "mota": 0.47828362114076395,
+      "split": "train"
+    },
+    "PP22_00159": {
+      "mota": 0.5017523364485981,
+      "split": "train"
+    },
+    "PP22_00160": {
+      "mota": 0.3286573146292585,
+      "split": "train"
+    },
+    "PP22_00164": {
+      "mota": 0.4254742547425474,
+      "split": "train"
+    },
+    "PP22_00165": {
+      "mota": 0.3139922265408107,
+      "split": "train"
+    },
+    "PP22_00168": {
+      "mota": 0.4617290748898678,
+      "split": "train"
+    },
+    "PP22_00171": {
+      "mota": 0.35275288092189505,
+      "split": "train"
+    },
+    "PP22_00176": {
+      "mota": 0.5962807438512298,
+      "split": "train"
+    },
+    "PP22_00177": {
+      "mota": 0.3178332921098195,
+      "split": "train"
+    },
+    "PP22_00180": {
+      "mota": 0.5941278065630398,
+      "split": "train"
+    },
+    "PP22_00181": {
+      "mota": 0.3492063492063492,
+      "split": "train"
+    },
+    "PP22_00182": {
+      "mota": 0.5351351351351351,
+      "split": "train"
+    },
+    "PP22_00184": {
+      "mota": 0.3032679738562092,
+      "split": "train"
+    },
+    "PP22_00185": {
+      "mota": 0.446039603960396,
+      "split": "train"
+    },
+    "PP22_00186": {
+      "mota": 0.802547770700637,
+      "split": "train"
+    },
+    "PP22_00187": {
+      "mota": 0.5908412145345943,
+      "split": "train"
+    },
+    "PP22_00188": {
+      "mota": 0.44228274967574577,
+      "split": "train"
+    },
+    "PP22_00192": {
+      "mota": 0.46153846153846156,
+      "split": "train"
+    },
+    "PP22_00194": {
+      "mota": 0.7950138504155124,
+      "split": "train"
+    },
+    "PP22_00195": {
+      "mota": 0.3984095427435388,
+      "split": "train"
+    },
+    "PP22_00196": {
+      "mota": 0.016487455197132572,
+      "split": "train"
+    },
+    "PP22_00197": {
+      "mota": 0.1494475138121547,
+      "split": "train"
+    },
+    "PP22_00199": {
+      "mota": 0.4622697563874034,
+      "split": "train"
+    },
+    "PP22_00202": {
+      "mota": 0.4047728315741166,
+      "split": "train"
+    },
+    "PP22_00203": {
+      "mota": 0.49493243243243246,
+      "split": "val"
+    },
+    "PP22_00204": {
+      "mota": 0.4159245678365636,
+      "split": "val"
+    },
+    "PP22_00206": {
+      "mota": 0.44727080021197674,
+      "split": "val"
+    },
+    "PP22_00208": {
+      "mota": 0.509607351712615,
+      "split": "val"
+    },
+    "PP22_00209": {
+      "mota": 0.310546875,
+      "split": "val"
+    },
+    "PP22_00210": {
+      "mota": 0.4805248052480525,
+      "split": "val"
+    },
+    "PP22_00211": {
+      "mota": 0.4372335386072951,
+      "split": "val"
+    },
+    "PP22_00213": {
+      "mota": 0.5525291828793775,
+      "split": "val"
+    },
+    "PP22_00214": {
+      "mota": 0.6072306299314448,
+      "split": "val"
+    },
+    "PP22_00215": {
+      "mota": 0.45674740484429066,
+      "split": "val"
+    },
+    "PP22_00216": {
+      "mota": 0.5060054242541651,
+      "split": "val"
+    },
+    "PP22_00217": {
+      "mota": 0.6323576712769379,
+      "split": "val"
+    },
+    "PP22_00220": {
+      "mota": 0.43569374058348176,
+      "split": "val"
+    },
+    "PP22_00223": {
+      "mota": 0.3484216795711733,
+      "split": "val"
+    },
+    "PP22_00224": {
+      "mota": 0.5842490842490842,
+      "split": "val"
+    },
+    "PP22_00225": {
+      "mota": 0.4741641337386018,
+      "split": "val"
+    },
+    "PP22_00227": {
+      "mota": 0.4732378701515362,
+      "split": "val"
+    },
+    "PP22_00229": {
+      "mota": 0.23885731379000896,
+      "split": "val"
+    },
+    "PP22_00231": {
+      "mota": 0.13837458585071138,
+      "split": "val"
+    },
+    "PP22_99999": {
+      "mota": 0.4506853895018389,
+      "split": "val"
+    }
+  },
+  "v16_p3_0_thr40": {
+    "MOT20-05": {
+      "mota": 0.7385676313434051,
+      "split": "val"
+    },
+    "MOT20-01": {
+      "mota": 0.6580702534459759,
+      "split": "train"
+    },
+    "MOT20-02": {
+      "mota": 0.6886985888312629,
+      "split": "test"
+    },
+    "MOT20-03": {
+      "mota": 0.6723295911378457,
+      "split": "train"
+    },
+    "MOT17-02": {
+      "mota": 0.20241191771104283,
+      "split": "val"
+    },
+    "MOT17-04": {
+      "mota": 0.509232710173185,
+      "split": "train"
+    },
+    "MOT17-05": {
+      "mota": 0.225235196458218,
+      "split": "train"
+    },
+    "MOT17-09": {
+      "mota": 0.5005117707267144,
+      "split": "train"
+    },
+    "MOT17-10": {
+      "mota": 0.29240506329113924,
+      "split": "val"
+    },
+    "MOT17-11": {
+      "mota": 0.43659305993690856,
+      "split": "train"
+    },
+    "MOT17-13": {
+      "mota": 0.12976445396145608,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_002": {
+      "mota": 0.0,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_001": {
+      "mota": 0.8529411764705882,
+      "split": "val"
+    },
+    "UKof_LD_Indoor_Light_FFcam_001": {
+      "mota": 1.0,
+      "split": "test"
+    },
+    "UKof_HD_Indoor_Light_OHcam_001": {
+      "mota": 0.7759269210102095,
+      "split": "train"
+    },
+    "UKof_HD_Indoor_Light_OHcam_002": {
+      "mota": 0.7719298245614035,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_010": {
+      "mota": 0.22986457590876697,
+      "split": "val"
+    },
+    "UKof_MD_Indoor_Light_OHcam_001": {
+      "mota": 0.6184256971408402,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_004": {
+      "mota": 0.36237373737373735,
+      "split": "train"
+    },
+    "UKof_MD_Indoor_LLight_OHcam_001": {
+      "mota": 0.7387809778968519,
+      "split": "train"
+    },
+    "INof_MD_Indoor_Night_OHcam_001": {
+      "mota": 0.7214561500275787,
+      "split": "val"
+    },
+    "INof_MD_Indoor_Night_OHcam_002": {
+      "mota": 0.6003937007874016,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_006": {
+      "mota": 0.8269230769230769,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_009": {
+      "mota": 0.4314456035767511,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_008": {
+      "mota": 0.5375347544022242,
+      "split": "val"
+    },
+    "UKof_LD_Indoor_Light_OHcam_007": {
+      "mota": 0.8620689655172413,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_011": {
+      "mota": 0.14548802946592998,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_003": {
+      "mota": 0.18627450980392157,
+      "split": "train"
+    },
+    "UKof_MD_Indoor_Light_FFcam_001": {
+      "mota": 0.93158953722334,
+      "split": "val"
+    },
+    "UKof_LD_Indoor_Light_FFcam_002": {
+      "mota": 0.5974842767295597,
+      "split": "train"
+    },
+    "UKof_LD_Indoor_Light_OHcam_005": {
+      "mota": 0.25287356321839083,
+      "split": "train"
+    },
+    "INof_LD_IN_LLight_FFcam_001": {
+      "mota": 0.6589975349219392,
+      "split": "train"
+    },
+    "INof_LD_Out_Light_FFcam_001": {
+      "mota": 0.6799999999999999,
+      "split": "val"
+    },
+    "INof_MD_Out_Light_FFcam_001": {
+      "mota": 0.6317135549872123,
+      "split": "test"
+    },
+    "INof_FD_OutFD_Light_FFcam_001": {
+      "mota": 0.2813370473537604,
+      "split": "val"
+    },
+    "INof_LD_OutLD_Light_FFcam_001": {
+      "mota": 0.775,
+      "split": "train"
+    },
+    "INof_LD_Out_Light_FFcam_002": {
+      "mota": 0.6617647058823529,
+      "split": "val"
+    },
+    "INof_MD_Out_Light_FFcam_002": {
+      "mota": 0.6613545816733069,
+      "split": "train"
+    },
+    "INof_LD_IN_Light_FFcam_002": {
+      "mota": 0.4935972060535506,
+      "split": "val"
+    },
+    "INof_LD_OutLD_Light_FFcam_002": {
+      "mota": 0.12924071082390953,
+      "split": "train"
+    },
+    "INof_MD_Out_Light_FFcam_003": {
+      "mota": 0.7570518653321201,
+      "split": "test"
+    },
+    "INof_LD_Out_Light_FFcam_004": {
+      "mota": 0.5913461538461539,
+      "split": "train"
+    },
+    "INof_MD_Out_Light_FFcam_004": {
+      "mota": 0.5569948186528497,
+      "split": "val"
+    },
+    "PP22_00000": {
+      "mota": 0.0,
+      "split": "train"
+    },
+    "PP22_00001": {
+      "mota": 0.2560869565217392,
+      "split": "train"
+    },
+    "PP22_00002": {
+      "mota": 0.4460227272727273,
+      "split": "train"
+    },
+    "PP22_00003": {
+      "mota": 0.3292122924761568,
+      "split": "train"
+    },
+    "PP22_00004": {
+      "mota": 0.35966386554621854,
+      "split": "train"
+    },
+    "PP22_00005": {
+      "mota": 0.5764023210831721,
+      "split": "train"
+    },
+    "PP22_00006": {
+      "mota": 0.5034293552812071,
+      "split": "train"
+    },
+    "PP22_00007": {
+      "mota": 0.3605442176870748,
+      "split": "train"
+    },
+    "PP22_00010": {
+      "mota": 0.11976975868939566,
+      "split": "train"
+    },
+    "PP22_00012": {
+      "mota": 0.594541910331384,
+      "split": "train"
+    },
+    "PP22_00014": {
+      "mota": 0.6987215119510839,
+      "split": "train"
+    },
+    "PP22_00015": {
+      "mota": 0.3426724137931034,
+      "split": "train"
+    },
+    "PP22_00016": {
+      "mota": 0.2747490347490348,
+      "split": "train"
+    },
+    "PP22_00017": {
+      "mota": 0.7283950617283951,
+      "split": "train"
+    },
+    "PP22_00021": {
+      "mota": 0.35812857623695726,
+      "split": "train"
+    },
+    "PP22_00022": {
+      "mota": 0.49754385964912284,
+      "split": "train"
+    },
+    "PP22_00023": {
+      "mota": 0.2703894195444526,
+      "split": "train"
+    },
+    "PP22_00025": {
+      "mota": 0.4111245465538089,
+      "split": "train"
+    },
+    "PP22_00026": {
+      "mota": 0.24186046511627912,
+      "split": "train"
+    },
+    "PP22_00027": {
+      "mota": 0.3730939498278406,
+      "split": "train"
+    },
+    "PP22_00029": {
+      "mota": 0.34019734019734016,
+      "split": "train"
+    },
+    "PP22_00032": {
+      "mota": 0.6627789046653144,
+      "split": "train"
+    },
+    "PP22_00033": {
+      "mota": 0.3289783679588777,
+      "split": "train"
+    },
+    "PP22_00034": {
+      "mota": 0.806237218813906,
+      "split": "train"
+    },
+    "PP22_00037": {
+      "mota": 0.29881337648327944,
+      "split": "train"
+    },
+    "PP22_00039": {
+      "mota": 0.4105011933174224,
+      "split": "train"
+    },
+    "PP22_00040": {
+      "mota": 0.48627002288329524,
+      "split": "train"
+    },
+    "PP22_00041": {
+      "mota": 0.36757013789824056,
+      "split": "train"
+    },
+    "PP22_00042": {
+      "mota": 0.4666444296197465,
+      "split": "train"
+    },
+    "PP22_00044": {
+      "mota": 0.5052910052910053,
+      "split": "train"
+    },
+    "PP22_00047": {
+      "mota": 0.3078378378378378,
+      "split": "train"
+    },
+    "PP22_00049": {
+      "mota": 0.40258064516129033,
+      "split": "train"
+    },
+    "PP22_00050": {
+      "mota": 0.31653722295889375,
+      "split": "train"
+    },
+    "PP22_00052": {
+      "mota": 0.31189555125725343,
+      "split": "train"
+    },
+    "PP22_00053": {
+      "mota": 0.2851130351130351,
+      "split": "train"
+    },
+    "PP22_00054": {
+      "mota": 0.4389911383776415,
+      "split": "train"
+    },
+    "PP22_00055": {
+      "mota": 0.26069730586370843,
+      "split": "train"
+    },
+    "PP22_00058": {
+      "mota": 0.42989524576954075,
+      "split": "train"
+    },
+    "PP22_00059": {
+      "mota": 0.26334077934971456,
+      "split": "train"
+    },
+    "PP22_00060": {
+      "mota": 0.1253968253968254,
+      "split": "train"
+    },
+    "PP22_00061": {
+      "mota": 0.36685369011653,
+      "split": "train"
+    },
+    "PP22_00062": {
+      "mota": 0.4569752281616688,
+      "split": "train"
+    },
+    "PP22_00065": {
+      "mota": 0.8419768151311775,
+      "split": "train"
+    },
+    "PP22_00070": {
+      "mota": 0.29496923633731453,
+      "split": "train"
+    },
+    "PP22_00072": {
+      "mota": 0.5215469613259669,
+      "split": "train"
+    },
+    "PP22_00073": {
+      "mota": 0.4873096446700508,
+      "split": "train"
+    },
+    "PP22_00074": {
+      "mota": 0.641025641025641,
+      "split": "train"
+    },
+    "PP22_00075": {
+      "mota": 0.36522108843537415,
+      "split": "train"
+    },
+    "PP22_00077": {
+      "mota": 0.4441176470588235,
+      "split": "train"
+    },
+    "PP22_00081": {
+      "mota": 0.37038997706017296,
+      "split": "train"
+    },
+    "PP22_00083": {
+      "mota": 0.2227986741605419,
+      "split": "train"
+    },
+    "PP22_00084": {
+      "mota": -0.09907457811649434,
+      "split": "train"
+    },
+    "PP22_00088": {
+      "mota": 0.7233870967741935,
+      "split": "train"
+    },
+    "PP22_00089": {
+      "mota": 0.0853221957040573,
+      "split": "train"
+    },
+    "PP22_00091": {
+      "mota": 0.3486542443064182,
+      "split": "train"
+    },
+    "PP22_00093": {
+      "mota": 0.2360376249265138,
+      "split": "train"
+    },
+    "PP22_00094": {
+      "mota": 0.25413533834586466,
+      "split": "train"
+    },
+    "PP22_00095": {
+      "mota": 0.5614973262032086,
+      "split": "train"
+    },
+    "PP22_00097": {
+      "mota": 0.28787878787878785,
+      "split": "train"
+    },
+    "PP22_00101": {
+      "mota": 0.3781902552204176,
+      "split": "train"
+    },
+    "PP22_00103": {
+      "mota": 0.7871384118935116,
+      "split": "train"
+    },
+    "PP22_00104": {
+      "mota": 0.665290259897984,
+      "split": "train"
+    },
+    "PP22_00106": {
+      "mota": 0.7365570599613153,
+      "split": "train"
+    },
+    "PP22_00108": {
+      "mota": 0.6343261574756709,
+      "split": "train"
+    },
+    "PP22_00110": {
+      "mota": 0.8758842443729904,
+      "split": "train"
+    },
+    "PP22_00111": {
+      "mota": 0.7322888283378747,
+      "split": "train"
+    },
+    "PP22_00112": {
+      "mota": 0.7700015297537096,
+      "split": "train"
+    },
+    "PP22_00115": {
+      "mota": 0.8632297551789077,
+      "split": "train"
+    },
+    "PP22_00116": {
+      "mota": 0.8707165109034268,
+      "split": "train"
+    },
+    "PP22_00119": {
+      "mota": 0.5532846715328468,
+      "split": "train"
+    },
+    "PP22_00120": {
+      "mota": 0.3270622286541245,
+      "split": "train"
+    },
+    "PP22_00123": {
+      "mota": 0.34042553191489366,
+      "split": "train"
+    },
+    "PP22_00128": {
+      "mota": 0.5919741448963103,
+      "split": "train"
+    },
+    "PP22_00129": {
+      "mota": 0.24918231374924293,
+      "split": "train"
+    },
+    "PP22_00132": {
+      "mota": 0.3721535458685752,
+      "split": "train"
+    },
+    "PP22_00135": {
+      "mota": 0.5729166666666667,
+      "split": "train"
+    },
+    "PP22_00136": {
+      "mota": 0.25135268076733885,
+      "split": "train"
+    },
+    "PP22_00137": {
+      "mota": 0.3402718776550552,
+      "split": "train"
+    },
+    "PP22_00140": {
+      "mota": 0.09505862646566166,
+      "split": "train"
+    },
+    "PP22_00142": {
+      "mota": 0.407909604519774,
+      "split": "train"
+    },
+    "PP22_00143": {
+      "mota": 0.44134078212290506,
+      "split": "train"
+    },
+    "PP22_00145": {
+      "mota": 0.48849506931542086,
+      "split": "train"
+    },
+    "PP22_00146": {
+      "mota": 0.4176882661996497,
+      "split": "train"
+    },
+    "PP22_00148": {
+      "mota": 0.27195767195767195,
+      "split": "train"
+    },
+    "PP22_00151": {
+      "mota": 0.22666139240506333,
+      "split": "train"
+    },
+    "PP22_00152": {
+      "mota": 0.3838142764157084,
+      "split": "train"
+    },
+    "PP22_00154": {
+      "mota": 0.5631986242476354,
+      "split": "train"
+    },
+    "PP22_00155": {
+      "mota": 0.5294880103694102,
+      "split": "train"
+    },
+    "PP22_00156": {
+      "mota": 0.29581652155447014,
+      "split": "train"
+    },
+    "PP22_00157": {
+      "mota": 0.4644165358451072,
+      "split": "train"
+    },
+    "PP22_00159": {
+      "mota": 0.48948598130841126,
+      "split": "train"
+    },
+    "PP22_00160": {
+      "mota": 0.32064128256513025,
+      "split": "train"
+    },
+    "PP22_00164": {
+      "mota": 0.4123112659698026,
+      "split": "train"
+    },
+    "PP22_00165": {
+      "mota": 0.29039422543031645,
+      "split": "train"
+    },
+    "PP22_00168": {
+      "mota": 0.4757709251101322,
+      "split": "train"
+    },
+    "PP22_00171": {
+      "mota": 0.3575544174135723,
+      "split": "train"
+    },
+    "PP22_00176": {
+      "mota": 0.5938812237552489,
+      "split": "train"
+    },
+    "PP22_00177": {
+      "mota": 0.3022508038585209,
+      "split": "train"
+    },
+    "PP22_00180": {
+      "mota": 0.581692573402418,
+      "split": "train"
+    },
+    "PP22_00181": {
+      "mota": 0.3447971781305115,
+      "split": "train"
+    },
+    "PP22_00182": {
+      "mota": 0.5382239382239382,
+      "split": "train"
+    },
+    "PP22_00184": {
+      "mota": 0.2901960784313725,
+      "split": "train"
+    },
+    "PP22_00185": {
+      "mota": 0.4242574257425743,
+      "split": "train"
+    },
+    "PP22_00186": {
+      "mota": 0.8105095541401274,
+      "split": "train"
+    },
+    "PP22_00187": {
+      "mota": 0.5639621702339472,
+      "split": "train"
+    },
+    "PP22_00188": {
+      "mota": 0.4241245136186771,
+      "split": "train"
+    },
+    "PP22_00192": {
+      "mota": 0.4593716143011918,
+      "split": "train"
+    },
+    "PP22_00194": {
+      "mota": 0.7714681440443213,
+      "split": "train"
+    },
+    "PP22_00195": {
+      "mota": 0.3805168986083499,
+      "split": "train"
+    },
+    "PP22_00196": {
+      "mota": 0.016487455197132572,
+      "split": "train"
+    },
+    "PP22_00197": {
+      "mota": 0.15055248618784534,
+      "split": "train"
+    },
+    "PP22_00199": {
+      "mota": 0.4456327985739751,
+      "split": "train"
+    },
+    "PP22_00202": {
+      "mota": 0.38779256539697105,
+      "split": "train"
+    },
+    "PP22_00203": {
+      "mota": 0.49087837837837833,
+      "split": "val"
+    },
+    "PP22_00204": {
+      "mota": 0.39654269250916707,
+      "split": "val"
+    },
+    "PP22_00206": {
+      "mota": 0.4393216746157923,
+      "split": "val"
+    },
+    "PP22_00208": {
+      "mota": 0.5213032581453634,
+      "split": "val"
+    },
+    "PP22_00209": {
+      "mota": 0.3017578125,
+      "split": "val"
+    },
+    "PP22_00210": {
+      "mota": 0.4661746617466175,
+      "split": "val"
+    },
+    "PP22_00211": {
+      "mota": 0.4173377546186642,
+      "split": "val"
+    },
+    "PP22_00213": {
+      "mota": 0.5583657587548638,
+      "split": "val"
+    },
+    "PP22_00214": {
+      "mota": 0.5955245117061182,
+      "split": "val"
+    },
+    "PP22_00215": {
+      "mota": 0.46712802768166095,
+      "split": "val"
+    },
+    "PP22_00216": {
+      "mota": 0.5040681906237892,
+      "split": "val"
+    },
+    "PP22_00217": {
+      "mota": 0.6217433258282405,
+      "split": "val"
+    },
+    "PP22_00220": {
+      "mota": 0.4184358307081222,
+      "split": "val"
+    },
+    "PP22_00223": {
+      "mota": 0.35854675402025016,
+      "split": "val"
+    },
+    "PP22_00224": {
+      "mota": 0.5726495726495726,
+      "split": "val"
+    },
+    "PP22_00225": {
+      "mota": 0.4670719351570415,
+      "split": "val"
+    },
+    "PP22_00227": {
+      "mota": 0.4908939246489643,
+      "split": "val"
+    },
+    "PP22_00229": {
+      "mota": 0.23437032605444208,
+      "split": "val"
+    },
+    "PP22_00231": {
+      "mota": 0.13934905476515302,
+      "split": "val"
+    },
+    "PP22_99999": {
+      "mota": 0.4480106987629555,
+      "split": "val"
+    }
+  }
+}
