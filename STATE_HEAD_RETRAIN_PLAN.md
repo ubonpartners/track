@@ -1838,6 +1838,88 @@ sign-off; never flip prod config on AUC/MOTA evidence alone.)
 - YAMLs: `/tmp/joint_retrain/uc_dedup_{0_80,0_90,0_95,1_00}.yaml`
 - Bench: `/tmp/joint_retrain/bench_dedup.{py,json,log}`
 
+---
+
+## Phase 9 — `new_track_thr` sweep at the new dedup=0.90 baseline
+
+After Phase 8 (relax dedup to 0.90), revisit whether `new_track_thr`
+can come down. Phase 5.7 saw thr=0.40 give +0.0502 MOTA but the user
+reported it was a "BIG fitness drop" in their search optimisation
+(Phase 5.7 captured MOTA only). Phase 9 captures fitness directly.
+
+### 9.1 — Sweep
+
+| variant | thr | dedup | fitness | MOTA | FPTr | FP/fr | Δfit vs prod | wins/176 |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| prod_v14 (baseline) | 0.70 | 0.80 | 0.4270 | 0.4299 | 1.8 | 0.968 | — | — |
+| v9f_thr30_d090 | 0.30 | 0.90 | 0.4579 | 0.4713 | 19.4 | 1.871 | +0.0308 | 100/176 |
+| **v9f_thr40_d090** | **0.40** | **0.90** | **0.4684** | 0.4757 | 8.5 | 1.515 | **+0.0414** | 116/176 |
+| v9f_thr50_d090 | 0.50 | 0.90 | 0.4613 | 0.4667 | 5.4 | 1.325 | +0.0343 | 120/176 |
+| v9f_thr60_d090 | 0.60 | 0.90 | 0.4500 | 0.4541 | 3.4 | 1.146 | +0.0230 | **130/176** |
+| v9f_thr70_d090 | 0.70 | 0.90 | 0.4291 | 0.4320 | 2.0 | 0.957 | +0.0020 | 89/176 |
+
+### 9.2 — Apparent contradiction with Phase 5.7
+
+Phase 5.7 measured MOTA 0.4758 at thr=0.40 + dedup=0.80 but never
+captured fitness; user reported the deploy at this config caused a
+BIG fitness drop in their search bench. Here at thr=0.40 + **dedup=
+0.90** my bench reports +0.0414 fitness vs prod (huge gain). Two
+possible explanations:
+
+a. **Dedup is the swing factor.** The 0.80 → 0.90 dedup change turns
+   the fitness disaster into a fitness win at low thr. The
+   stronger-NN-aware dedup keeps fewer real tracks alive from the FP
+   explosion at thr=0.40.
+b. **My 176-clip distribution differs from the user's eval.** PP22
+   dominates 133/176 clips and PP22 thr=0.40 jumps from 0.378→0.436;
+   the user's eval may weight families differently (more MOT17/MOT20
+   weight, where thr=0.40 regresses).
+
+(9.3 — isolation bench in progress: thr=0.40 with dedup=0.80 vs
+dedup=0.90 vs prod, all on the same harness. Will resolve which
+explanation holds.)
+
+### 9.3 — Per-family non-uniformity (caution)
+
+Even where the average is +0.0414, individual families regress at
+thr=0.40:
+
+| family | n | prod | thr30 | thr40 | thr50 | thr60 | thr70 |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| MOT17 |   7 | 0.348 | 0.282 | 0.309 | 0.329 | 0.344 | 0.354 |
+| MOT20 |   4 | 0.677 | 0.562 | 0.642 | 0.660 | 0.673 | 0.675 |
+| PP22  | 133 | 0.377 | **0.433** | **0.436** | **0.425** | 0.408 | 0.378 |
+| UKof  |  18 | 0.581 | 0.546 | **0.588** | **0.592** | 0.581 | 0.593 |
+| INof  |  14 | 0.670 | 0.641 | 0.652 | 0.651 | 0.671 | 0.672 |
+
+- thr=0.40 is a **PP22 win** (+0.058) but a **MOT17 loss** (-0.039)
+  and **MOT20 loss** (-0.035).
+- thr=0.60 is family-stable: improvements on PP22 (+0.031) and
+  INof (+0.001), losses bounded under -0.005 elsewhere.
+- thr=0.60 has the **most clip wins (130/176)** even though its
+  average Δfit is lower than thr=0.40/0.50.
+
+### 9.4 — Tentative production candidates (pending 9.5)
+
+| level | config | Δfit | wins | safety |
+|---|---|--:|--:|---|
+| Conservative | v9f + thr=0.70 + dedup=0.90 | +0.0029 | 94/176 | shipped Phase 8 |
+| Family-balanced | v9f + thr=0.60 + dedup=0.90 | +0.0230 | **130/176** | mild MOT regression |
+| Maximum-fitness | v9f + thr=0.40 + dedup=0.90 | **+0.0414** | 116/176 | -0.04 MOT17, -0.04 MOT20 |
+
+**Recommendation pending Phase 9.5 isolation bench.** If 9.5 confirms
+that dedup=0.90 alone (vs 0.80) is what flips thr=0.40 from disaster
+to win, the family-balanced thr=0.60 is the safest big gain.
+
+### 9.5 — In progress: isolation bench
+
+Running `bench_dedup_thr_isolate.py` to nail down the dedup effect
+at thr=0.40. 4 configs × 176 clips:
+- prod_v14 (baseline)
+- v9f_thr40_d080 (thr=0.40 + dedup=0.80, the user's prior 'disaster' config)
+- v9f_thr40_d090 (thr=0.40 + dedup=0.90, Phase 9 best)
+- v9f_thr70_d090 (thr=0.70 + dedup=0.90, Phase 8 safe candidate)
+
 ### 7.6 — Files (Phase 7 base)
 
 - `bench/train_state_head.py`: +`--no-history`, +`--fitness-fp-boost`
