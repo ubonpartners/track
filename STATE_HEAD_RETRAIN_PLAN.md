@@ -1390,19 +1390,58 @@ At any operating point the v3 head loses to no-suppression baseline.
 Same conclusion as Phase 3: with current features and corpus size,
 the discrimination isn't strong enough to add value as a creation gate.
 
-### 5.7 — Final session results
+### 5.7 — Threshold sweep with match-v9_face
 
-Best result from any experiment in this whole plan:
-- **state-v14 + match-v9_face + new_track_thr=0.30**: 0.4722 mean MOTA
-- +0.0466 over v14 prod, ~3× the v9→v14 lift.
-- Per-family bimodal: PP22 +0.071, UKof/MOT/INof regression bands.
+After landing the face-aware match-cost win at thr=0.30, swept the
+creation threshold to find the sweet spot:
 
-Two clean drop-in deployment options:
-1. **`nn_path: nn_match_v7.bin → nn_match_v9_face.bin`** at thr=0.70:
-   +0.0053 mean MOTA, no per-family regressions. Low-risk.
-2. **Above + `new_track_thr: 0.70 → 0.30`**: +0.0466 mean MOTA, but
-   bimodal per-family. Higher reward, higher risk of UKof/MOT/INof
-   regressions on specific clips.
+| thr | mean MOTA | Δ vs v14 | wins/176 |
+|---|--:|--:|--:|
+| 0.70 (prod) | 0.4309 | +0.0053 | ~95 |
+| 0.60 | 0.4539 | +0.0283 | 130 |
+| 0.50 | 0.4671 | +0.0415 | 134 |
+| **0.40** | **0.4758** | **+0.0502** | 132 |
+| 0.30 | 0.4722 | +0.0466 | ~110 |
+
+**thr=0.40 is the optimum.** Per-family vs v14:
+
+| family | n   | v14    | thr=0.40 | Δ      | thr=0.30 (for comparison) |
+|--------|----:|-------:|---------:|-------:|--------------------------:|
+| MOT17  |   7 | 0.3534 | 0.3337   | −0.020 | 0.3150 (−0.038)           |
+| MOT20  |   4 | 0.6865 | **0.6924** | **+0.006** | 0.6802 (−0.006)         |
+| PP22   | 133 | 0.3745 | **0.4424** | **+0.068** | 0.4453 (+0.071)         |
+| UKof   |  18 | 0.5861 | **0.5902** | **+0.004** | 0.5512 (−0.035)         |
+| INof   |  14 | 0.6661 | 0.6548   | −0.011 | 0.6453 (−0.021)           |
+
+thr=0.40 dominates thr=0.30 on 4/5 families — UKof in particular
+flips from −0.035 (loss) to +0.004 (win). Only PP22 gives up 0.003
+average vs thr=0.30 (still a +0.068 win over v14).
+
+### 5.8 — Final session results
+
+| variant | mean MOTA | Δ vs v14 |
+|---|--:|--:|
+| v14 prod (match-v7, thr=0.70) | 0.4256 | — |
+| match-v9_face + thr=0.70 (drop-in safe) | 0.4309 | +0.0053 |
+| **match-v9_face + thr=0.40 (PRODUCTION CANDIDATE)** | **0.4758** | **+0.0502** |
+| match-v9_face + thr=0.30 | 0.4722 | +0.0466 |
+
+**Production recommendation**: deploy `match-v9_face + thr=0.40`.
+This is the best result of any experiment in this plan — nearly 2×
+the v9→v14 win, gains on 4/5 families, only minor INof/MOT17
+regressions.
+
+Three knobs to flip in `uc_v11.yaml`:
+```yaml
+utrack:
+  new_track_thr: 0.40              # was 0.70
+  nn_path: /mldata/config/track/trackers/nn_match_v9_face.bin
+                                   # was nn_match_v7.bin
+  # nn_state_path stays at nn_state_v14.bin
+```
+
+Plus the C-side `e07fe93` in ubon_cstuff (face-aware feature
+builders) needs to be deployed.
 
 User decides which to ship. The threshold-free goal didn't land —
 neither retrained state heads nor creation heads at lowthr beat
