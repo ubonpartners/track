@@ -1766,6 +1766,78 @@ deployment sees, and that's exactly where the boost over-fires.
 - `/mldata/config/track/trackers/nn_state_v20_fb{1_0,5_0,20_0}.bin`
 - `/tmp/joint_retrain/bench_v20_fitness.{py,json,log}`
 
+---
+
+## Phase 8 — `delete_dup_iou` ablation (deployable win)
+
+User flagged 2026-05-07 that the duplicate-removal step (utrack.c
+step 7, drops a LOST track when a TRACKED track's box overlaps it
+above `param_delete_dup_iou`) was tuned when the match-cost NN was
+much weaker. With v9face's stronger matching, this dedup is likely
+eating real near-coincident tracks the new tracker correctly
+distinguishes.
+
+### 8.1 — Sweep
+
+YAML-only ablation (no C change). Held everything constant except
+`delete_dup_iou`:
+- match-v9_face NN
+- state-v14 head
+- new_track_thr=0.70
+- All other params at prod values
+
+| variant | dedup_iou | fitness | MOTA | FPTr | FP/fr | Δfit vs prod | wins/176 |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| prod_v14 | 0.80 (match-v7) | 0.4263 | 0.4291 | 1.7 | 0.971 | — | — |
+| v9face_080 | 0.80 (current) | 0.4279 | 0.4308 | 2.1 | 0.948 | +0.0016 | 87/176 |
+| **v9face_090** | **0.90** | **0.4292** | **0.4321** | 2.0 | 0.954 | **+0.0029** | **94/176** |
+| v9face_095 | 0.95 | 0.4283 | 0.4313 | 2.0 | 0.958 | +0.0021 | 89/176 |
+| v9face_off | 1.00 (off) | 0.4291 | 0.4320 | 2.0 | 0.957 | +0.0028 | 92/176 |
+
+Δ fitness vs `v9face_080` (isolates dedup effect alone):
+- 0.90: +0.0012 (42/176 wins)
+- 0.95: +0.0004 (41/176 wins)
+- off:  +0.0012 (45/176 wins)
+
+### 8.2 — Findings
+
+1. **Relaxing dedup is a real fitness gain.** 0.90 and off (1.0) both
+   give +0.0012 over the current 0.80 — the dedup was eating real
+   tracks. Combined with the v9face match NN swap, total +0.0029
+   fitness and 94/176 clips improved.
+2. **FP tracks did NOT increase** when dedup was relaxed (2.1 → 2.0),
+   counter-intuitive but explained: the LOST tracks the dedup was
+   killing would have died from `track_buffer_seconds` / `num_missed`
+   timeouts anyway. The dedup was redundant safety, not core safety.
+3. **0.90 marginally beats off (1.0)** by 0.0001 fitness. Both
+   essentially tie. Recommendation: ship 0.90 as a "with safety"
+   change rather than fully disabling.
+4. **UKof family is identical** across all dedup settings (0.5928).
+   Mostly outdoor wide-area, low track-overlap scenes; dedup never
+   fires there. The win comes from PP22 (dense, lots of overlap) and
+   MOT20.
+
+### 8.3 — Production candidate
+
+| change | value | rationale |
+|---|---|---|
+| `nn_path` | `nn_match_v9_face.bin` | Phase 5/7 face NN win |
+| `delete_dup_iou` | `0.90` | Phase 8 — relax over-aggressive dedup |
+| `nn_state_path` | `nn_state_v14.bin` (unchanged) | retrains all underperformed |
+| `new_track_thr` | `0.70` (unchanged) | thr=0.40 was a fitness loss |
+
+Total expected gain: **+0.0029 fitness, 94/176 clips improved.**
+~2.5× the face-only +0.0012, ~80% larger than face-only's +0.0016.
+
+User decision: deploy y/n. (Per
+`feedback_track_eval_metric.md`: deploy decisions need explicit user
+sign-off; never flip prod config on AUC/MOTA evidence alone.)
+
+### 8.4 — Files
+
+- YAMLs: `/tmp/joint_retrain/uc_dedup_{0_80,0_90,0_95,1_00}.yaml`
+- Bench: `/tmp/joint_retrain/bench_dedup.{py,json,log}`
+
 ### 7.6 — Files (Phase 7 base)
 
 - `bench/train_state_head.py`: +`--no-history`, +`--fitness-fp-boost`
