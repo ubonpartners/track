@@ -1104,3 +1104,115 @@ Files left in repo for follow-up:
 - `bench/pair_log_config_v8_lowthr.yaml`
 - `bench/data/creation_corpus_v1_{train,val,test}.npz`
 - `bench/data/creation_head_v{1,2}.pt`
+
+---
+
+## Phase 4 — Joint retrain at lowthr=0.30 (executed, NEGATIVE result)
+
+After the creation head failed, the recommended next experiment was the
+proper joint retrain at the lower creation threshold: regenerate
+pair_log at thr=0.30, retrain match-cost NN + state head on the new
+distribution, bench end-to-end.
+
+### 4.1 — Pieces built
+
+- **v8 pair-corpus** (`pairs_{train,val,test}_v8.npz`): 1.13M / 1.11M /
+  0.25M pairs, ~23% bigger than v7 because lowthr=0.30 admits more
+  match candidates.
+- **match-cost v8** (`phase3_v8_ema_fixed.pt` → `nn_match_v8.bin`):
+  best val AUC 0.99502 (+0.00097 over baseline 0.99405). Same lift
+  as v7's match-cost.
+- **state-corpus v9** (`state_corpus_v9_*.npz`): 2.66M / 2.38M / 0.41M
+  examples (~2× v8 corpus because lowthr produces 2× more tracks per
+  sequence). Built with v8 match-cost as f_obs_replay, label-driven
+  replay + delay-aug.
+- **state-head v15 sweep** (`state_head_v15_p{0.5,1.0,1.5,2.0,3.0}.pt`):
+  trained on state-corpus v9 with cr_promote ∈ {0.5, 1.0, 1.5, 2.0, 3.0}.
+
+| variant | best val AUC |
+|---|--:|
+| v15_p0.5 | 0.9465 |
+| v15_p1.0 | 0.9443 |
+| v15_p1.5 | 0.9465 |
+| v15_p2.0 | 0.9425 |
+| v15_p3.0 | 0.9442 |
+
+(For reference: v14 = 0.9451 on its own corpus, same approximate range.)
+
+### 4.2 — End-to-end MOTA bench (176 clips at thr=0.30)
+
+| variant | mean MOTA | Δ vs v14 | wins/176 |
+|---|--:|--:|--:|
+| v14 prod (thr=0.70)                | 0.4256 | — | — |
+| **v14 NNs + lowthr=0.30** (no retrain) | **0.4608** | **+0.0352** | (~110/176) |
+| v15_p0.5 + match_v8 + thr=0.30 | 0.2309 | −0.1947 | 16 |
+| v15_p1.0 + match_v8 + thr=0.30 | 0.3325 | −0.0931 | 28 |
+| v15_p1.5 + match_v8 + thr=0.30 | 0.2052 | −0.2204 | 11 |
+| v15_p2.0 + match_v8 + thr=0.30 | 0.4443 | +0.0187 | 95 |
+| v15_p3.0 + match_v8 + thr=0.30 | 0.4543 | +0.0287 | 97 |
+
+Per-family Δ vs v14 for v15_p3.0 (best v15) and lowthr-no-head:
+
+| family | n | v14 | lowthr-no-head | v15_p3.0 |
+|---|---:|---:|---:|---:|
+| MOT17 | 7 | 0.3534 | 0.3034 | 0.2978 |
+| MOT20 | 4 | 0.6865 | 0.6765 | 0.6635 |
+| PP22  | 133 | 0.3745 | **0.4359** | 0.4251 |
+| UKof  | 18 | 0.5861 | 0.5315 | **0.5405** |
+| INof  | 14 | 0.6661 | 0.6234 | **0.6399** |
+
+The retrained heads modestly recover UKof/INof but **lose more on PP22
+than they gain** — net result is below the no-retrain baseline.
+
+### 4.3 — Verdict
+
+**Joint retrain at the new threshold is a wash, possibly slightly
+negative.** The best deployable result from this session's work is
+the simplest one: **lower `new_track_thr` from 0.70 → 0.30, change
+nothing else.** v14 NNs handle the lowthr distribution better than
+the v15+match_v8 retrain on that distribution.
+
+Why might joint retrain not help? Hypotheses (none verified):
+- v15 may overfit to subtle artefacts of the lowthr corpus.
+- The label-driven oracle replay assumes a state machine that the
+  retrained head doesn't quite match.
+- Cost ratios were swept on a single axis; demote/drop-* may also
+  need re-tuning at the new distribution.
+
+### 4.4 — Production recommendation (from this session's work)
+
+Two clean knobs the user can deploy independently:
+
+1. **`new_track_thr: 0.70 → 0.30`** in `uc_v11.yaml`.
+   - Bench: +0.0352 mean MOTA across 176 clips.
+   - Bimodal: PP22 +0.06, UKof/MOT/INof −0.04 to −0.05.
+   - Reversible by config edit only — no NN changes.
+   - Worst-case clip drops −0.385.
+2. **Stay on v14** (current production after `d51b0e6`).
+   - No per-family regressions.
+   - Smaller mean win.
+
+The joint state+match retrain (Phase 4) and creation-head (Phase 3)
+do **not** beat option (1). Both are filed in this doc but not
+recommended for deployment as-is.
+
+### 4.5 — What would actually help (filed)
+
+- **Density-aware threshold**: the per-family pattern strongly suggests
+  scene_density should modulate `new_track_thr` (PP22 wants ~0.30,
+  UKof wants ~0.70). A tiny scalar function of density into the
+  threshold may capture most of the available win without any NN.
+- **Joint demote/drop sweep on v15**: only cr_promote was swept;
+  the drop_* heads at lowthr may need their own tuning.
+- **Multi-iteration DAgger**: one cycle clearly wasn't enough. After
+  v15 ships, regen pair_log with v15 + match_v8 in the loop, retrain
+  again, see if the second iteration converges to better numbers.
+
+Files added (Phase 4 staging):
+- `bench/data/pairs_{train,val,test}_v8.npz`
+- `bench/data/phase3_v8_ema_fixed.{pt,bin}`
+- `bench/data/state_corpus_v9_{train,val,test}.npz`
+- `bench/data/state_head_v15_p{0.5,1.0,1.5,2.0,3.0}.{pt,bin}`
+- `/mldata/config/track/trackers/nn_state_v15_p{0_5..3_0}.bin`
+- `/mldata/config/track/trackers/nn_match_v8.bin`
+- `/tmp/joint_retrain/bench_v15_sweep.json`
