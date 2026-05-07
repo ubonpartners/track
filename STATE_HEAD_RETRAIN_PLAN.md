@@ -498,3 +498,30 @@ Production deployment plan:
 Everything in Phase 2 (e_track re-eval, architecture sweep,
 threshold calibration, match-cost NN audit) is now optional polish
 on top of a working head.
+
+## Commits
+
+- `ubon_cstuff` `5a85d41`: e_track zeroing at all 3 state-head call sites.
+- `track` `095cb36`: match_cost_trace overlay + `--trace` flag (the
+  diagnostic that surfaced the bug).
+- `track` (state-head retrain commit): label-driven corpus +
+  sample-weight wiring + this plan doc.
+- `/mldata/config` `be81518`: `nn_state_v8.bin`, `nn_state_v9.bin`,
+  and side-by-side `uc_v11_state_v8.yaml` / `uc_v11_state_v9.yaml`
+  test configs. `uc_v11.yaml` intentionally still points at
+  state-v5 — production switch awaits sign-off.
+
+## Loop stopped
+
+Pausing here for review. Production switch from state-v5 → state-v9
+needs your sign-off. After that, Phase 2 work (each item ~1 day):
+  1. e_track re-eval — re-train corpus with match-cost NN on, see if
+     non-zero e_track input adds AUC.
+  2. Architecture sweep on the now-clean corpus.
+  3. Operating-point calibration (threshold sweep — earlier sweep at
+     0.5 vs 0.9 promote made no difference because logits saturate;
+     may want to re-train with looser cost ratios then sweep).
+  4. Match-cost NN audit — same kind of corpus/runtime mismatch
+     analysis applied to nn_match_v3.bin.
+  5. Joint retrain (state head + match-cost NN together once both
+     are clean).
