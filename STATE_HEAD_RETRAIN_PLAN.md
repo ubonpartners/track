@@ -1698,7 +1698,75 @@ c. **Long-term: replace per-head BCE with fitness-shaped loss.**
    FP/MOTA outcome reweighting, or policy-gradient through the
    assignment (groundwork already in `bench/assign_sim.py`).
 
-### 7.6 — Files
+### 7.7 — v20 (corpus_v8 + cr=2.0 + fp-boost) — boost backfires
+
+The natural follow-up to 7.4: train v19's pipeline on v14's corpus
+(state_corpus_v8) instead of v11. corpus_v8 is smaller (1.36M train
+vs 2.67M) but is what v14 was trained on, so it isolates the corpus
+contribution.
+
+Sweep: cr_promote=2.0, fitness_fp_boost ∈ {1.0, 5.0, 20.0}, 30 epochs.
+
+Val AUCs (combined): 0.9452 / 0.9529 / 0.9512. fb=5.0 came within
+0.001 of v14's 0.9541 — looked like the gap was closing.
+
+Val FP-track diagnostics also looked excellent — wrong-promotes
+on val UNCONFIRMED FP-track examples:
+v14_prod=1872, v20_fb1.0=1300, v20_fb5.0=440, v20_fb20.0=404 (4.6×
+fewer than v14).
+
+**End-to-end fitness bench (176 clips) shows the val signals were
+misleading:**
+
+| variant | fitness | MOTA | FPTr | FP/fr | Δfit | wins/176 |
+|---|--:|--:|--:|--:|--:|--:|
+| prod_v14 | 0.4264 | 0.4293 | 1.7 | 0.974 | — | — |
+| v9face_v14 | 0.4276 | 0.4306 | 2.1 | 0.952 | +0.0012 | 83/176 |
+| v20_fb1.0  | 0.4150 | 0.4180 | 2.5 | 0.883 | -0.0115 | 55/176 |
+| v20_fb5.0  | 0.3188 | 0.3219 | 3.0 | 0.792 | -0.1077 | 15/176 |
+| v20_fb20.0 | 0.1535 | 0.1549 | 1.5 | 0.315 | -0.2729 |  4/176 |
+
+Per-family for fb=20.0: PP22 collapses to 0.092 (prod 0.376),
+catastrophic across all families.
+
+**Diagnosis:** the simple "up-weight examples on FP tracks" loss is
+too coarse. It doesn't teach the head to *distinguish* FP from real
+in UNCONFIRMED state — it teaches the head to be *universally
+conservative* about promotion. fb=20 produces FPTr=1.5 (less than
+prod's 1.7) only because the head barely promotes anything;
+real-track promote rate collapses with FP-track promote rate.
+
+The val set hides this: most val examples are later-frame examples
+on matched tracks where `promote_label=0` anyway, so the AUC barely
+moves. The early-frame UNCONFIRMED→TRACKED decision is what
+deployment sees, and that's exactly where the boost over-fires.
+
+### 7.8 — Verdict on Phase 7
+
+- **Only deployable win:** `v9face_v14` (face NN swap, no other
+  changes), +0.0012 fitness, 83/176 clips win.
+- **Fitness-fp-boost via per-example reweighting is dead-end.** A
+  meaningfully better fitness-shaped loss must distinguish "this
+  feature pattern *predicts* the track is FP" from "be more
+  conservative everywhere."
+- **State-head retraining alone has plateaued** below v14 prod
+  across v15/v16/v17/v18/v19/v19b/v20 — every retrain on every
+  corpus + every loss tweak.
+- Next levers worth pulling (this plan's open items):
+  1. Relax/remove `delete_dup_iou` (now likely over-aggressive
+     given the stronger match-cost NN — Phase 8 below).
+  2. Threshold-free creation gate, third attempt with detection-
+     context features and fitness-shaped joint loss (Phase 9 TBD).
+  3. Policy-gradient through assignment with fitness reward (the
+     deeper fix the user flagged).
+
+### 7.9 — Files
+
+- `bench/data/state_head_v20_fb{1.0,5.0,20.0}.{pt,bin}`
+- `/mldata/config/track/trackers/nn_state_v20_fb{1_0,5_0,20_0}.bin`
+- `/tmp/joint_retrain/bench_v20_fitness.{py,json,log}`
+
+### 7.6 — Files (Phase 7 base)
 
 - `bench/train_state_head.py`: +`--no-history`, +`--fitness-fp-boost`
 - `bench/build_state_corpus.py`: +`--fitness-fp-boost` (corpus-time
