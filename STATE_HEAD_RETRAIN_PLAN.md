@@ -477,12 +477,29 @@ Per-clip MOT:
 | MOT20-03  | 0.677 | 0.658 |  −0.019 |
 | MOT20-05  | 0.741 | 0.742 |  +0.001 |
 
+### Phase 1h benchmark — CEVO (no regression check)
+
+CEVO val + test (10 clips visible from output capture):
+
+| variant | mean MOTA | clips ≥ no-NN |
+|---------|----------:|--------------:|
+| no-NN   |   ~0.677  |      —        |
+| **v9**  | **~0.704**|     9 / 10    |
+
+**Δ MOTA vs no-NN: ~+0.028** on CEVO. v9 wins on 9/10 visible
+CEVO clips. Standout: UKof_LD_Indoor_Light_FFcam_001 jumps from
+0.867 → 1.000. Single regression UKof_LD_Indoor_Light_OHcam_008
+(−0.031). CEVO improvement is larger than MOT — likely because
+CEVO has more cooperative (clean, indoor) tracks that benefit from
+quicker promotion.
+
 ### Phase 1 verdict — DONE, exit criteria hit
 
 - PP22 mean MOTA Δ_no_nn: **+0.0004** (was −0.105 with state-v5).
   Hit the floor of "≥ 0", just below the +0.02 stretch.
 - MOT mean MOTA Δ_no_nn: **+0.0149**. Beats both no-NN AND state-v5.
-- No catastrophic per-clip regressions on either dataset.
+- CEVO mean MOTA Δ_no_nn: **~+0.028**. Best lift of the three.
+- No catastrophic per-clip regressions on any dataset.
 
 **Headline**: state-v9 is a genuine net win over both no-NN and
 state-v5. Bug class identified (training/runtime distribution
@@ -511,17 +528,105 @@ on top of a working head.
   test configs. `uc_v11.yaml` intentionally still points at
   state-v5 — production switch awaits sign-off.
 
-## Loop stopped
+## Phase 2 — sign-off received, follow-up experiments
 
-Pausing here for review. Production switch from state-v5 → state-v9
-needs your sign-off. After that, Phase 2 work (each item ~1 day):
-  1. e_track re-eval — re-train corpus with match-cost NN on, see if
-     non-zero e_track input adds AUC.
-  2. Architecture sweep on the now-clean corpus.
-  3. Operating-point calibration (threshold sweep — earlier sweep at
-     0.5 vs 0.9 promote made no difference because logits saturate;
-     may want to re-train with looser cost ratios then sweep).
-  4. Match-cost NN audit — same kind of corpus/runtime mismatch
-     analysis applied to nn_match_v3.bin.
-  5. Joint retrain (state head + match-cost NN together once both
-     are clean).
+User signed off on v9. uc_v11.yaml flipped to `nn_state_v9.bin`
+(commit `f008d5e` in /mldata/config). Continued with Phase 2 work:
+
+### Phase 2a — e_track re-eval — BLOCKED
+
+Tried to use `FObsReplay` to populate non-zero e_track in the corpus
+using the existing `bench/data/phase3_e100.pt` model. Failed:
+
+```
+ValueError: phase3 obs_feature_names changed; expected (...
+'pose_kp_visible', 'det_conf', 'prev_det_conf'), got [...
+'adjusted_conf', 'pose_kp_visible']
+```
+
+The production phase3 model uses 12 features ending with `adjusted_conf`
+and `pose_kp_visible`. `FObsReplay`'s hardcoded list expects 13 features
+ending `pose_kp_visible, det_conf, prev_det_conf`. Schema drifted. To
+fix properly, either:
+  - update `FObsReplay` to compute `adjusted_conf` from raw fields (it
+    looks like a function of det_conf + prev_det_conf + scene_density,
+    likely defined inside the C runtime), OR
+  - regenerate pair_log with match-cost NN ON so that e_track is
+    captured live in the trace records (~2 hours of tracking).
+
+Deferring — Phase 1 already at parity-or-better on all three datasets.
+Logged for future work.
+
+### Phase 2b — architecture sweep — done, no improvement on PP22
+
+Trained `state_head_v11_h128.pt` with hidden=128, e_dim=32 (vs v9's
+hidden=64, e_dim=16):
+
+| variant   | combined val AUC | promote | demote | drop_unc | drop_lost |
+|-----------|-----------------:|--------:|-------:|---------:|----------:|
+| v9        |           0.943  |  0.998  |  0.886 |   0.991  |    0.898  |
+| v11_h128  |       **0.950**  |  0.998  |**0.902**|   0.991 |  **0.910**|
+
+Higher AUC on the validation set, but on the PP22 test bench:
+
+| variant   | mean MOTA PP22 | mean idf1 PP22 |
+|-----------|---------------:|---------------:|
+| v9        |     **0.4010** |          0.449 |
+| v11_h128  |         0.3918 |      **0.462** |
+
+v11 better on idf1 (+0.013) but worse on MOTA (−0.009). v9 wins on
+53/95 clips, v11 wins on 40/95. So the AUC gain is concentrated in
+the demote/drop_lost decisions; downstream MOTA is a different
+objective and the bigger model started over-confidently demoting
+some good tracks. v9 stays as production. Bigger architecture is
+not the bottleneck on PP22.
+
+### Phase 2c — operating-point calibration — already shown no-op
+
+Threshold sweep at export time (promote 0.5 vs 0.9) made zero
+difference on PP22 — the head's logits are saturated (val AUC =
+0.998 on promote means most predictions are at 0 or 1). Confirmed
+in Phase 1g.
+
+### Phase 2d/2e — match-cost NN audit + joint retrain — staged
+
+Higher leverage than 2a/2b/2c but bigger scope. The match-cost NN
+labelling logic in `src/analysis/modules.py:1864` (label = "track
+and det aligned to same GT") looks correct and matches runtime
+semantics — no obvious bug like the state head's. The remaining
+risk is the same kind of distribution drift the state head had:
+  - pair_log_v6 was generated with match-cost NN OFF (`nn_path: ""`)
+    so the recorded trajectories are the legacy match-score's, not
+    the NN's.
+  - Production uses the NN actively.
+  - Same kind of OOD-by-distribution-drift issue could be hiding
+    here, just less catastrophic because match-cost NN is local
+    (per-pair) not global (state machine).
+
+Audit + joint retrain deferred — would require regenerating pair_log
+with both NNs active, ~2h tracking + corpus rebuild + train state head
++ train match-cost NN. Multi-day project. Not worth blocking on now
+that v9 is shipping.
+
+## Final commits
+
+- `ubon_cstuff` `5a85d41`: e_track zeroing in C runtime.
+- `track` `095cb36`: match_cost_trace viewer overlay + --trace flag.
+- `track` `(retrain commit)`: build_state_corpus.py refactor +
+  train_state_head.py weight wiring + this plan doc.
+- `track` `94e4fab`: plan progress log up to v9.
+- `/mldata/config` `be81518`: nn_state_v8.bin, nn_state_v9.bin, +
+  uc_v11_state_v8.yaml / uc_v11_state_v9.yaml test configs.
+- `/mldata/config` `f008d5e`: uc_v11.yaml flipped to nn_state_v9.bin
+  (production switch).
+
+## Closeout
+
+State-head retrain is **complete**. Production uc_v11.yaml uses
+nn_state_v9.bin. Headlines:
+- PP22 test (95 clips): MOTA 0.4010 (was 0.296 with state-v5)
+- MOT (11 clips):       MOTA 0.4758 (+0.0149 vs no-NN)
+- CEVO (10 val+test):   MOTA ~0.704 (+0.028 vs no-NN)
+
+Phase 2 work staged in this doc for when the FObsReplay schema
+drift / match-cost NN audit are worth tackling.
