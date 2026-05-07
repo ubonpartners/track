@@ -1053,6 +1053,73 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events_list=Non
                         box=debug_entry_data["roi"]
                         display.draw_box(box, clr=(16,255,255,0), thickness=-1)
                         display.draw_box(box, clr=(128,255,0,0), thickness=4)
+                    if debug_entry_type=="match_cost_trace":
+                        # Per-frame (track, det) pair feature trace from utrack.
+                        # Each track that survived the spatial pre-filter shows
+                        # up at least once per pass. Group by track_id, prefer
+                        # the matched record, then render any track that the
+                        # tracker did NOT promote into the emitted output —
+                        # those are the UNCONFIRMED / LOST internal tracks.
+                        from src.analysis import pair_log_schema as _pls
+                        try:
+                            magic = debug_entry.get("magic")
+                            version = debug_entry.get("version")
+                            n_records = int(debug_entry.get("n_records", 0))
+                        except Exception:
+                            magic = version = None; n_records = 0
+                        if magic == _pls.PAIR_LOG_MAGIC and version == _pls.PAIR_LOG_VERSION and n_records > 0:
+                            arr = _pls.decode_records(debug_entry["data"], n_records)
+                            by_track = {}
+                            for r in arr:
+                                tid = int(r["track_id"])
+                                cur = by_track.get(tid)
+                                if cur is None or (int(r["was_matched"]) == 1 and int(cur["was_matched"]) == 0):
+                                    by_track[tid] = r
+                            # Always recompute emitted ids — `objs` from the
+                            # show_det branch above isn't in scope when the
+                            # detection overlay is toggled off.
+                            _emit_objs = trackset.objects_at_time(t) or []
+                            emitted_ids = {int(o.track_id) for o in _emit_objs if o.track_id is not None}
+                            # Categorise tracks that exist in the trace but did
+                            # NOT reach the emitted output:
+                            #   was_matched=1  → UNCONFIRMED gathering obs (would-be
+                            #                    track being held below the promotion
+                            #                    threshold — the "track that should
+                            #                    exist but doesn't" case)
+                            #   was_matched=0, obs<=1 → UNCONFIRMED killed on first miss
+                            #   was_matched=0, obs>=2 → LOST (in track_buffer grace,
+                            #                    or about to be removed)
+                            n_t = len(emitted_ids)
+                            n_unc_pending = n_unc_killed = n_lost = 0
+                            for tid, r in by_track.items():
+                                if tid in emitted_ids:
+                                    continue
+                                obs = int(r["observations"])
+                                miss = int(r["num_missed"])
+                                tsd = float(r["time_since_det"])
+                                matched = int(r["was_matched"]) == 1
+                                box = [float(r["track_x0"]), float(r["track_y0"]),
+                                       float(r["track_x1"]), float(r["track_y1"])]
+                                if matched:
+                                    clr = (200, 64, 200, 200)  # cyan — UNCONFIRMED matching but not promoted
+                                    label = f"[Up:{tid}] obs={obs}"
+                                    n_unc_pending += 1
+                                elif obs <= 1:
+                                    clr = (200, 240, 240, 0)   # yellow — UNCONFIRMED, dying
+                                    label = f"[Uk:{tid}] obs={obs} mis={miss}"
+                                    n_unc_killed += 1
+                                else:
+                                    clr = (160, 128, 128, 128) # gray — LOST, in grace period
+                                    label = f"[L:{tid}] obs={obs} mis={miss} tsd={tsd:.1f}s"
+                                    n_lost += 1
+                                display.draw_box(box, clr=clr, thickness=1, select_context=tid)
+                                display.draw_text(label, box[0], max(0.0, box[1]-0.012),
+                                                  fontScale=0.4, fontColor=clr,
+                                                  bgColor=(160,0,0,0))
+                            stats_line = (f"tracks: {n_t} TRACKED / {n_unc_pending} UNCONF-pending / "
+                                          f"{n_unc_killed} UNCONF-killed / {n_lost} LOST "
+                                          f"· trace records: {n_records}")
+                            display.draw_text(stats_line, 0.05, 0.07, fontScale=0.5)
 
             help="HELP\n"
             help+=f"h) toggle this help display {onoff(show_help)}\n"
