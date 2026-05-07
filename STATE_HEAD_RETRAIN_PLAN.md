@@ -1577,3 +1577,135 @@ Python source changes (uncommitted, on `master`):
 
 C-side: NOT modified (runtime cannot consume v18 head until 32→37
 extension lands in `nn_state.h` and `utrack.c`).
+
+---
+
+## Phase 7 — Fitness-shaped corpus weighting + the eval-metric correction
+
+User correction on 2026-05-07 (after I recommended a deploy flip on
+MOTA grounds): "we've seen the AUC stuff doesn't correlate much at
+all with actual outcome … the recent changes (lower thr) dramatically
+increase false positive tracks, which I care about. This is measured
+in the search optimisation … by a 'fitness' which accounts MOTA
+adjusted down for FP tracks. BIG drop with recent changes."
+
+The fitness function (`src/track_test.py:38`) is:
+`fitness = mota - 0.0005*fp_tracks - 0.002*fp_per_frame`.
+Every prior bench in this plan reported only MOTA; the +0.0502 MOTA
+win for `match-v9_face + new_track_thr=0.40` (Phase 5.7) was a
+fitness loss. Production was reverted to thr=0.70 immediately after
+the deploy.
+
+### 7.1 — Diagnostic: the v14 head vs v19 retrains on FP-track behavior
+
+Per-(seq, tid), examples are flagged "FP-track" when the track never
+matches any GT in the sequence. v14 prod head's behavior on the val set:
+
+| head | unc-FP-promote% | unc-FP-drop% | wrong-promotes |
+|---|--:|--:|--:|
+| v14_prod | 9.6% | 16.3% | 1872 |
+| v19_fb1.0 (control, cr=1.0) | 48.6% | 91.1% | 9472 |
+| v19_fb5.0 | 30.9% | 98.4% | 6012 |
+| v19_fb20.0 | 18.1% | 98.9% | 3520 |
+| v19b_fb1.0 (cr=2.0) | 62.9% | 92.7% | 12244 |
+| v19b_fb5.0 | 45.3% | 98.3% | 8828 |
+| v19b_fb20.0 | 22.9% | 98.3% | 4464 |
+
+Two confounds with v14: (a) v14 was trained on corpus_v8, not v11;
+(b) cr_promote=2.0 vs my v19's 1.0. cr_promote increases promote
+aggression so cr=2.0 (v19b) is *worse* on FP-track suppression than
+cr=1.0, which is opposite to v14's "high cr_promote = best AUC" win.
+Higher cr only helps FP avoidance when the corpus or features change
+the loss landscape — they didn't here.
+
+### 7.2 — Implementation: train-time fitness-fp-boost (no corpus rebuild)
+
+Added `--fitness-fp-boost` to `bench/train_state_head.py`:
+- Reads `gt_id_now` from existing corpus.
+- Per-(sequence, track_id), checks if the track ever matched any GT.
+- For "never matched any GT" tracks (FP tracks per the test
+  definition), multiplies sample weight by the boost factor.
+- 1.0 = no change. 5.0 / 20.0 swept here.
+
+In corpus_v11 train: 43,128 of 2,666,647 examples (1.6%) are on FP
+tracks. 1319 of 11,401 tracks (11.6%) are FP — they're short
+(avg 33 frames vs 260 for real). Boost up to 20× still leaves them
+minority class.
+
+Also added `--no-history` to `train_state_head.py` to drop the 5
+v18 history-aggregate columns at train time, producing a 32-dim head
+that's drop-in deployable with the current C runtime
+(UTRACK_NN_STATE_IN_DIM=32) — no C change required for the v19
+runtime test.
+
+### 7.3 — End-to-end fitness bench (176 clips, all v6 splits)
+
+The first bench in this plan that captures `fp_tracks` and
+`fp_per_frame` and reports the user's fitness function. All v19
+heads were trained on `state_corpus_v11_train.npz` with
+`--no-history`, hidden=64, e_dim=16, 30 epochs.
+
+| variant | fitness | MOTA | FPTr | FP/fr | Δfit vs prod | wins/176 |
+|---|--:|--:|--:|--:|--:|--:|
+| prod_v14 (match-v7 + thr=0.70 + state-v14) | 0.4272 | 0.4300 | 1.7 | 0.970 | — | — |
+| **v9face_v14 (match-v9_face + thr=0.70 + state-v14)** | **0.4280** | 0.4309 | 2.1 | 0.948 | **+0.0008** | **87/176** |
+| v19_fb1.0  (cr=1.0) | 0.4020 | 0.4058 | 3.9 | 0.935 | -0.0252 | 24/176 |
+| v19_fb5.0           | 0.4115 | 0.4152 | 4.0 | 0.830 | -0.0157 | 38/176 |
+| v19_fb20.0          | 0.4142 | 0.4179 | 2.0 | 1.339 | -0.0130 | 46/176 |
+| v19b_fb1.0 (cr=2.0) | 0.4102 | 0.4137 | 2.5 | 1.128 | -0.0170 | 29/176 |
+| v19b_fb5.0          | 0.4002 | 0.4042 | 3.5 | 1.142 | -0.0270 | 31/176 |
+| v19b_fb20.0         | 0.4006 | 0.4040 | 2.4 | 1.085 | -0.0266 | 30/176 |
+
+Per-family fitness:
+
+| family | n   | prod  | v9face_v14 | v19_fb20 | v19b_fb20 |
+|--------|----:|------:|-----------:|---------:|----------:|
+| MOT17  |   7 | 0.348 | 0.352      | 0.337    | 0.347     |
+| MOT20  |   4 | 0.679 | 0.673      | 0.661    | 0.670     |
+| PP22   | 133 | 0.378 | 0.377      | 0.361    | 0.356     |
+| UKof   |  18 | 0.581 | **0.593**  | 0.583    | 0.506     |
+| INof   |  14 | 0.670 | **0.670**  | 0.669    | 0.637     |
+
+### 7.4 — Verdict
+
+1. **`v9face_v14` is the safe deployable**: face-only swap, +0.0008
+   fitness, 87/176 wins, FPTr only marginally up (2.1 vs 1.7), gains
+   on UKof (+0.012) and tied on INof. No threshold change.
+2. **All v19 retrains lose on fitness vs v14 prod**, by 0.013–0.027.
+   Replicates the v15/v16/v17/v18 pattern: state-head retrains on the
+   newer corpora plateau below v14 end-to-end.
+3. **The fitness-fp-boost works directionally** within v19/cr=1.0:
+   fb=1.0 → -0.0252, fb=20.0 → -0.0130. Boost moved things in the
+   right direction by 0.012 fitness, which is the size of the v14
+   gap. With one more push (matching corpus, longer training, or
+   stronger boost) it might close.
+4. **cr_promote=2.0 is *not* a free FP-suppression win**: increasing
+   cr increases promote aggression (more wrong promotes on FP
+   tracks). v14's cr=2.0 success came from corpus distribution, not
+   from cr.
+
+### 7.5 — Three live next steps
+
+a. **Ship `v9face_v14`** (separate from any state-head work). One YAML
+   change: `nn_path: nn_match_v9_face.bin`, keep `nn_state_v14.bin`,
+   keep `new_track_thr: 0.70`. C-side already supports v2 pair-trace
+   (commit e07fe93). User decision.
+b. **Retrain v19 on v14's corpus_v8** with the same fitness-fp-boost
+   and cr=2.0 — directly test whether the "v14 corpus + boost" beats
+   v14 prod on fitness. If yes, deploy this combo as state-v20.
+c. **Long-term: replace per-head BCE with fitness-shaped loss.**
+   The boost is a coarse proxy. A better signal: per-track future
+   FP/MOTA outcome reweighting, or policy-gradient through the
+   assignment (groundwork already in `bench/assign_sim.py`).
+
+### 7.6 — Files
+
+- `bench/train_state_head.py`: +`--no-history`, +`--fitness-fp-boost`
+- `bench/build_state_corpus.py`: +`--fitness-fp-boost` (corpus-time
+  variant of the same logic; not used in this round, kept for completeness)
+- v19 heads: `bench/data/state_head_v19{,b}_fb{1.0,5.0,20.0}.{pt,bin}`
+  + `/mldata/config/track/trackers/nn_state_v19{,b}_fb{1_0,5_0,20_0}.bin`
+- bench: `/tmp/joint_retrain/bench_v19_fitness.{py,json,log}`
+- Memories saved: `feedback_track_eval_metric.md`,
+  `feedback_track_history_aggregates.md`,
+  `feedback_track_training_objective.md`

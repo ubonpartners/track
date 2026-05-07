@@ -761,6 +761,7 @@ def extract_sequence_label_driven(
     delay_aug_offsets: Tuple[int, ...] = (),
     delay_aug_tau: float = 2.0,
     f_obs_replay: Optional["FObsReplay"] = None,
+    fitness_fp_boost: float = 1.0,
 ) -> np.ndarray:
     """Walk one sequence and emit label-driven examples.
 
@@ -769,6 +770,13 @@ def extract_sequence_label_driven(
     held UNCONFIRMED for K extra frames before promoting. Each copy's
     examples carry weight = exp(-K/delay_aug_tau). Empty tuple = no
     augmentation (Phase 1b default; switch on after the bin-coverage check).
+
+    fitness_fp_boost: weight multiplier applied to all examples on tracks
+    that never matched any GT (i.e., would count as `fp_tracks` in the
+    user's fitness function `mota - 0.0005*fp_tracks - 0.002*fp_per_frame`).
+    Default 1.0 = no change. Values >1 push the loss to focus on getting
+    the FP-track decisions right (drop fast, don't promote), which matches
+    what the search-time fitness penalises.
     """
     run = ts.TrackSet(ubtrk2_path, decode_payloads=False, analysis_mode=True)
     gt = ts.TrackSet(gt_trackset_path)
@@ -1222,6 +1230,12 @@ def extract_sequence_label_driven(
     # Pass D: fill in label fields. Uses the same oracle calls so the
     # corpus is internally consistent (replay transitions and labels agree).
     # ------------------------------------------------------------------
+    # Per-track FP flag: a track that never matched any GT in this sequence
+    # is exactly what counts in `fp_tracks` in src/track_test.py
+    # fitness_score (penalty 0.0005 each). Boost weight on those examples
+    # so the loss tracks deployment fitness, not just per-head AUC.
+    fp_track_ids = {tid for tid in track_gt_history.keys()
+                    if not track_aligned_frames.get(tid)}
     out = np.zeros((len(examples),), dtype=EXAMPLE_DTYPE)
     for i, ex in enumerate(examples):
         tid = int(ex["track_id"]); fi = int(ex["frame_idx"])
@@ -1240,6 +1254,9 @@ def extract_sequence_label_driven(
             demote_label = int(oracle_demote(tid, fi))
         elif prior_state == STATE_LOST:
             drop_label = int(oracle_drop_lost(tid, fi))
+
+        if fitness_fp_boost != 1.0 and tid in fp_track_ids:
+            ex["weight"] = float(ex["weight"]) * fitness_fp_boost
 
         for k, v in ex.items():
             out[i][k] = v
@@ -1296,6 +1313,13 @@ def main():
     p.add_argument("--delay-aug-tau", type=float, default=2.0,
                    help="Time-constant for the delay-aug weight decay "
                         "exp(-offset/tau).")
+    p.add_argument("--fitness-fp-boost", type=float, default=1.0,
+                   help="Weight multiplier for examples on tracks that "
+                        "never match any GT (= fp_tracks in fitness "
+                        "function). 1.0 = no boost (default). Values >1 "
+                        "push the loss to weight FP-track-avoidance "
+                        "harder, matching the search-time fitness "
+                        "(0.0005 per FP track + 0.002 per FP per frame).")
     args = p.parse_args()
     delay_aug_offsets: Tuple[int, ...] = tuple(
         int(x) for x in args.delay_aug.split(",") if x.strip()
@@ -1329,6 +1353,7 @@ def main():
                 delay_aug_offsets=delay_aug_offsets,
                 delay_aug_tau=args.delay_aug_tau,
                 f_obs_replay=f_obs_replay,
+                fitness_fp_boost=args.fitness_fp_boost,
             )
         else:
             ex = extract_sequence(

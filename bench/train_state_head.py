@@ -27,7 +27,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from typing import Tuple
+from typing import Dict, Tuple
 
 import numpy as np
 import torch
@@ -191,6 +191,19 @@ def main():
                    help="zero out the 16-dim e_track input (ablation)")
     p.add_argument("--zero-spatial",        action="store_true",
                    help="zero out near_edge/det_w/det_h/log_aspect/log_pose_kp (ablation)")
+    p.add_argument("--no-history",          action="store_true",
+                   help="drop the 5 history-aggregate input columns "
+                        "(ema_match_x_conf, log_sum_det_conf, "
+                        "min/mean_match_score, n_strong_matches). "
+                        "Trains a 32-dim head that's drop-in deployable "
+                        "with the current C runtime (UTRACK_NN_STATE_IN_DIM=32).")
+    p.add_argument("--fitness-fp-boost",    type=float, default=1.0,
+                   help="Per-example weight multiplier on examples whose "
+                        "track never matches any GT (i.e., the track would "
+                        "count in fp_tracks for the user's fitness function "
+                        "`mota - 0.0005*fp_tracks - 0.002*fp_per_frame`). "
+                        "Default 1.0 = no change. Computed at train-time from "
+                        "the corpus's gt_id_now field — no corpus rebuild needed.")
     p.add_argument("--summary-out",         type=str, default=None,
                    help="if set, write JSON {best_score, best_aucs, params} to this path")
     p.add_argument("--seed",                type=int, default=0)
@@ -203,9 +216,17 @@ def main():
                               zero_spatial=args.zero_spatial)
     rec_va, X_va = load_split(args.val,   zero_e_track=args.zero_e_track,
                               zero_spatial=args.zero_spatial)
-    print(f"train: {len(rec_tr)} examples; val: {len(rec_va)}")
-    if args.zero_e_track or args.zero_spatial:
-        print(f"ablation: zero_e_track={args.zero_e_track} zero_spatial={args.zero_spatial}")
+    if args.no_history:
+        # Drop the 5 history-aggregate columns (14:19) so the trained head
+        # is drop-in deployable with the C runtime's UTRACK_NN_STATE_IN_DIM=32.
+        # Layout from build_input_matrix: [0:9] base, [9:14] spatial,
+        # [14:19] history, [19:35] e_track.
+        X_tr = np.concatenate([X_tr[:, :14], X_tr[:, 19:]], axis=1)
+        X_va = np.concatenate([X_va[:, :14], X_va[:, 19:]], axis=1)
+    print(f"train: {len(rec_tr)} examples; val: {len(rec_va)}  (in_dim={X_tr.shape[1]})")
+    if args.zero_e_track or args.zero_spatial or args.no_history:
+        print(f"ablation: zero_e_track={args.zero_e_track} "
+              f"zero_spatial={args.zero_spatial} no_history={args.no_history}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = StateHead(in_dim=X_tr.shape[1], hidden=args.hidden, e_dim=args.e_dim,
@@ -307,9 +328,36 @@ def main():
     # Sample weights — written by the label-driven corpus builder. Older
     # corpora that lack the field are treated as all-1.0.
     if "weight" in rec_tr.dtype.names:
-        sw_tr = torch.from_numpy(rec_tr["weight"].astype(np.float32)).to(device)
+        sw_tr_np = rec_tr["weight"].astype(np.float32).copy()
     else:
-        sw_tr = torch.ones(len(rec_tr), dtype=torch.float32, device=device)
+        sw_tr_np = np.ones(len(rec_tr), dtype=np.float32)
+
+    # Fitness-shaped FP-track boost. A track is FP iff it never has a
+    # matched GT id across any of its frames in this sequence — exactly
+    # what counts as `fp_tracks` in src/track_test.py:fitness_score
+    # (penalty 0.0005 each, plus 0.002 per FP per frame). Up-weighting
+    # examples on those tracks pushes the loss to track deployment fitness
+    # rather than just per-head AUC.
+    if args.fitness_fp_boost != 1.0 and "gt_id_now" in rec_tr.dtype.names:
+        from collections import defaultdict
+        seq_arr = rec_tr["sequence"]; tid_arr = rec_tr["track_id"]
+        gid_arr = rec_tr["gt_id_now"]
+        ever_matched: Dict[Tuple[str, int], bool] = defaultdict(bool)
+        # Pass 1: any GT match per (seq, tid)?
+        for i in range(len(rec_tr)):
+            if gid_arr[i] >= 0:
+                key = (str(seq_arr[i]), int(tid_arr[i]))
+                ever_matched[key] = True
+        # Pass 2: boost FP-track examples in-place.
+        n_fp = 0
+        for i in range(len(rec_tr)):
+            key = (str(seq_arr[i]), int(tid_arr[i]))
+            if not ever_matched.get(key, False):
+                sw_tr_np[i] *= args.fitness_fp_boost
+                n_fp += 1
+        print(f"fitness FP-track boost: ×{args.fitness_fp_boost} on "
+              f"{n_fp} examples ({n_fp/len(rec_tr)*100:.1f}% of train)")
+    sw_tr = torch.from_numpy(sw_tr_np).to(device)
 
     head_names = ["promote", "demote", "drop_unconfirmed", "drop_lost"]
 
