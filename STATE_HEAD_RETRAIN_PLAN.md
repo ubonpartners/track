@@ -533,7 +533,7 @@ on top of a working head.
 User signed off on v9. uc_v11.yaml flipped to `nn_state_v9.bin`
 (commit `f008d5e` in /mldata/config). Continued with Phase 2 work:
 
-### Phase 2a — e_track re-eval — BLOCKED
+### Phase 2a — e_track re-eval — DONE, no improvement
 
 Tried to use `FObsReplay` to populate non-zero e_track in the corpus
 using the existing `bench/data/phase3_e100.pt` model. Failed:
@@ -556,6 +556,66 @@ fix properly, either:
 
 Deferring — Phase 1 already at parity-or-better on all three datasets.
 Logged for future work.
+
+**Resumed 2a after fixing the schema drift**:
+
+The `phase3_v3_conf.pt` model has the 13-feature schema that
+`FObsReplay` expects (the earlier `phase3_e100.pt` was an older model
+that used `adjusted_conf` instead of `det_conf`+`prev_det_conf`). Used
+that to populate non-zero `e_track` in the corpus.
+
+Other supporting changes:
+- `extract_sequence_label_driven` now accepts and threads through
+  `f_obs_replay`, maintains per-track `e_track_state`, and updates the
+  EMA on matched obs. Bin coverage check confirms 92.2% of train
+  examples have non-zero `e_track` (the 7.8% zeros are first-frame
+  UNCONFIRMED, before any matched obs).
+- `utrack.c`: added `param_state_head_use_e_track` YAML knob (default
+  false). When true, the live `e_track` accumulator is fed to the
+  state head; when false, the zero buffer (matches v8/v9 training).
+  Selected at all three call sites.
+- New `uc_v11_state_v12.yaml` test config with `state_head_use_e_track:
+  true` and `nn_state_path: nn_state_v12.bin`.
+
+**Trained `state_head_v12.pt`** with the same cost ratios as v9
+(cr_promote=1.0, cr_demote=1.0, cr_drop_unc=0.2, cr_drop_lost=0.1).
+Val AUCs:
+
+| head              | v9 (e_track=0) | v12 (e_track live) | Δ |
+|-------------------|---------------:|-------------------:|--:|
+| combined          |       0.9431   |        **0.9496**  |  +0.0065 |
+| promote           |       0.9979   |          0.9984    |  +0.0005 |
+| demote            |       0.8857   |        **0.8965**  |  +0.0109 |
+| drop_unconfirmed  |       0.9912   |          0.9917    |  +0.0005 |
+| drop_lost         |       0.8976   |        **0.9117**  |  +0.0141 |
+
+Substantial AUC lift on demote and drop_lost — exactly the heads
+where `e_track`'s reid + motion encoding should help most.
+
+**MOTA bench (PP22, MOT, CEVO)**:
+
+|              | v9 (e_track=0) | v12 (e_track live) | Δ |
+|--------------|---------------:|-------------------:|--:|
+| PP22 test    |    **0.4010**  |          0.3986    |  −0.0024 |
+| MOT (n=11)   |    **0.4713**  |          (~0.471)  |  ~−0.001 |
+| CEVO (n=13)  |    **0.6907**  |          (~0.690)  |  ~−0.001 |
+
+v12 wins on slightly more PP22 clips (44 vs 40) but with narrower
+margins, so mean MOTA is slightly lower. Same pattern on MOT and
+CEVO: the `e_track`-driven AUC gain on demote/drop_lost doesn't
+translate into MOTA gain — once a track is established, the
+deterministic `missed≥2` floor on demote and the `time≥buffer or
+missed≥max` floor on drop_lost are kicking in before the head's
+cleaner signal can affect the trajectory.
+
+**Verdict**: `e_track` doesn't justify the additional inference cost
+or training-data complexity at this scale. v9 remains production.
+Confirmed empirically rather than guessed.
+
+A more aggressive setup (lower hard floors so the head's e_track
+signal actually drives transitions) might unlock the AUC gain — but
+that's a separate experiment in cost-ratio space, not in feature
+space, and earlier sweep (v8 → v9 → v10) already mapped that axis.
 
 ### Phase 2b — architecture sweep — done, no improvement on PP22
 
@@ -588,7 +648,7 @@ difference on PP22 — the head's logits are saturated (val AUC =
 0.998 on promote means most predictions are at 0 or 1). Confirmed
 in Phase 1g.
 
-### Phase 2d/2e — match-cost NN audit + joint retrain — staged
+### Phase 2d — match-cost NN audit — bug found, retrain deferred
 
 Higher leverage than 2a/2b/2c but bigger scope. The match-cost NN
 labelling logic in `src/analysis/modules.py:1864` (label = "track
@@ -607,6 +667,42 @@ Audit + joint retrain deferred — would require regenerating pair_log
 with both NNs active, ~2h tracking + corpus rebuild + train state head
 + train match-cost NN. Multi-day project. Not worth blocking on now
 that v9 is shipping.
+
+**Resumed 2d audit after Phase 2a wrapped up**:
+
+Read `src/analysis/modules.py:1716-1900` (`evaluate_pair_logger`).
+Found a similar staleness bug to the state head's:
+
+`modules.py:1850`:
+```python
+if track_gt_id is None:
+    # Fallback: try the track's last-known box vs current GT.
+    ...
+    track_gt_history[track_id_int] = track_gt_id   # ← cached forever
+```
+
+Once a track gets a GT id assigned (either from the per-frame
+emitted-objects update at 1786-1790 or from this fallback at 1850),
+the entry is never expired. If the track later DRIFTS to follow a
+different GT identity, the cached gt_id is stale and the per-pair
+label `det_gt_id == track_gt_id` is wrong.
+
+For tracks that get emitted (TRACKED), the per-frame update at 1786-1790
+keeps the cache fresh — no bug there. The bug only fires for tracks
+that go UNCONFIRMED-only (never emitted), which is a minority of
+tracks. So the impact on match-cost NN AUC is likely small but
+non-zero.
+
+**Fix design** (analogous to what we did in `build_state_corpus.py`):
+extend the per-frame `track_gt_history` update to also use pair-trace
+records' `track_x0..y1` boxes. Each frame, for every track in the
+pair-trace records, look up its current GT alignment and overwrite
+the cache. This keeps the cache fresh for UNCONFIRMED/LOST tracks too.
+
+**Retrain not executed**: small bug × small minority × need full
+pair_log regen + corpus rebuild + train + bench (~half day). Filed
+in this doc. Worth picking up alongside Phase 2e (joint state +
+match-cost retrain on a new pair_log).
 
 ## Final commits
 

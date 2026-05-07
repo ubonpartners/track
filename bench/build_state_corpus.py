@@ -734,6 +734,7 @@ def extract_sequence_label_driven(
     class_name: str = "person",
     delay_aug_offsets: Tuple[int, ...] = (),
     delay_aug_tau: float = 2.0,
+    f_obs_replay: Optional["FObsReplay"] = None,
 ) -> np.ndarray:
     """Walk one sequence and emit label-driven examples.
 
@@ -899,6 +900,9 @@ def extract_sequence_label_driven(
         # appearance; decrements each frame; once at 0 the natural oracle
         # transition runs.
         held_remaining: Dict[int, int] = {}
+        # Per-track f_obs EMA accumulator (e_track[16]) — updated on every
+        # matched obs when f_obs_replay is supplied. Zeros otherwise.
+        e_track_state: Dict[int, Tuple[np.ndarray, bool]] = {}
 
         for fi in range(n_frames):
             frame = run.frames[fi]
@@ -927,6 +931,7 @@ def extract_sequence_label_driven(
                         float(first_rec["track_y1"]),
                     )
                     held_remaining[tid] = int(delay_offset)
+                    e_track_state[tid] = (np.zeros(E_TRACK_DIM, dtype=np.float32), False)
                     # immediate-confirm short-circuit: matches utrack.c:1707.
                     # Only fires on the natural trajectory (delay_offset==0)
                     # and only when this frame's matched det conf is above
@@ -972,6 +977,17 @@ def extract_sequence_label_driven(
                     bx0, by0, bx1, by1, pose_kp,
                 )
 
+                # Update per-track e_track EMA on matched obs (when f_obs
+                # replay is configured). The state head will see the POST-
+                # update value, matching what the C runtime would feed it.
+                e_track_cur, e_seen = e_track_state.get(
+                    tid, (np.zeros(E_TRACK_DIM, dtype=np.float32), False))
+                if matched and f_obs_replay is not None and match_rec is not None:
+                    obs_row = f_obs_replay.build_obs_row(match_rec)
+                    e_track_cur, e_seen = f_obs_replay.update(
+                        e_track_cur, obs_row, e_seen)
+                e_track_state[tid] = (e_track_cur, e_seen)
+
                 valid_promote = 1 if prior_state == STATE_UNCONFIRMED else 0
                 valid_demote  = 1 if prior_state == STATE_TRACKED else 0
                 valid_drop    = 1 if prior_state in (STATE_UNCONFIRMED, STATE_LOST) else 0
@@ -993,7 +1009,7 @@ def extract_sequence_label_driven(
                     phase3_pair_score=float(phase3_pair_score),
                     near_edge=near_edge, det_w=det_w, det_h=det_h,
                     log_aspect=log_aspect, log_pose_kp=log_pose_kp,
-                    e_track=np.zeros(E_TRACK_DIM, dtype=np.float32),
+                    e_track=e_track_cur.copy(),
                     promote_label=0, demote_label=0, drop_label=0,
                     gt_id_now=-1,
                     weight=float(weight),
@@ -1042,6 +1058,8 @@ def extract_sequence_label_driven(
                         del tracks[tid]
                     if tid in held_remaining:
                         del held_remaining[tid]
+                    if tid in e_track_state:
+                        del e_track_state[tid]
                 else:
                     tracks[tid] = _TH(
                         state=int(next_state),
@@ -1068,6 +1086,12 @@ def extract_sequence_label_driven(
                     bx0, by0, bx1, by1, 0,
                 )
 
+                # Carry the track's e_track unchanged on absent frames (no
+                # matched obs to update from). Matches what the C runtime
+                # would feed the head — last EMA value.
+                e_track_cur, _ = e_track_state.get(
+                    tid, (np.zeros(E_TRACK_DIM, dtype=np.float32), False))
+
                 valid_promote = 1 if prior_state == STATE_UNCONFIRMED else 0
                 valid_demote  = 1 if prior_state == STATE_TRACKED else 0
                 valid_drop    = 1 if prior_state in (STATE_UNCONFIRMED, STATE_LOST) else 0
@@ -1089,7 +1113,7 @@ def extract_sequence_label_driven(
                     phase3_pair_score=0.0,
                     near_edge=near_edge, det_w=det_w, det_h=det_h,
                     log_aspect=log_aspect, log_pose_kp=log_pose_kp,
-                    e_track=np.zeros(E_TRACK_DIM, dtype=np.float32),
+                    e_track=e_track_cur.copy(),
                     promote_label=0, demote_label=0, drop_label=0,
                     gt_id_now=-1,
                     weight=float(weight),
@@ -1121,6 +1145,8 @@ def extract_sequence_label_driven(
                     del tracks[tid]
                     if tid in held_remaining:
                         del held_remaining[tid]
+                    if tid in e_track_state:
+                        del e_track_state[tid]
                 else:
                     tracks[tid].state = int(next_state)
                     tracks[tid].num_missed = int(num_missed)
@@ -1238,6 +1264,7 @@ def main():
                 immediate_confirm_thr=args.immediate_confirm_thr,
                 delay_aug_offsets=delay_aug_offsets,
                 delay_aug_tau=args.delay_aug_tau,
+                f_obs_replay=f_obs_replay,
             )
         else:
             ex = extract_sequence(
