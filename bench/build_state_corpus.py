@@ -91,10 +91,13 @@ class FObsReplay:
     faster than torch on CPU for a handful of features at a time.
     """
 
-    OBS_FEATURE_NAMES = (
+    OBS_FEATURE_NAMES_V1 = (
         "reid_cos_raw", "reid_z", "kf_d2", "of_score", "kf_score", "sim_term",
         "ocm_cos", "track_speed", "log_observations", "log_num_missed",
         "pose_kp_visible", "det_conf", "prev_det_conf",
+    )
+    OBS_FEATURE_NAMES_V2 = OBS_FEATURE_NAMES_V1 + (
+        "det_subbox_conf", "track_subbox_conf", "det_fiqa_score",
     )
 
     def __init__(self, ckpt_path: str):
@@ -109,25 +112,29 @@ class FObsReplay:
                 f"corpus E_TRACK_DIM={E_TRACK_DIM}; bump the dtype "
                 f"width or retrain to match"
             )
-        names = list(ckpt["obs_feature_names"])
-        if names != list(self.OBS_FEATURE_NAMES):
+        names = tuple(ckpt["obs_feature_names"])
+        if names == self.OBS_FEATURE_NAMES_V1:
+            self.with_face = False
+        elif names == self.OBS_FEATURE_NAMES_V2:
+            self.with_face = True
+        else:
             raise ValueError(
-                f"phase3 obs_feature_names changed; expected "
-                f"{self.OBS_FEATURE_NAMES}, got {names}"
+                f"phase3 obs_feature_names not recognised; expected v1 "
+                f"({self.OBS_FEATURE_NAMES_V1}) or v2 "
+                f"({self.OBS_FEATURE_NAMES_V2}); got {names}"
             )
         self.mean = np.asarray(ckpt["obs_mean"], dtype=np.float32)
         self.std  = np.asarray(ckpt["obs_std"],  dtype=np.float32)
-        # f_obs.net.0 is Linear(13 → tower_hidden); .net.2 is Linear(hidden → e_dim).
         sd = ckpt["state_dict"]
-        self.W1 = sd["f_obs.net.0.weight"].numpy().astype(np.float32)  # (H, 13)
+        self.W1 = sd["f_obs.net.0.weight"].numpy().astype(np.float32)  # (H, obs_in)
         self.b1 = sd["f_obs.net.0.bias"].numpy().astype(np.float32)    # (H,)
         self.W2 = sd["f_obs.net.2.weight"].numpy().astype(np.float32)  # (E, H)
         self.b2 = sd["f_obs.net.2.bias"].numpy().astype(np.float32)    # (E,)
 
     def build_obs_row(self, rec) -> np.ndarray:
-        """Build the 13-dim raw obs feature row from one pair-trace record."""
+        """Build the obs feature row from one pair-trace record. Width
+        depends on whether the loaded ckpt is v1 (13) or v2 (16)."""
         row = np.empty(self.obs_in, dtype=np.float32)
-        # Match ordering of OBS_FEATURE_NAMES exactly.
         row[0]  = float(rec["reid_cos_raw"])
         row[1]  = float(rec["reid_z"])
         row[2]  = float(rec["kf_d2"])
@@ -141,7 +148,12 @@ class FObsReplay:
         row[10] = float(rec["pose_kp_visible"])
         row[11] = float(rec["det_conf"])
         row[12] = float(rec["prev_det_conf"])
-        # NaN→0 (matches train_phase3.build_obs_matrix nan_to_num behaviour)
+        if self.with_face:
+            # Pair-trace records have these fields after the v2 schema bump.
+            # Older v1 .npz files won't have them and would raise KeyError.
+            row[13] = float(rec["det_subbox_conf"])
+            row[14] = float(rec["track_subbox_conf"])
+            row[15] = float(rec["det_fiqa_score"])
         np.nan_to_num(row, copy=False)
         return row
 

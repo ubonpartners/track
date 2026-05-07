@@ -44,13 +44,24 @@ import src.trackset as ts
 
 
 CREATION_FEATURE_NAMES = (
+    # base 7 (v1)
     "det_conf",
     "det_w",
     "det_h",
     "det_aspect",
     "pose_kp_visible",
-    "scene_density",
+    "scene_density",     # log(n_dets in this frame)
     "det_y_norm",
+    # v2: face / FIQA — face gives a much stronger "is this real?"
+    # signal than det.conf alone in cluttered scenes.
+    "subbox_conf",       # face confidence (0 if no face on det)
+    "fiqa_score",        # face image quality
+    # v2: "Bayesian" frame-level context — model learns priors from these
+    "frame_mean_conf",   # avg det.conf in this frame
+    "frame_max_conf",    # max det.conf in this frame
+    "frame_face_frac",   # fraction of dets with face (subbox_conf>0)
+    "rel_conf_to_mean",  # det.conf - frame_mean_conf (how confident this
+                         # det is *relative to* the typical det in scene)
 )
 N_FEATURES = len(CREATION_FEATURE_NAMES)
 
@@ -162,13 +173,38 @@ def extract_sequence(seq_name: str, ubtrk2_path: str, gt_path: str,
     # but the outer pass over GT is once per frame instead of once per
     # (track, frame_in_track_history).
     n_dets_per_frame: List[int] = []
+    # Frame-level "context" stats — used as Bayesian priors at inference.
+    # Computed from inference_dets (the raw detector output, before
+    # matching) so they reflect "what scene am I in" not "what tracks
+    # exist".
+    frame_mean_conf: List[float] = []
+    frame_max_conf: List[float] = []
+    frame_face_frac: List[float] = []
     # alignment_history[track_id] = list of (frame_idx, gtid_or_-1, iou)
     alignment_history: Dict[int, List[Tuple[int, int, float]]] = {}
     track_first_appearance: Dict[int, Tuple[int, dict]] = {}
 
     for i, frame in enumerate(run.frames):
         objs = frame.get("objects") or {}
-        n_dets_per_frame.append(len(frame.get("inference_dets") or []))
+        inference = frame.get("inference_dets") or []
+        n_dets_per_frame.append(len(inference))
+        # Frame-level context. Walk inference_dets once.
+        if inference:
+            confs = []; n_face = 0
+            for d in inference:
+                if not isinstance(d, dict): continue
+                c = float(d.get("confidence", 0.0))
+                confs.append(c)
+                if float(d.get("subbox_conf", 0.0)) > 0.0:
+                    n_face += 1
+            if confs:
+                frame_mean_conf.append(sum(confs) / len(confs))
+                frame_max_conf.append(max(confs))
+                frame_face_frac.append(n_face / len(confs))
+            else:
+                frame_mean_conf.append(0.0); frame_max_conf.append(0.0); frame_face_frac.append(0.0)
+        else:
+            frame_mean_conf.append(0.0); frame_max_conf.append(0.0); frame_face_frac.append(0.0)
         if not isinstance(objs, dict) or not objs:
             continue
         t = float(frame.get("frame_time", 0.0))
@@ -223,8 +259,16 @@ def extract_sequence(seq_name: str, ubtrk2_path: str, gt_path: str,
         pose_kp = float(_pose_visible_count(first_obj.get("pose_points")))
         w, h, aspect, cy = _norm_box_dims(bbox, 1.0, 1.0)
         scene_density = float(np.log1p(n_dets_per_frame[first_idx]))
+        # v2 features
+        subbox_conf = float(first_obj.get("subbox_conf", 0.0))
+        fiqa_score = float(first_obj.get("fiqa_score", 0.0))
+        f_mean = (frame_mean_conf[first_idx] if first_idx < len(frame_mean_conf) else 0.0)
+        f_max  = (frame_max_conf[first_idx]  if first_idx < len(frame_max_conf)  else 0.0)
+        f_face = (frame_face_frac[first_idx] if first_idx < len(frame_face_frac) else 0.0)
+        rel_conf = det_conf - f_mean
         feats = np.array([det_conf, w, h, aspect, pose_kp, scene_density,
-                          cy], dtype=np.float32)
+                          cy, subbox_conf, fiqa_score, f_mean, f_max,
+                          f_face, rel_conf], dtype=np.float32)
         np.nan_to_num(feats, copy=False)
 
         # walk hist (already in frame order because frames iterated in order)

@@ -1346,17 +1346,80 @@ C-side changes (need to commit in ubon_cstuff):
 uc_v11.yaml NOT yet flipped — awaiting user decision on which option
 to deploy.
 
-### 5.6 — Open follow-ups
+### 5.6 — Follow-ups attempted (all NEGATIVE)
 
-- **Add face features to state head**: currently only match-cost
-  uses them. State head's promote/demote/drop decisions are about
-  identity stability, where face is the strongest signal we have.
-- **Joint state retrain on v9_face corpus**: state-corpus rebuild +
-  retrain may add another increment over the lowthr+face baseline.
-- **Bayesian context features**: still on the list — frame-mean
-  det_conf, nearby-track count as additional NN inputs (NOT
-  heuristic switches).
-- **Threshold-free creation head v3**: the failed Phase 3 head had
-  no face features. With face + the joint retrain pipeline now in
-  place, a v3 attempt with the richer feature set is worth one more
-  iteration before declaring the manual threshold unavoidable.
+**State head retrain on v9_face corpus (state-v16, NEGATIVE).** Built
+state-corpus v10 using face-aware match-cost as f_obs_replay (so
+e_track now encodes face info). Trained state head v16 with cr_promote
+sweep on v10. Bench across 176 clips at thr=0.30:
+
+| variant | mean MOTA | Δ vs face_lo |
+|---|--:|--:|
+| state-v14 + match-v9_face (face_lo) | 0.4722 | — |
+| v16_p1.0 + match-v9_face | 0.4668 | −0.0055 |
+| v16_p2.0 + match-v9_face | 0.4653 | −0.0069 |
+| v16_p3.0 + match-v9_face | 0.4548 | −0.0174 |
+
+Same pattern as v15 retrain — fresh state-head retrains on the new
+distribution underperform the v14 head running on the same trajectories.
+Likely overfit on a noisy corpus that's being labelled by a state machine
+the new head doesn't quite match.
+
+**Creation head v3 with face + Bayesian context features (NEGATIVE).**
+Extended `build_creation_corpus.py` from 7 to 13 features:
+- face: subbox_conf, fiqa_score
+- Bayesian context: frame_mean_conf, frame_max_conf, frame_face_frac,
+  rel_conf_to_mean
+
+Discovery: emitted-object dicts in ubtrk2 strip subbox info — face
+features are 0 in 100% of corpus rows for this dataset. Only the 4
+Bayesian context features added real signal. Discard-prediction
+precision rose 46% → 50% (modest improvement).
+
+Bench across 176 clips, post-hoc suppression on v9_face trajectories:
+
+| τ (P(discard)>) | mean MOTA | Δ vs face_lo |
+|---|--:|--:|
+| 0.5 | 0.4480 | −0.0242 |
+| 0.6 | 0.4564 | −0.0158 |
+| 0.7 | 0.4602 | −0.0120 |
+| 0.8 | 0.4605 | −0.0117 |
+| 0.9 | 0.4613 | −0.0109 |
+
+At any operating point the v3 head loses to no-suppression baseline.
+Same conclusion as Phase 3: with current features and corpus size,
+the discrimination isn't strong enough to add value as a creation gate.
+
+### 5.7 — Final session results
+
+Best result from any experiment in this whole plan:
+- **state-v14 + match-v9_face + new_track_thr=0.30**: 0.4722 mean MOTA
+- +0.0466 over v14 prod, ~3× the v9→v14 lift.
+- Per-family bimodal: PP22 +0.071, UKof/MOT/INof regression bands.
+
+Two clean drop-in deployment options:
+1. **`nn_path: nn_match_v7.bin → nn_match_v9_face.bin`** at thr=0.70:
+   +0.0053 mean MOTA, no per-family regressions. Low-risk.
+2. **Above + `new_track_thr: 0.70 → 0.30`**: +0.0466 mean MOTA, but
+   bimodal per-family. Higher reward, higher risk of UKof/MOT/INof
+   regressions on specific clips.
+
+User decides which to ship. The threshold-free goal didn't land —
+neither retrained state heads nor creation heads at lowthr beat
+keeping v14's state head with the new face match-cost. The hard
+threshold seems robust to elimination attempts with current corpora
+and feature sets.
+
+Files committed in this session:
+- match-cost: `bench/data/phase3_v9_{face,noface}.pt`,
+  `/mldata/config/track/trackers/nn_match_v9_face.bin`
+- state head: `bench/data/state_head_v16_p{1.0,2.0,3.0}.pt`,
+  `/mldata/config/track/trackers/nn_state_v16_p{1_0,2_0,3_0}.bin`
+- creation head: `bench/data/creation_head_v3.pt`
+- state corpora: `bench/data/state_corpus_v10_{train,val,test}.npz`
+
+C-side changes (uncommitted in ubon_cstuff, need separate commit):
+- `utrack_pair_trace.h`: schema v1→v2, +4 face fields
+- `utrack.c`: face fields populated in match_cost trace + nn_build_obs
+  + nn_build_pair + nn_build_obs_post_match
+- `nn.h`: UTRACK_NN_OBS_IN 13→16, UTRACK_NN_PAIR_IN 15→19
