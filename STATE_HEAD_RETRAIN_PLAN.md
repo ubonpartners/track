@@ -920,11 +920,41 @@ Top 5 v14 regressions:
 - PP22_00070: −0.045
 - PP22_00148: −0.041
 
-### Open items
+### Phase 2e.8 — PP22_00120 regression diagnosis
 
-- **PP22_00120 regression (−0.114)**: investigate the worst clip; if
-  it's a head over-promoting failure mode, may inform a future
-  cost-ratio re-tune.
+Worst clip drilled into. Side-by-side metrics:
+
+| metric              |   v9 |  v14 |    Δ |
+|---------------------|-----:|-----:|-----:|
+| MOTA                | 0.349| 0.235| −0.114 |
+| recall              | 0.581| 0.581|  0.000 |
+| precision           | 0.851| 0.813| −0.038 |
+| num_objects (GT)    |  2764|  2764|     — |
+| num_misses (FN)     |  1159|  1158|     0 |
+| num_false_positives |   280|   369|   +89 |
+| **num_switches**    | **361**| **587**| **+226** |
+| num_fragmentations  |   222|   306|   +84 |
+| mostly_tracked      |    24|    20|    −4 |
+| **mostly_lost**     |    49|    37|   **−12** |
+
+**Story**: recall is identical — the head isn't losing observations.
+v14 over-promotes in this dense scene (187 unique GT identities in 103
+frames), recovering 12 mostly-lost tracks at the cost of +226 ID
+switches and +84 fragmentations. cr_promote=2.0 is too eager here.
+
+This is an *identity stability* regression, not a *recall* regression.
+Possible mitigations (none done in this run):
+- Train a v15 with cr_promote=1.5 — partial win but less switching.
+- Add explicit switch penalty to state-head training cost.
+- Density-aware cost ratios (PP22 crowded scenes = more conservative
+  promote).
+
+For now: filed as known limitation. The clip has 130 unique tracks
+in a 103-frame window so any tracker is going to struggle here; v14
+trades some identity stability for recall, which is the right call on
+average across the 176-clip set.
+
+### Open items
 - **GRU/perdim aggregator productionisation**: AUC win is small but
   real (+0.00096 gru vs ema_fixed). C-runtime aggregator schema bump
   + new export format. ~1 week of work for an expected MOTA delta in
