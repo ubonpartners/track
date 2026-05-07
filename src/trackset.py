@@ -654,6 +654,95 @@ class TrackSet:
     def import_caltech_pedestrian(self, path):
         pass
 
+    def import_personpath22(self, sample_uid, sample_dict, video_path):
+        """Import a single PersonPath22 sample (gluoncv-motion JSON format).
+
+        sample_uid: the key from the top-level samples dict (e.g. "uid_vid_00001.mp4")
+        sample_dict: the corresponding value with "metadata" and "entities"
+        video_path: filesystem path to the source mp4 (will be copied by export_yaml)
+        """
+        meta = sample_dict["metadata"]
+        fps = float(meta["fps"])
+        resolution = meta.get("resolution", {})
+        width = int(resolution.get("width", meta.get("width")))
+        height = int(resolution.get("height", meta.get("height")))
+        n_frames = int(meta.get("number_of_frames", meta.get("num_frames", 0)))
+        entities = sample_dict.get("entities", []) or []
+
+        # PersonPath22 annotates only sparse keyframes (~every 5th frame).
+        # We emit just those keyframes — TrackSet.objects_at_time already
+        # interpolates between bracketing frames, so dense filling here is
+        # redundant and would also leak interpolated boxes into the gt.
+        #
+        # Class scheme matches MOT (["person","vehicle","other"]) so the same
+        # downstream eval/training code works:
+        #   - person / sitting_person / standing_person / etc. → class 0
+        #   - crowd boxes (region covering an unannotated group) → class 2,
+        #     intended to be used as ignore regions during evaluation
+        #   - reflection entities are dropped entirely
+        by_frame = {}
+        for ent in entities:
+            bb = ent.get("bb")
+            if bb is None or len(bb) != 4:
+                continue
+            labels = ent.get("labels") or {}
+            if labels.get("person"):
+                out_cl = 0
+            elif labels.get("crowd"):
+                out_cl = 2
+            else:
+                # reflection or other non-person/non-crowd — drop
+                continue
+            blob = ent.get("blob") or {}
+            if "frame_idx" in blob:
+                frame_id = int(blob["frame_idx"]) + 1
+            else:
+                time_ms = ent.get("time")
+                if time_ms is None:
+                    continue
+                frame_id = int(round(float(time_ms) * fps / 1000.0)) + 1
+            if frame_id < 1:
+                frame_id = 1
+            if n_frames and frame_id > n_frames:
+                continue
+            try:
+                track_id = int(ent["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            x, y, w, h = (float(v) for v in bb)
+            x1 = round(x / width, 4)
+            y1 = round(y / height, 4)
+            x2 = round((x + w) / width, 4)
+            y2 = round((y + h) / height, 4)
+            confidence = ent.get("confidence", 1.0)
+            try:
+                confidence = round(float(confidence), 4)
+            except (TypeError, ValueError):
+                confidence = 1.0
+            by_frame.setdefault(frame_id, {})[track_id] = {
+                "box": [x1, y1, x2, y2],
+                "class": out_cl,
+                "conf": confidence,
+            }
+
+        self.metadata = {
+            "frame_rate": fps,
+            "width": width,
+            "height": height,
+            "classes": ["person", "vehicle", "other"],
+            "original_video": video_path,
+        }
+        self.frames = []
+        self.frame_times = []
+        for frame_id in sorted(by_frame.keys()):
+            frame_time = (frame_id - 1) / fps
+            self.frames.append({
+                "frame_id": frame_id,
+                "frame_time": frame_time,
+                "objects": by_frame[frame_id],
+            })
+            self.frame_times.append(frame_time)
+
     def import_mot(self, seqinfo_path):
         config = configparser.ConfigParser()
         config.read(seqinfo_path)
@@ -808,6 +897,13 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events_list=Non
                 objs_gt=trackset_gt.objects_at_time(t)
                 for o in objs_gt:
                     obj_cl=trackset_gt.metadata["classes"][o.cl]
+                    # Render "other" GT (crowd / ignore regions) distinctly: faint
+                    # gray, no event matching, no track-id selection. Detections
+                    # inside these are also ignored by compute_metrics.
+                    if obj_cl == "other":
+                        o.draw(display, clr=(80, 96, 96, 96), thickness=1,
+                               label_prefix="[ign]")
+                        continue
                     if not obj_cl in cl:
                         continue
                     a=200 if o.track_id in selected_ids else 48
@@ -1146,6 +1242,68 @@ def convert_mot():
             print("Processing",f,s,"....")
             ts=TrackSet(input_path)
             ts.export_yaml(output_path, output_video_path)
+
+def convert_personpath22(src_root="/mldata/downloaded_datasets/other/personpath22/dataset/personpath22",
+                         output_folder="/mldata/tracking/personpath22",
+                         anno_variant="visible"):
+    """Convert PersonPath22 (gluoncv-motion format) into MOT-equivalent
+    JSON+mp4 pairs under output_folder/{annotation,video}/.
+
+    anno_variant: "visible" or "amodal" — picks anno_visible_2022 or anno_amodal_2022.
+    The src_root default matches the layout produced by download.py
+    (which nests under <root>/dataset/personpath22/{annotation,raw_data}).
+    """
+    variant_stem = {
+        "visible": "anno_visible_2022",
+        "amodal":  "anno_amodal_2022",
+    }[anno_variant]
+    anno_index_path = os.path.join(src_root, "annotation", variant_stem + ".json")
+    anno_per_sample_dir = os.path.join(src_root, "annotation", variant_stem)
+    videos_root = os.path.join(src_root, "raw_data")
+
+    stuff.makedir(output_folder + "/annotation/")
+    stuff.makedir(output_folder + "/video/")
+
+    print(f"Loading {anno_index_path} ...")
+    with open(anno_index_path, 'r') as f:
+        all_annos = json.load(f)
+    samples = all_annos.get("samples", {})
+    print(f"Found {len(samples)} samples in PersonPath22 ({anno_variant})")
+
+    skipped_missing = 0
+    for uid, index_sample in samples.items():
+        stem = uid[:-4] if uid.endswith(".mp4") else uid
+        video_path = os.path.join(videos_root, stem + ".mp4")
+        if not os.path.isfile(video_path):
+            print(f"  skipping {uid}: video not found at {video_path}")
+            skipped_missing += 1
+            continue
+        out_anno = output_folder + "/annotation/" + stem + ".json"
+        out_video = output_folder + "/video/" + stem + ".mp4"
+        if os.path.isfile(out_anno) and os.path.isfile(out_video):
+            continue
+
+        # Per-sample annotations live in a sibling directory; the index file
+        # only carries metadata + sample_file=True for samples that defer.
+        if index_sample.get("sample_file"):
+            per_sample_path = os.path.join(anno_per_sample_dir, uid + ".json")
+            with open(per_sample_path, 'r') as f:
+                sample = json.load(f)
+        else:
+            sample = index_sample
+
+        print(f"Processing {uid}...")
+        ts = TrackSet()
+        ts.import_personpath22(uid, sample, video_path)
+        if os.path.isfile(out_video):
+            # Skip the mp4 copy; just rewrite the JSON pointing at the existing copy.
+            ts.metadata["original_video"] = out_video
+            ts.export_yaml(out_anno, output_video=None)
+        else:
+            ts.export_yaml(out_anno, out_video)
+
+    if skipped_missing:
+        print(f"Done. Skipped {skipped_missing} samples with no source video.")
 
 def convert_cevo():
     output_folder="/mldata/tracking/cevo_april25"

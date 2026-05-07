@@ -7,6 +7,7 @@ import pickle
 import time
 from tqdm.auto import tqdm
 import stuff
+from stuff import coord
 import datetime
 import src.trackset as ts
 import threading
@@ -22,6 +23,17 @@ def mot_obj(obj, w, h):
     ow=int((obj.box[2]-obj.box[0])*w)
     oh=int((obj.box[3]-obj.box[1])*h)
     return [obj.track_id, ol, ot, ow, oh]
+
+def _box_in_ignore(box, ignore_boxes, frac_thresh):
+    """True if a fraction >= frac_thresh of `box` overlaps any ignore box."""
+    dx1, dy1, dx2, dy2 = box
+    det_area = max(1e-7, (dx2 - dx1) * (dy2 - dy1))
+    for ix1, iy1, ix2, iy2 in ignore_boxes:
+        ow = min(dx2, ix2) - max(dx1, ix1)
+        oh = min(dy2, iy2) - max(dy1, iy1)
+        if ow > 0 and oh > 0 and (ow * oh) / det_area >= frac_thresh:
+            return True
+    return False
 
 def fitness_score(r):
     return r["mota"]-0.0005*r["fp_tracks"]-0.0*r["fp_tracks_frac"]-0.002*r["fp_per_frame"]
@@ -172,6 +184,16 @@ def compute_metrics(gt, test,
     gt_class_remap_table=stuff.make_class_remap_table(gt.metadata["classes"], classes_to_test)
     det_class_remap_table=stuff.make_class_remap_table(test.metadata["classes"], classes_to_test)
 
+    # MOTChallenge-style ignore regions: GT class "other" (e.g. PersonPath22 crowd
+    # boxes, MOT distractor/occluder/reflection) marks regions where individuals
+    # are not annotated. Test detections whose box is mostly inside such a region
+    # should not be counted as false positives.
+    ignore_cl_idx = (gt.metadata["classes"].index("other")
+                     if "other" in gt.metadata["classes"] else None)
+    # Threshold: drop a test detection if >=50% of its area falls inside any
+    # ignore region. Matches the standard "don't care" behaviour in MOTChallenge.
+    ignore_overlap_frac = 0.5
+
     while t<last_time:
         # get GT and Test objects at time
         # this interpolates objects if there is no frame at that time
@@ -184,6 +206,24 @@ def compute_metrics(gt, test,
         test_obj=[o for o in test_obj if test.metadata["classes"][o.cl] in cl]
         if gt_obj is None:
             break
+
+        if ignore_cl_idx is not None:
+            ignore_boxes = [o.box for o in gt.objects_at_time(t) or []
+                            if o.cl == ignore_cl_idx]
+            if ignore_boxes:
+                gt_person_boxes = [g.box for g in gt_obj]
+                kept = []
+                for det in test_obj:
+                    if _box_in_ignore(det.box, ignore_boxes,
+                                      ignore_overlap_frac):
+                        # If this detection clearly matches a real GT person we
+                        # keep it so the matcher can score the match; otherwise
+                        # treat it as a "don't care" detection.
+                        if not any(coord.box_iou(det.box, gb) >= match_iou
+                                   for gb in gt_person_boxes):
+                            continue
+                    kept.append(det)
+                test_obj = kept
 
         if use_c_metrics:
             udets=[o.to_det() for o in test_obj]
