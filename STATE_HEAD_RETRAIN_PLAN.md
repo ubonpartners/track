@@ -1973,6 +1973,110 @@ modestly positive).
 - Bench: `/tmp/joint_retrain/bench_thr_dedup090.{py,json,log}`,
   `/tmp/joint_retrain/bench_dedup_thr_isolate.{py,json,log}`
 
+---
+
+## Phase 10 — AGGREGATE fitness rebench: every prior recommendation invalidated
+
+The Phase 9.6 hypothesis (per-clip mean ≠ aggregate fitness) is now
+confirmed with hard numbers. **Aggregate fitness is what the user's
+search bench reports** and is the only metric that matches deployment
+behavior. Per-clip mean fitness misled every Phase 5/7/8/9 recommendation.
+
+### 10.1 — Aggregate vs per-clip-mean numbers
+
+176 clips, all v6 splits. `agg_mota` = `1 - (Σfp + Σfn + Σsw)/Σobjects`.
+`agg_fitness` = `agg_mota - 0.0005·Σfp_tracks - 0.002·(Σfp/Σframes)`.
+
+| variant | agg_fitness | agg_MOTA | Σfp_tracks | Δagg vs prod | (per-clip-mean Δ) |
+|---|--:|--:|--:|--:|--:|
+| prod_v14 | 0.3489 | 0.4271 | 305 | — | — |
+| v9face_080 | 0.3211 | 0.4286 | 365 | **−0.0278** | +0.0016 |
+| v9face_090 | 0.3269 | 0.4291 | 354 | −0.0220 | +0.0020 |
+| v9face_off (1.00) | 0.3328 | 0.4288 | 342 | −0.0162 | +0.0018 |
+| v9f_thr40_d090 | **−0.2139** | 0.4688 | 1500 | **−0.5628** | +0.0418 |
+| v9f_thr60_d090 | 0.2188 | 0.4503 | 604 | −0.1302 | +0.0232 |
+
+**All five candidate deploys lose on aggregate fitness.** The "safe"
+v9face_v14 face-NN swap creates +60 FP tracks across the corpus, a
+−0.030 fitness penalty that wipes out the +0.0015 MOTA gain. The
+v9face+thr=0.40 candidate is a catastrophic −0.56.
+
+### 10.2 — Per-family aggregate (where the gain/loss lives)
+
+| family | n | prod | v9face_080 | v9face_off | thr40_d090 | thr60_d090 |
+|---|--:|--:|--:|--:|--:|--:|
+| MOT17 | 7 | 0.338 | 0.335 | 0.336 | 0.232 | 0.313 |
+| MOT20 | 4 | 0.687 | 0.673 | 0.674 | 0.539 | 0.656 |
+| PP22 | 133 | 0.308 | 0.299 | 0.307 | 0.014 | 0.250 |
+| UKof | 18 | 0.586 | 0.596 | 0.596 | 0.583 | 0.603 |
+| INof | 14 | 0.659 | 0.661 | 0.661 | 0.630 | 0.658 |
+
+- **UKof and INof get small wins from v9face** (+0.010 / +0.002 in agg).
+- **PP22, MOT17, MOT20 all lose**, with PP22 being the dominant loser
+  (133 clips × −0.009 each).
+
+### 10.3 — Why the face NN creates MORE FP tracks in aggregate
+
+The face NN is a better matcher in pairwise score but appears to
+create more *spurious* track-IDs. Two likely mechanisms:
+1. Better match scores at the margins → more aggressive ID resumption
+   from LOST → TRACKED, which can swap IDs and leave the original
+   track unmatched (now an FP-track).
+2. The face NN may relax the de-facto match threshold, causing more
+   one-frame phantom tracks that briefly survive UNCONFIRMED.
+
+Either way, the aggregate cost is real and visible: 365−305 = 60 more
+FP tracks for the face-only swap (no threshold change).
+
+### 10.4 — What this invalidates
+
+| Claimed in plan | Phase | Δ per-clip-mean | Δ aggregate (truth) |
+|---|---|--:|--:|
+| v9face_v14 deployable | 5/7 | +0.0008 / +0.0016 | **−0.028 (LOSS)** |
+| v9face + dedup=0.90 | 8 | +0.0029 | **−0.022 (LOSS)** |
+| v9face + thr=0.40 | 9 | +0.0414 | **−0.563 (CATASTROPHE)** |
+| v9face + thr=0.60 | 9 | +0.0230 | **−0.130 (LOSS)** |
+
+**Currently no deployable improvement exists** in any of the variants
+explored across Phases 5–9. Production remains at prod_v14
+(`nn_match_v7.bin` + dedup=0.80 + state-v14 + thr=0.70).
+
+### 10.5 — Confirmed: nothing should ship from this work yet
+
+Memory updated to flag the aggregation mode bug. Future bench scripts
+will compute and report aggregate fitness alongside per-clip mean,
+and "deployable win" requires aggregate ≥ prod.
+
+The exploration was not wasted — we now know:
+1. The fitness function is dominated by FP-track count for high-FPTr
+   variants (thr=0.40 fp_tracks went 305→1500, fitness went −0.56).
+2. The face NN's pairwise improvement is real on UKof/INof but
+   creates more FP-track-IDs than it saves on PP22/MOT.
+3. State-head retraining (Phases 5-7 v15/v16/v17/v18/v19/v20) all
+   plateau below v14 even on per-clip mean — likely worse on aggregate.
+4. The user's intuition about the over-aggressive dedup is correct in
+   per-clip mean but the dedup change alone doesn't recover aggregate
+   fitness either (-0.028 → -0.016, still a loss).
+
+### 10.6 — Where to look next (post-correction)
+
+Things that might actually help aggregate fitness:
+- **Sequence-aware track-ID hygiene**: a post-process or runtime rule
+  that suppresses one-shot phantom tracks (high-FPTr contributors) at
+  emission time. Requires runtime changes.
+- **Match-NN retraining penalised by FPTr** (not just by pair score),
+  using the assignment-aware loss flagged in Phase 7's verdict.
+- **Per-family configs**: UKof/INof respond positively to v9face.
+  Could ship there if the deployment supports per-family configs.
+- **Inspect a single PP22 clip head-to-head** (prod vs v9face) to see
+  exactly what FP-track is being created and why — concrete diagnostic
+  beats more sweeps.
+
+### 10.7 — Files
+
+- Bench script: `/tmp/joint_retrain/bench_agg_fitness.py`
+- Output: `/tmp/joint_retrain/bench_agg_fitness.{json,log}`
+
 ### 7.6 — Files (Phase 7 base)
 
 - `bench/train_state_head.py`: +`--no-history`, +`--fitness-fp-boost`
