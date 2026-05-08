@@ -3044,7 +3044,62 @@ improvement. The K-seed wrapper + cr_promote=2.0 recipe is the
 right *methodology*; the *result* is a confirmation that v14 is
 already optimal under this offline pipeline.
 
-### 20.15 — Files
+### 20.15 — 37-dim head with history aggregates: tested, doesn't help
+
+User asked (2026-05-08) to revisit adding the 5 match-history
+aggregates (`ema_match_x_conf`, `log_sum_det_conf`,
+`min/mean_match_score`, `n_strong_matches`) into the promote NN
+decision. The corpus already has these fields; they were dropped
+via `--no-history` because the C runtime expected 32-dim.
+
+**C runtime change** (committed): bumped `UTRACK_NN_STATE_IN_DIM`
+32→37, added 5 fields + 8-entry ring buffer to `utdet_t`, threaded
+inheritance through the match site, post-state-head update with the
+current match's score, and per-callsite `in_dim` branching in
+`utrack_build_state_features` to keep 32-dim heads byte-compatible.
+Validated: v14 (32-dim) identical fitness pre/post-rebuild within
+single-eval noise; v27/v28 37-dim heads load and run end-to-end.
+
+**v28 K=5 result** (37-dim, hidden=64, lr=1e-3, cr_promote=2.0):
+
+| seed | val_AUC | fitness  | MOTA   | FPTr |
+|-----:|--------:|---------:|-------:|-----:|
+|   0  | 0.9441  | 0.6182   | 0.6522 |   61 |
+|   1  | 0.9452  | 0.3322   | 0.3631 |   59 |
+|   2  | 0.9420  | 0.6048   | 0.6443 |   73 |
+|   3  | 0.9462  | 0.6089   | 0.6443 |   64 |
+|   4  | 0.9424  | **0.6227** | 0.6572 |   60 | ←best
+
+4/5 seeds in working basin (matches v26 stability — cr_promote=2.0
+is the dominant factor). Best v28.s4 = 0.6227 vs prod v14 ≈ 0.6256
+(±0.001 across re-runs) — gap 0.003, about 3× the per-eval noise
+floor. **The history fields don't measurably help.**
+
+**Why not.** Soft-phantom proxy on val corpus: v26 (32-dim) and v28
+(37-dim with history) are byte-identical (soft_phantom 408 vs 409,
+real_rate 0.994 vs 0.993). The 5 history aggregates contribute
+zero new signal at this corpus + recipe. Likely cause: the match-
+cost NN's `e_track[16]` accumulator already encodes the same
+information implicitly, making the explicit aggregates redundant.
+Possibly also that the v9 corpus's distribution doesn't surface
+regimes where raw history helps.
+
+**Eval nondeterminism** (also worth recording). Same prod yaml,
+two consecutive `eval_head_fitness` runs: fit 0.6261 vs 0.6252,
+mota/FP/fr fluctuated, fp_tracks deterministic (56 both runs). The
+~±0.001 single-run fitness noise comes from FP-tracker thread
+ordering / float accumulation. Comparisons at gap <0.005 should
+use multi-run averaging — not just trust a single 29-clip diverse
+eval.
+
+**Decision: keep the C runtime change, don't ship a 37-dim head.**
+The infrastructure is correct and useful for future experiments
+(different corpus, longer history window, different feature set).
+The current `nn_state_v14.bin` (32-dim) stays as prod. The K-seed
+wrapper now accepts both dims transparently — drop `--no-history`
+to get 37-dim, keep it for 32-dim.
+
+### 20.16 — Files
 
 - `bench/train_state_head.py`: +`--track-loss-enable`,
   `--lambda-phantom`, `--lambda-miss`, `--tracks-per-batch`
