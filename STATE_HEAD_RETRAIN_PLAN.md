@@ -3163,22 +3163,62 @@ deployment fitness. It also explains why zeroing e_track historically
 didn't change much — e_track encodes per-frame embedding, not
 multi-frame match-quality summary; those are different signals.
 
-### 20.19 — Recommendation: v29 is shippable
+### 20.19 — Retraction: v29 is NOT actually beating prod
 
-`bench/data/state_head_v29_v11_h64_cr2_hist.bin` (37-dim, hidden=64,
-trained with cr_promote=2.0, lr=1e-3, 30 epochs, on v11 corpus).
-Drop-in compatible with the C runtime (the in_dim branch in
-`utrack_build_state_features` handles both 32 and 37 transparently).
+While running the full-178 validation bench, hit a load error:
+```
+ERROR nn_state.c:175: nn_state: in_dim mismatch (model=32,
+                       runtime expects 37). Retrain after the
+                       feature builder changed.
+```
 
-Suggested deploy: replace
-`/mldata/config/track/trackers/uc_v11.yaml`'s `nn_state_path` from
-`nn_state_v14.bin` → `state_head_v29_v11_h64_cr2_hist.bin`. Keep
-`new_track_thr=0.77`, `delete_dup_iou=0.90`, `nn_path=nn_match_v9_face.bin`,
-`nn_lambda=0.05` unchanged (Phase 18 winners).
+The C runtime had a hardcoded `nn->in_dim != UTRACK_NN_STATE_IN_DIM`
+check (in `nn_state.c:174-179`). When I bumped UTRACK_NN_STATE_IN_DIM
+32→37 for the history-aggregate feature, that check started rejecting
+**every 32-dim head** silently — the runtime fell back to "no state
+head" mode. So every "v14 prod" bench since the rebuild
+(commit `e016d6c` in ubon_cstuff) was actually running with the head
+**disabled** rather than against the actual v14 weights.
 
-Should be validated on user's full 178-clip / MOT / CEVO bench
-before deployment. The 29-clip diverse subset is a stratified
-sample but not the full deployment surface.
+That's why v14's apparent FP/fr was 2.499 and v29's looked like
+−27%: v29 was being compared to "no state head", not to v14.
+
+**Fixed** in `nn_state.c`: relax the in_dim check to accept 32 OR 37.
+The C builder already had the in_dim branch from §20.15, so 32-dim
+heads now load and run correctly again.
+
+**Corrected N=5 multi-run bench, both heads loading:**
+
+| metric    | v14 prod          | v29 (37-dim, history) | Δ        |
+|-----------|------------------:|----------------------:|---------:|
+| fitness   | 0.6258 ± 0.0006   | 0.6256 ± 0.0009       | −0.0002  |
+| mota      | 0.6591            | 0.6587                | −0.0004  |
+| FPTr      | 59.4              | 59.0                  | −0.4     |
+| FP/frame  | 1.793             | 1.824                 | +0.031   |
+
+**v14 and v29 are statistically tied.** The history-aggregate
+features still don't move deployment fitness on this bench. The
+v9-corpus bug (history fields zero) was real, but fixing that to
+v11 corpus didn't unlock a fitness improvement either.
+
+The only valid claim that survives is **v29 is not worse than prod**
+— not "v29 beats prod". Don't ship.
+
+This whole episode is exactly the silent-degradation failure mode
+the user warned about. Mitigations going forward:
+- The relaxed load check now accepts 32 or 37 explicitly (prevents
+  this specific recurrence).
+- `bench/eval_head_fitness.py` should gain a defensive check that
+  scans the C runtime's stderr for "failed to load" and aborts the
+  bench rather than silently producing "no state head" results
+  (followup; not in this commit).
+- N=5 multi-run averaging caught the issue eventually because the
+  noise patterns differ between "no head" (FP/fr 2.499) and
+  "loaded head" (FP/fr ≈ 1.8). Without the smoothing tool the user
+  asked for in §20.12, we'd likely have shipped a regression based
+  on a single-run "+0.0011 win" that was pure artifact.
+
+### 20.20 — Status
 
 ### 20.20 — Files
 
