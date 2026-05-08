@@ -2385,10 +2385,68 @@ UKof drops 0.042 (sparse outdoor scenes get starved of detections
 at thr=0.80). MOT17 gains 0.024. Aggregate sums positively because
 PP22 (and per-clip object counts) dominate.
 
-### 14.3 — Live finer sweep at 0.75 / 0.77 / 0.85
+### 14.3 — Finer sweep around 0.80 — thr=0.77 is the sweet spot
 
-Spawning a finer sweep at 0.75/0.77/0.85 to check for a
-UKof-preserving sweet spot.
+178-clip aggregate:
+
+| thr | agg_fit | agg_MOTA | FPTr | FP/fr |
+|---|--:|--:|--:|--:|
+| 0.75 | 0.3770 | 0.4908 | 224 | 0.881 |
+| 0.77 | 0.3855 | 0.4851 | 196 | 0.846 |
+| 0.80 | 0.3944 | 0.4755 | 159 | 0.781 |
+| 0.85 | 0.3954 | 0.4453 | 97 | 0.676 |
+
+43-clip user-search aggregate:
+
+| thr | agg_fit | agg_MOTA | FPTr | FP/fr |
+|---|--:|--:|--:|--:|
+| 0.75 | 0.6178 | 0.6719 | 103 | 1.304 |
+| **0.77** | **0.6228** | 0.6708 | 91 | 1.261 |
+| 0.80 | 0.6215 | 0.6649 | 82 | 1.162 |
+| 0.85 | 0.6105 | 0.6456 | 66 | 1.013 |
+
+**On the user's actual distribution, thr=0.77 wins.** thr=0.85
+chases FPTr too aggressively, sacrificing MOTA.
+
+Per-family on 178 at thr=0.77:
+
+| family | n | thr=0.75 | **thr=0.77** | thr=0.80 | thr=0.85 |
+|---|--:|--:|--:|--:|--:|
+| MOT17 | 7 | 0.354 | **0.364** | 0.364 | 0.355 |
+| MOT20 | 4 | 0.691 | **0.692** | 0.688 | 0.672 |
+| PP22 | 133 | 0.311 | 0.310 | 0.312 | 0.298 |
+| **UKof** | 18 | 0.562 | **0.559** | 0.544 | 0.485 |
+| INof | 14 | 0.662 | 0.663 | 0.660 | 0.663 |
+
+thr=0.77 vs thr=0.80: −0.001 PP22, +0.015 UKof, +0.001 MOT20, +0.000
+MOT17, +0.003 INof. **Net +0.018 spread out over more families.**
+
+### 14.4 — Final recommended deploy (Phase 11+13+14)
+
+```yaml
+utrack:
+  delete_dup_iou: 0.90        # Phase 8/11 (was 0.80)
+  nn_path: ""                 # Phase 11 (was nn_match_v9_face.bin — DISABLE)
+  nn_state_path: /mldata/config/track/trackers/nn_state_v14.bin  # unchanged
+  new_track_thr: 0.77         # Phase 14 (was 0.70)
+```
+
+Δ vs current live (`v9face_d080_thr=0.70`):
+
+| corpus | agg_fit gain |
+|---|--:|
+| 178-clip (full mix incl. PP22) | **+0.064** |
+| 43-clip (user's search dist) | **+0.038** |
+
+Per-family on 178: MOT17 +0.028, MOT20 +0.020, PP22 +0.011, UKof
+−0.037, INof +0.001. UKof regresses (sparse-detection scenes hurt
+by higher thr); MOT/PP22 win significantly.
+
+### 14.5 — Files
+
+- Bench: `/tmp/joint_retrain/bench_nonn_thr_sweep.{py,json,log}`,
+  `/tmp/joint_retrain/bench_nonn_thr_fine.{py,json,log}`
+- YAMLs: `/tmp/joint_retrain/uc_nonn_d090_thr0_{50,60,70,75,77,80,85}.yaml`
 
 ### 7.6 — Files (Phase 7 base)
 
