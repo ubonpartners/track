@@ -2332,6 +2332,64 @@ utrack:
 
 - Bench: `/tmp/joint_retrain/bench_user_search_43.{py,json,log}`
 
+---
+
+## Phase 14 — `new_track_thr` was tuned for with-NN regime
+
+The current `new_track_thr=0.70` was tuned with the match-cost NN
+in place. With the NN disabled (Phase 11/13 winner), the legacy
+match path is more permissive at the matching step, so a higher
+creation threshold may be optimal.
+
+### 14.1 — Sweep at no-match-NN + state-v14 + dedup=0.90 baseline
+
+178-clip aggregate:
+
+| new_track_thr | agg_fit | agg_MOTA | FPTr | FP/fr |
+|---|--:|--:|--:|--:|
+| 0.50 | 0.1554 | 0.5314 | 747 | 1.227 |
+| 0.60 | 0.2811 | 0.5198 | 473 | 1.104 |
+| 0.70 (Phase 11/13) | 0.3535 | 0.5034 | 296 | 0.966 |
+| **0.80** | **0.3944** | 0.4755 | 159 | 0.781 |
+
+43-clip user-search aggregate:
+
+| new_track_thr | agg_fit |
+|---|--:|
+| 0.50 | 0.5195 |
+| 0.60 | 0.5713 |
+| 0.70 | 0.6025 |
+| **0.80** | **0.6215** |
+
+Δ vs 0.70 baseline: **+0.0409 (178)**, **+0.0190 (43)**. Stacking
+with the Phase 13 win, the total recommendation now:
+
+| change | Δ vs current live (178) | Δ vs current live (43) |
+|---|--:|--:|
+| no_match_NN + state14 + d=0.90 + thr=0.70 | +0.0319 | +0.0162 |
+| **+ thr=0.80** | **+0.0729** | **+0.0362** |
+
+### 14.2 — Per-family at thr=0.80 (caution — UKof regression)
+
+Per-family on 178:
+
+| family | n | thr=0.50 | thr=0.60 | thr=0.70 | thr=0.80 | Δ vs 0.70 |
+|---|--:|--:|--:|--:|--:|--:|
+| MOT17 | 7 | 0.295 | 0.322 | 0.340 | **0.364** | +0.024 |
+| MOT20 | 4 | 0.658 | 0.679 | 0.689 | 0.688 | −0.001 |
+| PP22 | 133 | 0.216 | 0.282 | 0.312 | 0.312 | 0.000 |
+| UKof | 18 | 0.569 | 0.568 | 0.587 | **0.544** | **−0.042** |
+| INof | 14 | 0.639 | 0.654 | 0.659 | 0.660 | +0.001 |
+
+UKof drops 0.042 (sparse outdoor scenes get starved of detections
+at thr=0.80). MOT17 gains 0.024. Aggregate sums positively because
+PP22 (and per-clip object counts) dominate.
+
+### 14.3 — Live finer sweep at 0.75 / 0.77 / 0.85
+
+Spawning a finer sweep at 0.75/0.77/0.85 to check for a
+UKof-preserving sweet spot.
+
 ### 7.6 — Files (Phase 7 base)
 
 - `bench/train_state_head.py`: +`--no-history`, +`--fitness-fp-boost`
