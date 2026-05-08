@@ -2448,6 +2448,33 @@ by higher thr); MOT/PP22 win significantly.
   `/tmp/joint_retrain/bench_nonn_thr_fine.{py,json,log}`
 - YAMLs: `/tmp/joint_retrain/uc_nonn_d090_thr0_{50,60,70,75,77,80,85}.yaml`
 
+---
+
+## Phase 15 — `immediate_confirm_thr` sweep (NULL — current 0.93 is tuned)
+
+Hypothesis: with thr=0.77 and no match NN, high-conf-noise detections
+(rare-but-possible) skip UNCONFIRMED and become phantom TRACKED tracks.
+Pushing immediate_confirm_thr higher would suppress them.
+
+Tested ∈ {0.93 (current), 0.95, 0.97, 1.18 (effective disable)}:
+
+| ic_thr | agg_fit (178) | agg_fit (43) |
+|---|--:|--:|
+| **0.93** | **0.3829** | **0.6216** |
+| 0.95 | 0.3826 | 0.6201 |
+| 0.97 | 0.3808 | 0.6186 |
+| 1.18 | 0.3818 | 0.6181 |
+
+**Current 0.93 is best on both distributions.** Pushing higher costs
+fitness via MOTA loss (legitimate fast-confirms suppressed) without
+meaningful FPTr reduction. INof particularly hurt: 0.663 → 0.648 at
+ic=1.18. Hypothesis was wrong — immediate_confirm at 0.93 is correctly
+tuned by the existing search optimisation.
+
+### 15.1 — Files
+
+- Bench: `/tmp/joint_retrain/bench_phase15_ic.{py,json,log}`
+
 ### 7.6 — Files (Phase 7 base)
 
 - `bench/train_state_head.py`: +`--no-history`, +`--fitness-fp-boost`
