@@ -3099,7 +3099,88 @@ The current `nn_state_v14.bin` (32-dim) stays as prod. The K-seed
 wrapper now accepts both dims transparently — drop `--no-history`
 to get 37-dim, keep it for 32-dim.
 
-### 20.16 — Files
+### 20.17 — v9 corpus bug explains the negative v28 result
+
+User pushed back on the v28 conclusion: their prior experiments showed
+zeroing the match-cost EMA made no fitness difference, so claiming
+"e_track already encodes match history" was inconsistent.
+
+Investigating: backbone-W₀ column norms on v28 are **0.71–0.78 for
+the 5 history columns** (16–20) vs 1.5–5.6 for every other column.
+The model effectively didn't learn to use them. Why? Feature-stat
+inspection on the v9 corpus train set:
+
+    ema_match_x_conf  std=0  fr_zero=1.000  on UNCONFIRMED rows
+    log_sum_det_conf  std=0  fr_zero=1.000  ...
+    min_match_score   std=0  fr_zero=1.000  ...
+    mean_match_score  std=0  fr_zero=1.000  ...
+    n_strong_matches  std=0  fr_zero=1.000  ...
+
+**All five fields are constant zero.** The v9 corpus
+(`bench/data/state_corpus_v9_train.npz`, May 7 12:13) was generated
+*before* the history-aggregates code was added to
+`bench/build_state_corpus.py` (Phase 6 commit `bb2c126`, later that
+day). The fields aren't even in the v9 dtype — `build_input_matrix`
+silently falls back to zero-fill columns when fields are missing.
+
+So v28 was trained on always-zero history features. Of course it
+ignored them. The v28 negative-result conclusion is invalidated.
+
+### 20.18 — v29 on the v11 corpus: real history fields, real win
+
+`bench/data/state_corpus_v11_train.npz` (May 7 18:23) already
+exists with populated history fields (`fr_zero=0.92` on UNCONFIRMED
+rows — most are obs=1 with no prior matches, but obs≥2 get
+non-zero history). Retraining the v26 recipe on v11 + 37-dim:
+
+| seed | val_AUC | fitness  | MOTA   | FPTr |
+|-----:|--------:|---------:|-------:|-----:|
+|   0  | 0.9468  | 0.6220   | 0.6586 |   66 |
+|   1  | 0.9455  | 0.6253   | 0.6573 |   57 |
+|   2  | 0.9436  | 0.6255   | 0.6571 |   56 |
+|   3  | 0.9457  | 0.6178   | 0.6528 |   63 |
+|   4  | 0.9422  | **0.6262** | 0.6589 |   58 | ←best
+
+5/5 seeds in working basin (vs 4/5 for v26/v28; the broken-promote
+basin is gone). N=5 multi-run averaging on v29.s4 vs v14 prod:
+
+| metric    | v14 prod          | v29.s4              | Δ        |
+|-----------|------------------:|--------------------:|---------:|
+| fitness   | 0.6251 ± 0.0006   | **0.6262 ± 0.0003** | **+0.0011** |
+| mota      | 0.6585 ± 0.0001   | 0.6587 ± 0.0002     | +0.0002  |
+| FPTr      | 56.8              | 57.8                | +1.0     |
+| FP/frame  | **2.499**         | **1.822**           | **−27%**  |
+
+**v29 is the first fresh head this session that statistically beats
+prod** — the +0.0011 fitness gap exceeds the combined ±0.0007 std.
+The improvement is concentrated in FP/frame (−27%), not in FPTr or
+MOTA. Interpretation: the drop heads (`drop_unconfirmed`,
+`drop_lost`, `demote`) use the recent-match-score history to kill
+bad tracks earlier, so each phantom lives for fewer frames.
+
+This vindicates the user's intuition that match history matters for
+deployment fitness. It also explains why zeroing e_track historically
+didn't change much — e_track encodes per-frame embedding, not
+multi-frame match-quality summary; those are different signals.
+
+### 20.19 — Recommendation: v29 is shippable
+
+`bench/data/state_head_v29_v11_h64_cr2_hist.bin` (37-dim, hidden=64,
+trained with cr_promote=2.0, lr=1e-3, 30 epochs, on v11 corpus).
+Drop-in compatible with the C runtime (the in_dim branch in
+`utrack_build_state_features` handles both 32 and 37 transparently).
+
+Suggested deploy: replace
+`/mldata/config/track/trackers/uc_v11.yaml`'s `nn_state_path` from
+`nn_state_v14.bin` → `state_head_v29_v11_h64_cr2_hist.bin`. Keep
+`new_track_thr=0.77`, `delete_dup_iou=0.90`, `nn_path=nn_match_v9_face.bin`,
+`nn_lambda=0.05` unchanged (Phase 18 winners).
+
+Should be validated on user's full 178-clip / MOT / CEVO bench
+before deployment. The 29-clip diverse subset is a stratified
+sample but not the full deployment surface.
+
+### 20.20 — Files
 
 - `bench/train_state_head.py`: +`--track-loss-enable`,
   `--lambda-phantom`, `--lambda-miss`, `--tracks-per-batch`

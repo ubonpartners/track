@@ -188,6 +188,15 @@ def main():
     p.add_argument("--frame-cap-sec", type=float, default=None,
                    help="cap each clip's tracking at T seconds (default: no cap)")
     p.add_argument("--out", default=None, help="write JSON result to this path")
+    p.add_argument("--runs", type=int, default=1,
+                   help="number of repeat runs to average across (default 1). "
+                        "FP-thread ordering and float accumulation in the C "
+                        "tracker give ~±0.001 fitness noise per single run "
+                        "(fp_tracks is integer/deterministic; mota and FP/fr "
+                        "fluctuate). For comparing heads where the gap is "
+                        "<0.005 fitness, use --runs 5 and read the reported "
+                        "mean ± std. Each run is independent; total wall time "
+                        "scales linearly.")
     p.add_argument("--quiet", action="store_true")
     args = p.parse_args()
 
@@ -204,13 +213,56 @@ def main():
     clips = load_subset(args.subset)
     import time
     t0 = time.time()
-    result = eval_config(cfg, clips=clips, workers=args.workers,
-                          frame_cap_sec=args.frame_cap_sec, verbose=not args.quiet)
+    n_runs = max(1, int(args.runs))
+    runs = []
+    for ri in range(n_runs):
+        run_t0 = time.time()
+        result = eval_config(cfg, clips=clips, workers=args.workers,
+                              frame_cap_sec=args.frame_cap_sec, verbose=not args.quiet)
+        run_dt = time.time() - run_t0
+        ov = result["overall"]
+        if n_runs > 1:
+            print(f"  [run {ri+1}/{n_runs}] mota={ov['mota']:.4f} fit={ov['fitness']:.4f} "
+                  f"FPTr={ov['fp_tracks']} FP/fr={ov['fp_per_frame']:.3f}  ({run_dt:.0f}s)",
+                  file=sys.stderr)
+        runs.append(result)
     elapsed = time.time() - t0
     print(f"\n[eval_head_fitness] {len(clips)} clips, workers={args.workers}, "
-          f"frame_cap_sec={args.frame_cap_sec}, elapsed={elapsed:.1f}s", file=sys.stderr)
+          f"frame_cap_sec={args.frame_cap_sec}, runs={n_runs}, "
+          f"elapsed={elapsed:.1f}s", file=sys.stderr)
 
-    out = json.dumps(result, indent=2)
+    if n_runs > 1:
+        # Aggregate across runs: mean ± std on fitness, mota, fp_per_frame.
+        # fp_tracks is integer; report mean and the set of distinct values.
+        import statistics
+        fits  = [r["overall"]["fitness"] for r in runs]
+        motas = [r["overall"]["mota"] for r in runs]
+        fpfs  = [r["overall"]["fp_per_frame"] for r in runs]
+        fpts  = [r["overall"]["fp_tracks"] for r in runs]
+        agg = {
+            "n_runs":           n_runs,
+            "fitness_mean":     statistics.mean(fits),
+            "fitness_stdev":    statistics.stdev(fits) if n_runs > 1 else 0.0,
+            "fitness_min":      min(fits),
+            "fitness_max":      max(fits),
+            "mota_mean":        statistics.mean(motas),
+            "mota_stdev":       statistics.stdev(motas) if n_runs > 1 else 0.0,
+            "fp_per_frame_mean": statistics.mean(fpfs),
+            "fp_tracks_mean":   sum(fpts) / n_runs,
+            "fp_tracks_values": fpts,
+        }
+        result_out = {"runs": runs, "aggregate": agg}
+        print(f"\n[multi-run aggregate]", file=sys.stderr)
+        print(f"  fitness  = {agg['fitness_mean']:.4f} ± {agg['fitness_stdev']:.4f} "
+              f"(min {agg['fitness_min']:.4f}, max {agg['fitness_max']:.4f})", file=sys.stderr)
+        print(f"  mota     = {agg['mota_mean']:.4f} ± {agg['mota_stdev']:.4f}", file=sys.stderr)
+        print(f"  FPTr     = {agg['fp_tracks_mean']:.1f} (values {agg['fp_tracks_values']})",
+              file=sys.stderr)
+        print(f"  FP/frame = {agg['fp_per_frame_mean']:.3f}", file=sys.stderr)
+    else:
+        result_out = runs[0]
+
+    out = json.dumps(result_out, indent=2)
     if args.out:
         Path(args.out).write_text(out)
     print(out)
