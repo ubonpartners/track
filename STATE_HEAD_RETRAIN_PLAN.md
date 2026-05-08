@@ -2968,7 +2968,83 @@ This rules out "model architecture" as a lever for beating prod
 without changing one of: the corpus distribution, the runtime input
 dim, or the training loop (closed-loop / RL).
 
-### 20.11 — Files
+### 20.12 — Soft phantom-emit proxy (smooth metric for screening)
+
+User noted (2026-05-08) that integer `fp_tracks` is too noisy for
+selection — ±1 phantom = ±0.0005 fitness, comparable to the gap
+between heads on the 29-clip subset. The proposed fix: smooth via
+"how close the promote decision was".
+
+`bench/soft_phantom_proxy.py` is a Python-only first pass at this
+idea: for each head, compute on the val corpus per-track
+`max σ_promote` over UNCONFIRMED rows; sum over phantom-tracks gives
+`soft_phantom_emit` (continuous, ~few-second compute per head).
+Caveat — this is val-distribution behaviour, not deployment, so it's
+for *recipe screening*, not seed selection.
+
+Profiling 13 heads (v14, v21–v25) revealed prod v14 is in a
+different basin than every fresh head this session:
+
+| head             | soft_phantom | real_rate | deploy_fit |
+|------------------|-------------:|----------:|-----------:|
+| v14 (prod)       | 186          |   0.652   | 0.628      |
+| v23 (default)    | 291          |   0.888   | 0.621      |
+| v21_baseline_s0  | 316          |   0.931   | 0.496      |
+| v21_20c          | 57           |   0.624   | 0.214      |
+| (broken seeds)   | ~290–310     |  ~0.90    | <0.10      |
+
+v14 emits ~40% less than every fresh head AND achieves the highest
+deployment fitness. Tracing back, **v14 was trained with
+`cr_promote=2.0`** (Phase 2e.6 in this plan), not the default
+`cr_promote=0.1` — a 20× different cost ratio. All my v21–v25 sweeps
+unknowingly used the default and were exploring the wrong recipe basin.
+
+### 20.13 — v26 (cr_promote=2.0) breaks the bimodality
+
+Same K=5 wrapper, hidden=64, lr=1e-3, 30 epochs, but `cr_promote=2.0`:
+
+| seed | val_AUC | fitness  | MOTA   | FPTr |
+|-----:|--------:|---------:|-------:|-----:|
+|   0  | 0.9448  | **0.6185** | 0.6548 |   65 | ←best
+|   1  | 0.9456  | 0.6174   | 0.6519 |   62 |
+|   2  | 0.9465  | 0.6131   | 0.6507 |   68 |
+|   3  | 0.9453  | 0.4975   | 0.5249 |   49 |
+|   4  | 0.9463  | 0.6175   | 0.6499 |   58 |
+
+**4/5 seeds in the working basin** (vs 1/5 with default cr_promote).
+Inter-seed variance collapsed — working seeds within 0.006 of each
+other. Bimodality is almost gone.
+
+v26.s0 lands at 0.6185 vs prod v14 at 0.6278 (gap 0.0093). With
+~±0.001 single-eval fp_tracks noise, the gap is real but small —
+v14 has some additional advantage (older corpus? different
+hyperparams beyond cr_promote?) that v26 can't recover from current
+v9-corpus + cr_promote=2.0 alone.
+
+Curiously, v26 has *higher* val emissions than v23 (soft_phantom 408
+vs 291) yet better deployment fitness. The proxy is recipe-specific —
+v14 and v26 reach similar deploy fitness via different mechanisms
+(v14 = conservative everywhere; v26 = aggressive but stable). Useful
+for screening *recipes are different*, not predicting *which is best*.
+
+### 20.14 — Updated recommendation
+
+For any future retrain on this architecture/corpus, **use
+cr_promote=2.0** as the recipe baseline (matches v14 / v26 working
+basin). With cr_promote=0.1 default, training is bimodal — most
+seeds collapse and you waste cycles. With cr_promote=2.0, working
+basin is the dominant attractor and even the worst-of-5 (s3 at
+0.4975) is well above the broken-promote collapses that plagued
+v21–v25.
+
+prod v14 is essentially at the ceiling reachable by offline training
+on the v9 corpus. No fresh head from this session crosses it. Don't
+ship v26 — it's −0.009 fitness vs prod and brings no other
+improvement. The K-seed wrapper + cr_promote=2.0 recipe is the
+right *methodology*; the *result* is a confirmation that v14 is
+already optimal under this offline pipeline.
+
+### 20.15 — Files
 
 - `bench/train_state_head.py`: +`--track-loss-enable`,
   `--lambda-phantom`, `--lambda-miss`, `--tracks-per-batch`
