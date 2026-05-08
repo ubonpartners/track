@@ -2642,6 +2642,112 @@ UKof −0.028, INof +0.005.
 
 - Bench: `/tmp/joint_retrain/bench_match_user_eval.{py,json,log}`
 
+---
+
+## Phase 20 — Fix the offline-online gap (the meta-issue)
+
+User direction (2026-05-08): "all this 'manual tuning' by trying random
+values is exactly what I started the NN thing to try and remove …
+incredibly slow and fragile — whack-a-mole. We must try and get the
+offline training and eval to much better reflect the final results so
+the end runs are much more of a check or light fine tune not an
+extensive explore."
+
+### 20.0 — Why the offline pipeline keeps misleading us
+
+Diagnosed across Phases 5-19:
+
+1. **Per-example BCE on a per-row corpus ≠ sequence-level fitness.**
+   `fp_tracks` counts unique track-IDs that never matched GT. A head
+   that promotes wrongly at frame 1 then drops at frame 2 creates 1
+   phantom track-ID. Both decisions look correct under the corpus
+   labels (frame 1 has no GT alignment → label "drop"; same for frame
+   2). The training loss has no signal that lifecycle outcome matters.
+2. **Match-cost NN reaches 0.99+ pairwise AUC and creates more FP
+   tracks** (Phase 11). Pair AUC ≠ tracker outcome.
+3. **Cost ratios are hand-set guesses** rather than derived from the
+   fitness coefficients (0.0005 per FP track, 0.002 per FP/frame).
+4. **Open-loop training, closed-loop deployment.** Corpus generated
+   *once*; head's improvements never reshape the distribution it sees.
+5. **Eval framework parameters silently change optima**
+   (eval_min_framerate=5 vs user's 9.9; per-clip mean vs aggregate).
+
+### 20.1 — Diagnostic: AUC rank vs fitness rank disagree
+
+Built `bench/eval_head_fitness.py` — a closed-loop fitness primitive
+that runs the actual C tracker on a stratified 29-clip subset (4
+MOT17, 3 MOT20, 5 UKof, 5 INof, 12 PP22 — see
+`bench/eval_subset_diverse.json`) under user's eval params
+(`match_iou=0.45`, `eval_min_framerate=9.9`). Returns aggregate fitness
+in ~4 minutes per config.
+
+Ran 8 trained heads from this session through the new primitive AND
+collected their val combined AUCs from training logs:
+
+| head | val_AUC | agg_fit | mota | FPTr | AUC rank | fit rank |
+|---|--:|--:|--:|--:|--:|--:|
+| **v14** | (n/a) | **0.6256** | 0.6592 | 60 | — | **1** |
+| v18_p3.0 | 0.9498 | 0.6254 | 0.6584 | 56 | 2 | 2 (artifact*) |
+| v19b_fb20 | 0.9489 | 0.6203 | 0.6566 | 65 | 4 | 3 |
+| v16_p2.0 | 0.9495 | 0.6154 | 0.6517 | 66 | 3 | 4 |
+| v17_p3.0 | 0.9457 | 0.6139 | 0.6532 | 72 | 5 | 5 |
+| v15_p1.0 | 0.9443 | 0.6121 | 0.6477 | 65 | 6 | 6 |
+| **v20_fb5** | **0.9529** | 0.6061 | 0.6401 | 62 | **1** | **7** ⚠ |
+| v15_p2.0 | 0.9425 | 0.2546 | 0.2879 | 63 | 7 | 8 |
+
+*v18_p3.0 is 37-dim and silently fails to load → fitness reflects
+"no state head"; not a real comparison.
+
+**The biggest training-pipeline bug, exposed:**
+`v20_fb5` has the **highest val AUC** but is **2nd worst in actual
+fitness** (−0.020 vs v14). The current `train_state_head.py` selects
+"best val combined AUC" as the saved checkpoint — which on this set
+would ship `v20_fb5` and hurt deployment by 0.020 fitness. That is
+bigger than the entire +0.018 win Phase 17/18 produced.
+
+Said simply: **on this set the offline pipeline picks the
+near-worst head as "the winner"**. This is the whack-a-mole
+symptom — the offline metric is no better than random.
+
+### 20.2 — Files (Phase 20a infrastructure landed)
+
+- `bench/eval_subset_diverse.json` — stratified 29-clip subset
+  (deterministic, reproducible). Built to span all 5 families and
+  within-family num_objects distribution. Replaces the user's 43-clip
+  search set (which had no PP22).
+- `bench/eval_head_fitness.py` — the closed-loop primitive. Takes a
+  YAML config or `--state-bin` path and returns aggregate fitness.
+- `bench/diagnose_auc_vs_fitness.py` — the diagnostic that produced
+  the table in 20.1.
+
+### 20.3 — Phase 20b: wire `eval_head_fitness` into training
+
+Replace val combined AUC as the model-selection metric in
+`train_state_head.py`. At end of each epoch (or every K epochs),
+export the current best checkpoint to `.bin`, plug into a temp YAML,
+run `eval_head_fitness.eval_config()` on the diverse subset, and save
+the best-by-fitness checkpoint instead of best-by-AUC.
+
+Cost: ~4 min per fitness eval. With `epochs=30`, eval every 5 epochs
+gives 6 checks ≈ 24 min added per training run. Acceptable.
+
+The win: when this lands, every retrain produces a head whose
+deployment fitness is *measured*, not predicted by a proxy. Whack-
+a-mole stops because the proxy is the metric.
+
+### 20.4 — Phase 20c (later): sequence-level surrogate loss
+
+Once the *selection* metric matches deployment, the *loss* should too.
+Per-track aggregator: for each track in the corpus, compute the head's
+sequence-level outcome (did it ever promote? sum of match scores?
+predicted phantom-create?). Score against the per-track outcome
+(GT-aligned ever or not). Add to existing per-frame BCE at moderate
+weight. This penalises "promote at f1, drop at f2" the same way
+`fp_tracks` does.
+
+Untouched until 20b lands — there's no point optimising a different
+loss until the selection metric is right.
+
 ### 7.6 — Files (Phase 7 base)
 
 - `bench/train_state_head.py`: +`--no-history`, +`--fitness-fp-boost`
