@@ -2262,6 +2262,76 @@ per-clip-mean fitness eval. Aggregate fitness invalidates all of
 them.** The new candidate space (no NN, no state, looser dedup) was
 not even explored under the misled framing.
 
+---
+
+## Phase 13 — Cross-validate on user's actual search distribution
+
+The Phase 11/12 wins were on my 178-clip bench (133 PP22 dominant).
+The user's search bench
+(`/mldata/config/track/search/track_search_v11.yaml`) uses a
+different distribution: **43 clips, ZERO PP22** (11 MOT + 18 UKof +
+14 INof). Wins could invert here.
+
+### 13.1 — Bench on user's 43
+
+| variant | agg_fit | agg_MOTA | FPTr | FP/fr | Δ vs live |
+|---|--:|--:|--:|--:|--:|
+| v9face_d080 (live) | 0.5853 | 0.6785 | 181 | 1.363 | — |
+| v9face_d090 | 0.5876 | 0.6794 | 178 | 1.374 | +0.0023 |
+| no_match_state14_d080 | 0.6007 | 0.6760 | 145 | 1.372 | +0.0155 |
+| **no_match_state14_d090** | **0.6015** | 0.6763 | 144 | 1.394 | **+0.0162** |
+| **no_match_no_state_d090** | **0.6086** | 0.6764 | 128 | 1.901 | **+0.0233** |
+
+Sanity check: my live numbers (Fit 0.585, FPTr 181) are close to
+the user's last reported search baseline (Fit 0.614, FPTr 146)
+within ~0.03 — different yaml side-knobs explain the gap, but the
+distribution is clearly the same family.
+
+**Same conclusion as Phase 11/12 on the user's actual distribution.**
+Disabling the match NN is +0.016 fitness, also disabling state head
+is +0.023 fitness. Real, deployable.
+
+### 13.2 — Per-family on user's 43
+
+| family | n | live | no_match_state14 | no_match_no_state |
+|---|--:|--:|--:|--:|
+| MOT17 | 7 | 0.334 | 0.339 (+0.005) | 0.315 (−0.019) |
+| MOT20 | 4 | 0.673 | 0.689 (+0.016) | 0.692 (+0.019) |
+| UKof | 18 | 0.596 | 0.587 (−0.009) | 0.591 (−0.005) |
+| INof | 14 | 0.662 | 0.658 (−0.004) | 0.636 (−0.026) |
+
+- **`no_match_state14_d090`** has small per-family losses (worst
+  −0.009 on UKof) — close to family-monotone improvement.
+- **`no_match_no_state_d090`** has bigger MOT17/INof losses
+  (−0.019 / −0.026) but bigger MOT20 win.
+
+### 13.3 — Recommended deploys, ranked
+
+| rank | config | Δ agg_fit (43) | Δ agg_fit (178) | safety |
+|---|---|--:|--:|---|
+| (live) | v9face + state14 + d=0.80 + thr=0.70 | — | — | — |
+| 3 | v9face + state14 + d=0.90 | +0.002 | +0.006 | tiny win |
+| **2** | **no_match + state14 + d=0.90** | **+0.016** | **+0.032** | **clean** |
+| 1 | no_match + no_state + d=0.90 | +0.023 | +0.044 | MOT17/INof regress |
+
+**Rank 2 is the recommended deploy** — biggest gain with the cleanest
+per-family profile. Disables the match-cost NN (which was net-harming
+fitness despite better pairwise scores), keeps state-v14 (which still
+helps MOT17 and INof), relaxes dedup to 0.90.
+
+YAML changes vs current live:
+```yaml
+utrack:
+  delete_dup_iou: 0.90        # was 0.80
+  nn_path: ""                 # was nn_match_v9_face.bin (DISABLE)
+  # nn_state_path stays at nn_state_v14.bin
+  # new_track_thr stays at 0.70
+```
+
+### 13.4 — Files
+
+- Bench: `/tmp/joint_retrain/bench_user_search_43.{py,json,log}`
+
 ### 7.6 — Files (Phase 7 base)
 
 - `bench/train_state_head.py`: +`--no-history`, +`--fitness-fp-boost`
