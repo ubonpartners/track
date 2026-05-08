@@ -27,6 +27,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from typing import Dict, Tuple
 
 import numpy as np
@@ -204,6 +206,25 @@ def main():
                         "`mota - 0.0005*fp_tracks - 0.002*fp_per_frame`). "
                         "Default 1.0 = no change. Computed at train-time from "
                         "the corpus's gt_id_now field — no corpus rebuild needed.")
+    # Phase 20b — closed-loop fitness selection.
+    p.add_argument("--fitness-select",      action="store_true",
+                   help="At end of training, evaluate the top-K AUC checkpoints "
+                        "by running the actual C tracker on a held-out clip "
+                        "subset (bench/eval_subset_fast.json by default), and "
+                        "save the BEST-BY-FITNESS checkpoint as args.save. "
+                        "This replaces 'best val combined AUC' as the model-"
+                        "selection signal — see Phase 20a/b in "
+                        "STATE_HEAD_RETRAIN_PLAN.md. Adds ~1-2 min total to "
+                        "training time (parallel eval on the fast 20-clip "
+                        "subset).")
+    p.add_argument("--fitness-top-k",       type=int, default=3,
+                   help="number of top-AUC checkpoints to evaluate by fitness "
+                        "(only used with --fitness-select). Default 3.")
+    p.add_argument("--fitness-subset",      default="fast", choices=["fast","diverse"],
+                   help="which clip subset to eval against. 'fast'≈30s/eval, "
+                        "'diverse'≈80s/eval but covers MOT20-05 etc.")
+    p.add_argument("--fitness-workers",     type=int, default=4,
+                   help="parallel workers for fitness eval (default 4).")
     p.add_argument("--summary-out",         type=str, default=None,
                    help="if set, write JSON {best_score, best_aucs, params} to this path")
     p.add_argument("--seed",                type=int, default=0)
@@ -365,6 +386,10 @@ def main():
     best_score = -1.0
     best_state = None
     best_aucs = {k: float("nan") for k in head_names}
+    # Phase 20b: keep top-K candidates by AUC for end-of-training fitness eval.
+    # Each entry: dict(epoch, score, aucs, state_dict_cpu).
+    candidates = []
+    K = max(1, int(getattr(args, "fitness_top_k", 3))) if getattr(args, "fitness_select", False) else 0
     for ep in range(args.epochs):
         model.train()
         perm = torch.randperm(len(X_tr_t), device=device)
@@ -418,10 +443,91 @@ def main():
             best_score = score
             best_aucs = {k: float(aucs[k]) for k in head_names}
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+        # Maintain top-K candidates by AUC for fitness-select.
+        if K > 0:
+            sd_cpu = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            candidates.append({"epoch": ep, "score": score,
+                                "aucs": {k: float(aucs[k]) for k in head_names},
+                                "state": sd_cpu})
+            candidates.sort(key=lambda c: -c["score"])
+            candidates[:] = candidates[:K]
 
     print(f"\nbest combined AUC = {best_score:.4f}")
-    if best_state is not None:
-        model.load_state_dict(best_state)
+
+    # Phase 20b — fitness-select: pick best-by-fitness across top-K AUC
+    # candidates instead of best-by-AUC. The diagnostic in Phase 20.1 showed
+    # AUC ranking can disagree with fitness ranking by 6 positions on a
+    # 7-head set, so this is the load-bearing fix.
+    selected_score = best_score
+    selected_state = best_state
+    selected_aucs  = best_aucs
+    selected_fitness = None
+    fitness_table = []
+    if K > 0 and candidates:
+        import subprocess, tempfile, time
+        from bench.eval_head_fitness import eval_config, load_subset, make_yaml_with_state_bin
+        clips = load_subset(args.fitness_subset)
+        print(f"\n[fitness-select] running fitness eval on top-{len(candidates)} "
+              f"AUC candidates (subset={args.fitness_subset}, "
+              f"workers={args.fitness_workers}) ...")
+        for c in candidates:
+            with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as f:
+                pt_path = f.name
+            with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+                bin_path = f.name
+            torch.save({
+                "state_dict": c["state"],
+                "in_dim": X_tr.shape[1],
+                "hidden": args.hidden,
+                "e_dim": args.e_dim,
+                "dropout": args.dropout,
+                "backbone_layers": args.backbone_layers,
+                "best_score": c["score"],
+            }, pt_path)
+            r = subprocess.run(
+                [sys.executable, "-m", "bench.export_state_head",
+                 "--in", pt_path, "--out", bin_path],
+                capture_output=True, text=True)
+            if r.returncode != 0:
+                print(f"  ep {c['epoch']:3d}  AUC={c['score']:.4f}  EXPORT FAILED: {r.stderr.strip()[:200]}")
+                os.unlink(pt_path);
+                if os.path.exists(bin_path): os.unlink(bin_path)
+                continue
+            # Build temp YAML and run fitness eval.
+            from bench.eval_head_fitness import make_yaml_with_state_bin
+            yaml_path = make_yaml_with_state_bin(bin_path)
+            t0 = time.time()
+            res = eval_config(yaml_path, clips=clips,
+                               workers=args.fitness_workers)
+            dt = time.time() - t0
+            fit = res["overall"]["fitness"]
+            print(f"  ep {c['epoch']:3d}  AUC={c['score']:.4f}  "
+                  f"fitness={fit:.4f}  ({dt:.1f}s)")
+            fitness_table.append({
+                "epoch": c["epoch"], "auc": c["score"],
+                "fitness": fit, "overall": res["overall"],
+                "state": c["state"],
+            })
+            os.unlink(pt_path); os.unlink(bin_path); os.unlink(yaml_path)
+        if fitness_table:
+            fitness_table.sort(key=lambda r: -r["fitness"])
+            best = fitness_table[0]
+            selected_state = best["state"]
+            selected_score = best["auc"]
+            selected_fitness = best["fitness"]
+            print(f"\n[fitness-select] picked epoch {best['epoch']} "
+                  f"(AUC {best['auc']:.4f}, fitness {best['fitness']:.4f}) "
+                  f"as the saved checkpoint.")
+            # Note when AUC and fitness disagree on the winner.
+            auc_winner = max(fitness_table, key=lambda r: r["auc"])
+            if auc_winner["epoch"] != best["epoch"]:
+                print(f"[fitness-select] note: highest-AUC candidate was "
+                      f"epoch {auc_winner['epoch']} (AUC {auc_winner['auc']:.4f}, "
+                      f"fitness {auc_winner['fitness']:.4f}) — fitness selection "
+                      f"chose differently.")
+
+    if selected_state is not None:
+        model.load_state_dict(selected_state)
         torch.save({
             "state_dict": model.state_dict(),
             "in_dim": X_tr.shape[1],
@@ -429,7 +535,9 @@ def main():
             "e_dim": args.e_dim,
             "dropout": args.dropout,
             "backbone_layers": args.backbone_layers,
-            "best_score": best_score,
+            "best_score": selected_score,
+            "best_fitness": selected_fitness,
+            "fitness_subset": args.fitness_subset if K > 0 else None,
         }, args.save)
         print(f"saved → {args.save}")
 
