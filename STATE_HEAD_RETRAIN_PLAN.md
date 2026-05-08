@@ -2519,6 +2519,64 @@ NN. If a future match-NN retrain can preserve UKof's gain while not
 hurting other families (MOT/PP22 currently lose with face NN), that
 would close the gap to per-family without complexity.
 
+---
+
+## Phase 17 — `nn_lambda` sweep at the Phase 14 baseline
+
+Hypothesis: the face NN was *partially* helpful but the default
+weight of 0.25 was too aggressive. A small `nn_lambda` (e.g. 0.05)
+might preserve UKof's benefit while reducing MOT/PP22 harm.
+
+### 17.1 — Sweep at thr=0.77 + dedup=0.90 + state-v14, varying nn_lambda
+
+| variant | nn_lambda | 178 agg_fit | 43 agg_fit |
+|---|--:|--:|--:|
+| live_v9face_d080 (live) | 0.25 | 0.3220 | 0.5853 |
+| no_nn_thr77 (Phase 14 winner) | (off) | 0.3843 | 0.6216 |
+| **v9face_nl0_05** | **0.05** | **0.3862** | **0.6216** |
+| v9face_nl0_10 | 0.10 | 0.3831 | 0.6216 |
+| v9face_nl0_25 | 0.25 | 0.3658 | 0.6083 |
+| v9face_nl0_40 | 0.40 | 0.3529 | 0.6040 |
+
+**Sweet spot: nn_lambda ≈ 0.05**, marginally above no-NN on 178
+(+0.002 fitness), tied on 43. Higher weights (0.25, 0.40) actively hurt.
+
+### 17.2 — Per-family at nl=0.05 vs no_nn_thr77
+
+| family | nl=0.05 | no_nn | Δ |
+|---|--:|--:|--:|
+| MOT17 | 0.3545 | 0.3619 | −0.007 |
+| MOT20 | 0.6901 | 0.6915 | −0.001 |
+| PP22 | 0.3130 | 0.3099 | +0.003 |
+| **UKof** | **0.5678** | 0.5590 | **+0.009** |
+| INof | 0.6672 | 0.6628 | +0.004 |
+
+UKof partially recovers (regression vs live drops from −0.037 to
+−0.028) at the cost of MOT17 (+0.018 → +0.011 vs live).
+
+### 17.3 — Updated final recommendation
+
+Two viable configurations, essentially tied on user's 43-clip set:
+
+| variant | 178 agg_fit | 43 agg_fit | per-family balance |
+|---|--:|--:|---|
+| no_nn_thr77 (Phase 14) | 0.3843 | 0.6216 | clean, MOT-strong |
+| **v9face_nl0_05_thr0_77** | **0.3862** | 0.6216 | UKof-friendlier, MOT slightly weaker |
+
+The choice is preference-based:
+- **For maximum simplicity / strongest MOT**: ship `nn_path: ""`
+  (Phase 14 final).
+- **For better UKof preservation** at +0.002 aggregate fitness:
+  ship `nn_path: nn_match_v9_face.bin` + `nn_lambda: 0.05`.
+
+Both keep `delete_dup_iou: 0.90`, `new_track_thr: 0.77`,
+`nn_state_path: nn_state_v14.bin`.
+
+### 17.4 — Files
+
+- Bench: `/tmp/joint_retrain/bench_phase17_nl.{py,json,log}`
+- YAMLs: `/tmp/joint_retrain/uc_phase17_nl0_{05,10,25,40}.yaml`
+
 ### 7.6 — Files (Phase 7 base)
 
 - `bench/train_state_head.py`: +`--no-history`, +`--fitness-fp-boost`
