@@ -2475,6 +2475,50 @@ tuned by the existing search optimisation.
 
 - Bench: `/tmp/joint_retrain/bench_phase15_ic.{py,json,log}`
 
+---
+
+## Phase 16 — Per-family upper bound (offline analysis)
+
+Computed from existing bench data: what's the best aggregate fitness
+if we pick the best config *per family* instead of uniformly?
+
+### 16.1 — Best config per family on 178
+
+| family | best_config | fit | vs live | comment |
+|---|---|--:|--:|---|
+| MOT17 | thr0_77 (no_nn) | 0.364 | +0.028 | Phase 14 winner |
+| MOT20 | thr0_77 (no_nn) | 0.692 | +0.019 | same |
+| PP22 | no_nn_d090 (thr=0.70) | 0.312 | +0.013 | prefers thr=0.70 over 0.77 |
+| **UKof** | **v9face_d080 (LIVE)** | **0.596** | **0.000** | **only family the face NN helps** |
+| INof | thr0_77 (no_nn) | 0.663 | +0.001 | tie/marginal |
+
+**UKof is the outlier**: it's the only family where the match-cost NN
+adds aggregate value. PP22 prefers thr=0.70 but is dominant in our
+178-clip set, so the 178-aggregate winner depends on family weighting.
+
+### 16.2 — Aggregate fitness with per-family deploys
+
+| approach | 178 agg_fit | 43 agg_fit |
+|---|--:|--:|
+| Live (v9face_d080) | 0.3215 | 0.5854 |
+| Uniform Phase 14 winner (thr=0.77) | 0.3855 | 0.6228 |
+| Per-family best (route per family) | 0.3793 | **0.6262** |
+
+Per-family is +0.003 above uniform on user's 43-clip set; below
+uniform on 178 because PP22's optimum (thr=0.70) drags down. Margin
+too small to justify runtime per-family routing complexity.
+
+### 16.3 — Verdict on per-family
+
+Single uniform config recommendation stands (Phase 14 winner). The
++0.003 family-routed gain is marginal and would require per-clip
+config selection logic at runtime that doesn't exist today.
+
+**The structural insight worth keeping:** UKof benefits from the face
+NN. If a future match-NN retrain can preserve UKof's gain while not
+hurting other families (MOT/PP22 currently lose with face NN), that
+would close the gap to per-family without complexity.
+
 ### 7.6 — Files (Phase 7 base)
 
 - `bench/train_state_head.py`: +`--no-history`, +`--fitness-fp-boost`
