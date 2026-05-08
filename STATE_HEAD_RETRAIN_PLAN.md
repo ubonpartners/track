@@ -2077,6 +2077,100 @@ Things that might actually help aggregate fitness:
 - Bench script: `/tmp/joint_retrain/bench_agg_fitness.py`
 - Output: `/tmp/joint_retrain/bench_agg_fitness.{json,log}`
 
+---
+
+## Phase 11 — Match-cost NN actively hurts aggregate fitness
+
+### 11.1 — Discovery: the prod_v14 baseline was running with NO match NN
+
+While diagnosing why v9face creates +60 FP tracks across the corpus,
+PP22_00209 single-clip diagnostic surfaced:
+
+```
+ERROR nn: dim mismatch (model obs=13/det=5/pair=15, runtime expects 16/5/19).
+ERROR utrack: nn_path=/mldata/config/track/trackers/nn_match_v7.bin failed to load; disabling
+```
+
+The C runtime at HEAD (commit `e07fe93`, Phase 5 face features) bumped
+`UTRACK_NN_OBS_IN` 13→16 and `UTRACK_NN_PAIR_IN` 15→19 to support the
+v9face NN. This makes the **v7 match NN incompatible** — the runtime
+falls back to no-NN matching.
+
+So every "prod_v14" baseline number in Phases 5/7/8/9/10 was actually
+**state-v14 + no match NN + thr=0.70 + dedup=0.80**, not the original
+prod with v7 NN. The current `/mldata/config/track/trackers/uc_v11.yaml`
+already uses `nn_match_v9_face.bin` (compatible with the new runtime).
+
+### 11.2 — Confirmation bench: no-NN beats v9face NN on aggregate fitness
+
+Explicit `nn_path: ""` config compared to v9face NN, both with state-v14
+and the dedup ablation:
+
+| variant | agg_fit | agg_MOTA | tot_FPTr | FP/fr |
+|---|--:|--:|--:|--:|
+| no_nn_d080 | 0.3485 | 0.5034 | 306 | 0.954 |
+| v9face_d080 (current live) | 0.3215 | 0.5054 | 364 | 0.930 |
+| **no_nn_d090** | **0.3545** | 0.5034 | 294 | 0.966 |
+| v9face_d090 | 0.3270 | 0.5058 | 354 | 0.936 |
+
+**Disabling the match-cost NN + relaxing dedup to 0.90 = +0.0330
+aggregate fitness vs the current live deploy (v9face + dedup=0.80).**
+Substantial, deployable, no retraining needed.
+
+### 11.3 — Per-family
+
+Δ aggregate fitness for `no_nn_d090` vs current live `v9face_d080`:
+
+| family | n | no_nn_d080 | no_nn_d090 | v9face_d080 | v9face_d090 | Δ live → no_nn_d090 |
+|---|--:|--:|--:|--:|--:|--:|
+| MOT17 | 7 | 0.337 | 0.340 | 0.336 | 0.336 | **+0.005** |
+| MOT20 | 4 | 0.687 | 0.689 | 0.673 | 0.674 | **+0.016** |
+| PP22 | 133 | 0.308 | 0.312 | 0.299 | 0.302 | **+0.013** |
+| UKof | 18 | 0.587 | 0.587 | 0.596 | 0.596 | -0.009 |
+| INof | 14 | 0.659 | 0.659 | 0.662 | 0.662 | -0.003 |
+
+The face NN was helping UKof / INof but hurting MOT / PP22, and
+PP22's 133-clip share dominates the average.
+
+### 11.4 — Deployable production candidate
+
+```yaml
+utrack:
+  new_track_thr: 0.70           # unchanged
+  delete_dup_iou: 0.90          # was 0.80 (Phase 8 / Phase 11)
+  nn_path: ""                   # was nn_match_v9_face.bin (DISABLE)
+  nn_state_path: /mldata/config/track/trackers/nn_state_v14.bin  # unchanged
+```
+
+Total expected aggregate-fitness gain vs current live: **+0.0330**.
+Wins on MOT17/MOT20/PP22 (the canonical benchmarks), small loss on
+UKof/INof.
+
+### 11.5 — Why the face NN hurts on PP22/MOT (hypothesis)
+
+PP22_00209 diagnostic showed v9face produces multiple short-lived
+phantom tracks (1–3 frames each) at frame edges in the late part of
+the clip. Likely mechanism: the face NN's lower match cost for
+edge-of-frame partial faces leads to spurious LOST→TRACKED revivals,
+and when those are wrong, the originally-matched track is unmatched
+that frame and creates a new ID.
+
+This contradicts the per-clip-mean read that v9face was a +0.0008
+to +0.0029 win. With aggregation, the FP-track penalty dominates:
+60 extra FP tracks × 0.0005 = 0.030 aggregate fitness penalty.
+
+### 11.6 — User decision required
+
+This phase recommends **disabling the match-cost NN** which is a
+significant deploy change. Per `feedback_track_eval_metric.md`, the
+deploy decision is the user's. Do not flip without explicit
+confirmation.
+
+### 11.7 — Files
+
+- Bench: `/tmp/joint_retrain/bench_no_nn.{py,json,log}`
+- Configs: `/tmp/joint_retrain/uc_check_{nonn,v9face}_d{080,090}.yaml`
+
 ### 7.6 — Files (Phase 7 base)
 
 - `bench/train_state_head.py`: +`--no-history`, +`--fitness-fp-boost`
