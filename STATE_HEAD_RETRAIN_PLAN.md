@@ -2171,6 +2171,97 @@ confirmation.
 - Bench: `/tmp/joint_retrain/bench_no_nn.{py,json,log}`
 - Configs: `/tmp/joint_retrain/uc_check_{nonn,v9face}_d{080,090}.yaml`
 
+---
+
+## Phase 12 — Ablate the state head too
+
+If the match-cost NN actively hurts aggregate fitness, what about
+the state head? state-v14 has been the only state head that didn't
+underperform on val AUC, but val AUC has been unreliable. Direct
+test in aggregate fitness:
+
+| variant | agg_fit | agg_MOTA | FPTr | FP/fr |
+|---|--:|--:|--:|--:|
+| no_nn_state14_d080 | 0.3484 | 0.5033 | 306 | 0.954 |
+| no_nn_state14_d090 | 0.3534 | 0.5033 | 296 | 0.967 |
+| no_nn_no_state_d080 | 0.3610 | 0.4939 | 260 | 1.443 |
+| **no_nn_no_state_d090** | **0.3658** | 0.4932 | 249 | 1.463 |
+
+Removing the state head adds another +0.0124 fitness on top of
+no-match-NN + dedup=0.90. **Total +0.0443 aggregate fitness vs the
+current live deploy** (v9face_d080 = 0.3215).
+
+### 12.1 — Trade-off shape
+
+`no_nn_no_state_d090` vs `no_nn_state14_d090`:
+- MOTA drops 0.5033 → 0.4932 (−0.010)
+- FPTr drops 296 → 249 (−47, saves 0.0235 fitness)
+- FP/fr UP 0.967 → 1.463 (+0.5, costs 0.001 fitness)
+
+Net: legacy state machine kills more spurious *short* tracks
+(fewer FP track-IDs) but lets through more spurious detections
+*per frame* (more FPpf). Fitness coefficients tilt toward "fewer
+unique phantoms" being more valuable than "fewer per-frame FPs"
+on this corpus.
+
+### 12.2 — Per-family
+
+vs `no_nn_state14_d090` (intermediate winner):
+
+| family | n | state14 | no_state | Δ (no_state − state14) |
+|---|--:|--:|--:|--:|
+| MOT17 | 7 | 0.340 | 0.316 | **−0.024** |
+| MOT20 | 4 | 0.689 | 0.691 | +0.003 |
+| PP22 | 133 | 0.312 | 0.310 | −0.002 |
+| UKof | 18 | 0.587 | 0.591 | +0.004 |
+| INof | 14 | 0.659 | 0.636 | **−0.023** |
+
+vs current live `v9face_d080`:
+
+| family | n | live | no_nn_no_state_d090 | Δ |
+|---|--:|--:|--:|--:|
+| MOT17 | 7 | 0.336 | 0.316 | **−0.019** |
+| MOT20 | 4 | 0.673 | 0.691 | +0.018 |
+| PP22 | 133 | 0.299 | 0.310 | +0.011 |
+| UKof | 18 | 0.596 | 0.591 | −0.005 |
+| INof | 14 | 0.662 | 0.636 | **−0.026** |
+
+So vs current live: the no-state-head winner gives up MOT17 and
+INof but wins on MOT20 / PP22 (the dominant family). Ratio of
+agg gains depends on family weighting in deployment.
+
+### 12.3 — Summary of deployable candidates
+
+Ranked by aggregate fitness, all on 176-clip eval:
+
+| rank | config | agg_fit | Δ vs live | risk |
+|---|---|--:|--:|---|
+| (live) | v9face + state14 + d=0.80 + thr=0.70 | 0.3215 | — | — |
+| 4 | v9face + state14 + d=0.90 | 0.3270 | +0.0055 | none (face NN keeps UKof gain) |
+| 3 | no_match_NN + state14 + d=0.80 | 0.3485 | +0.0270 | UKof loses 0.009 |
+| 2 | no_match_NN + state14 + d=0.90 | **0.3534** | **+0.0319** | UKof loses 0.009 |
+| 1 | no_match_NN + no_state_NN + d=0.90 | **0.3658** | **+0.0443** | MOT17 −0.019, INof −0.026 |
+
+Rank-2 (`no_match + state14 + d=0.90`) has cleaner per-family
+profile — the top win without the MOT17/INof regression. Probably
+the safest deployable improvement.
+
+### 12.4 — Files
+
+- Bench: `/tmp/joint_retrain/bench_no_state.{py,json,log}`
+- Configs: `/tmp/joint_retrain/uc_check_nonn_nostate_d{080,090}.yaml`
+
+### 12.5 — User decision required (still)
+
+Per `feedback_track_eval_metric.md` and `feedback_never_deploy.md`:
+deploy decisions are user's. The prior thr=0.40 flip backfire is a
+recent reminder.
+
+The current state of the plan: **6 phases of work were misled by
+per-clip-mean fitness eval. Aggregate fitness invalidates all of
+them.** The new candidate space (no NN, no state, looser dedup) was
+not even explored under the misled framing.
+
 ### 7.6 — Files (Phase 7 base)
 
 - `bench/train_state_head.py`: +`--no-history`, +`--fitness-fp-boost`
