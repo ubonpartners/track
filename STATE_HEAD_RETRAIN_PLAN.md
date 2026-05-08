@@ -2735,18 +2735,254 @@ The win: when this lands, every retrain produces a head whose
 deployment fitness is *measured*, not predicted by a proxy. Whack-
 a-mole stops because the proxy is the metric.
 
-### 20.4 — Phase 20c (later): sequence-level surrogate loss
+### 20.4 — Phase 20c: sequence-level surrogate loss (landed)
 
 Once the *selection* metric matches deployment, the *loss* should too.
-Per-track aggregator: for each track in the corpus, compute the head's
-sequence-level outcome (did it ever promote? sum of match scores?
-predicted phantom-create?). Score against the per-track outcome
-(GT-aligned ever or not). Add to existing per-frame BCE at moderate
-weight. This penalises "promote at f1, drop at f2" the same way
-`fp_tracks` does.
+Implemented in `bench/train_state_head.py` behind `--track-loss-enable`:
 
-Untouched until 20b lands — there's no point optimising a different
-loss until the selection metric is right.
+**Track-batched sampling.** Each batch carries all rows of T tracks
+(default `--tracks-per-batch 64`) instead of random rows. With avg
+~124 UNCONFIRMED frames/track on the v9 corpus, that's ~8K rows/batch
+— same magnitude as the previous random-row `--batch-size 8192`.
+TRACKED/LOST rows of those tracks are also included so the
+`demote`/`drop_lost` heads still get BCE gradient.
+
+**Per-track P(track emitted).** For each track in the batch:
+
+```
+S_t  = Σ_i softplus(promote_logit_i)   over UNCONFIRMED rows of track t
+P_t  = 1 - exp(-S_t)                    = 1 - Π_i (1 - sigmoid(logit_i))
+```
+
+`softplus(x) = -log(1 - sigmoid(x))` keeps this stable across the
+sigmoid range. `valid_promote=1` masks the sum so TRACKED/LOST rows
+don't leak into the per-track product.
+
+**The two surrogate losses** (added to per-frame BCE):
+
+```
+L_phantom = mean over phantom tracks of P_t * is_phantom    (default λ=1.0)
+L_miss    = mean over real tracks    of (1 - P_t) * is_real (default λ=0.5)
+```
+
+`L_phantom` is the offline analogue of `fp_tracks`: it directly
+penalises "this head's expected sequence-level emission probability
+on a phantom track." Per-frame BCE has no such signal — a head that
+sets promote=0.4 on every frame of a 10-frame phantom gets moderate
+BCE but `P_t ≈ 1 - 0.6¹⁰ ≈ 0.994`. With the surrogate, the gradient
+push to lower phantom logits is correctly scaled.
+
+**Why miss is half-weighted (λ=0.5).** BCE on real tracks already
+strongly penalises non-promotion via `pos_weight=cls*0.1`. The miss
+surrogate is a redundant safety net to prevent the phantom term from
+collapsing P_t globally — i.e., to make sure the head doesn't just
+learn "always say no" to defeat phantom_loss.
+
+### 20.5 — Phase 20c first-pass results (later invalidated, see 20.7)
+
+Initial single-seed comparison on the fast 20-clip subset suggested
+20c hurt fitness:
+
+| run                       | seed | best AUC | best fit (fast) |
+|---------------------------|-----:|---------:|----------------:|
+| baseline (BCE only)       | 0    | 0.9475   | 0.3856          |
+| baseline (BCE only)       | 1    | 0.9447   | 0.4002          |
+| 20c heavy (λp=1, λm=0.5)  | 0    | 0.9377   | 0.2789          |
+| 20c light (λp=0.1, λm=0)  | 0    | 0.9467   | 0.1901          |
+
+This conclusion is **superseded by 20.6/20.7**: a third baseline seed
+landed at fitness 0.0177 on the diverse subset (vs s0 0.4956,
+s1 0.6217). Single-seed comparisons measure mostly inter-seed noise
+in this regime, not the loss-design effect.
+
+### 20.6 — Diverse-subset bench: nothing to commit
+
+`bench/eval_head_fitness.py --workers 4` on the 29-clip diverse
+subset, all with surrounding Phase 18 params (nl=0.05, thr=0.77,
+delete_dup_iou=0.90):
+
+| state head                              | mota   | FPTr | fitness | vs prod |
+|-----------------------------------------|-------:|-----:|--------:|--------:|
+| **nn_state_v14 (current /mldata)**      | 0.6594 |   56 | **0.6278** | 0      |
+| v21_baseline_s0 (random-row, BCE)       | 0.5197 |   43 | 0.4956   | −0.13  |
+| v21_baseline_s1 (random-row, BCE)       | 0.6517 |   53 | 0.6217   | −0.006 |
+| v21_baseline_s2 (random-row, BCE)       | 0.0207 |    6 | 0.0177   | −0.61 ⚠ |
+| v21_trkbatch_only_s0 (track-batched, BCE)| 0.0186|    9 | 0.0141   | −0.61 ⚠ |
+| v21_20c_light_s0 (track-batched, BCE+seq λp=0.1)| 0.1429 | 14 | 0.1355 | −0.49 |
+| v21_20c_s0 (track-batched, BCE+seq λp=1.0)| 0.2230 | 17 | 0.2137  | −0.41 |
+
+(⚠ = "broken" — head emits too few promotions, MOTA collapses.)
+
+**No upgrade shippable** from this round. Only baseline_s1 (−0.006
+fitness) is even close to prod, and that's seed-1 luck.
+
+### 20.7 — The real finding: training has huge inter-seed variance
+
+Three random-row baseline runs (same code, same data, same params)
+produced fitness 0.4956 / 0.6217 / 0.0177. **The training is bimodal**:
+some seeds converge to a working head (~0.5–0.6 fitness), others
+collapse to a broken head that emits almost no promotions (~0.02
+fitness). All four seeds give similar val combined AUC (0.945–0.948),
+so the bimodality is invisible to AUC selection.
+
+**Why this matters for Phase 20c (and the whole offline pipeline):**
+single-seed comparisons of training-method variants were comparing
+**noise**, not signal. Phase 20.5's "20c hurt fitness" conclusion
+isn't supported once you account for inter-seed variance — baseline_s2
+(no 20c, just bad seed) is *worse* than 20c_s0. The real story:
+
+- All variants are seed-fragile.
+- The track-batched + light-surrogate variant landed in a "stuck-poor
+  but not broken" basin (0.13–0.21).
+- Two of three random-row baselines hit working basins (0.50–0.62).
+
+I cannot reliably distinguish 20c-vs-baseline without ≥3 seeds per
+config. Doing so would multiply the wall time of every variant test
+by ~3×. That's manageable but pushes back the cost calculus on
+"each retrain run is a check, not exploration" — even confirming
+nothing changed needs 3 trainings now.
+
+**The deeper conclusion:** the offline pipeline is not just *biased*
+(open-loop ≠ closed-loop, Phase 20.0); it's also *unstable* (large
+inter-seed variance even at fixed config). Both pathologies have
+the same root cause: the corpus's labels are determined by a fixed
+legacy tracker, and tiny differences in the new head's early-epoch
+behaviour cascade into very different stable points. Closed-loop
+training would address both — the head's own behaviour gates the
+data distribution it sees, so attractors shrink.
+
+### 20.8 — Phase 20c verdict (revised)
+
+The track-batched + sequence-loss combination is **not validated as
+worse** than baseline once seed variance is accounted for. It's also
+**not validated as better**. The implementation is correct; the test
+methodology was inadequate (single seed). Left disabled-by-default
+behind `--track-loss-enable` for future experiments — but no further
+work on this specific surrogate without first improving the
+methodology (multi-seed median, or training-stability fixes like
+warmup / SWA / EMA / ensemble).
+
+### 20.8b — Why bimodality exists: the val corpus is on-distribution-biased
+
+Profiling 5 heads (mix of working and broken seeds) on the v9 val corpus:
+
+| head                  | fit   | σ(promote\|phantom) | σ(promote\|real) | #(σ>0.5) |
+|-----------------------|------:|--------------------:|------------------:|---------:|
+| v22_lr1e3_s0          | 0.118 | 0.012               | 0.782             | 48,295   |
+| v22_lr1e3_s1          | 0.621 | 0.012               | 0.781             | 47,328   |
+| v22_lr1e3_s2          | 0.075 | 0.012               | 0.791             | 48,515   |
+| v21_baseline_s1       | 0.622 | 0.011               | 0.788             | 46,296   |
+| v21_baseline_s2       | 0.018 | 0.012               | 0.815             | 48,388   |
+
+All five heads make **near-identical promote decisions on the val
+corpus** (within 2% on aggregate counts and means), yet their
+deployment fitness varies by 35×. AUC necessarily agrees too — same
+ranking ⇒ same AUC.
+
+This is the open-loop ↔ closed-loop bias made concrete:
+
+- The val corpus contains states that the *legacy* tracker visited.
+- New heads that produce slightly different decisions push the
+  tracker off the legacy state manifold.
+- On the manifold the head's behaviour is well-trained; off-manifold
+  it's undefined and produces random-good or random-broken behaviour.
+- Val AUC, val ROC, val any-on-corpus-stat measure on-manifold
+  behaviour, which is identical across heads. None predict which
+  attractor the head ends up in at deployment.
+
+**This means no purely-offline metric can replace the diverse-subset
+fitness eval (Phase 20a)** — the fitness eval IS the only signal,
+because it's the only one that runs closed-loop. Val AUC isn't just
+imprecise; it's *uninformative* in this regime.
+
+### 20.9 — Recommended next steps (for user)
+
+In order of expected payoff:
+
+1. **K-seed-fit-pick methodology** (cheap, immediate). Replace
+   single-seed training with: train K=5 seeds, run diverse-29
+   fitness eval on each, pick best. Bench-test before shipping.
+   Cost: 5× training + 5× ~70s diverse eval = ~20 min per "head
+   selection" decision. Bypasses bimodality without solving it.
+2. **Training-stability investigation** (medium). Tested LR=1e-3 in
+   §20.8 — didn't help (still 1/3 working). Other levers: bias
+   init that warm-starts promote-bias to a moderate negative value,
+   gradient clipping, weight EMA, checkpoint averaging. Each is a
+   small code change but each requires K-seed validation.
+3. **Closed-loop training scaffolding** (multi-day). Phase 20d. The
+   only way to fix bias *and* instability simultaneously, since
+   §20.8b shows val-distribution metrics are uninformative about
+   deployment behaviour.
+4. **Stop training new heads from scratch** (default). Currently-
+   shipped `nn_state_v14` matched best of 8 fresh heads (v21/v22
+   sweeps). Until (1)–(3) land, retraining is net-negative EV.
+
+### 20.10 — Phase 20.9(1) landed: K-seed-fit-pick wrapper
+
+`bench/train_kseed_fitpick.py` — train K seeds, run diverse-29
+fitness eval on each, keep the best-fitness checkpoint, surface a
+per-seed table and JSON summary. Forwards unknown CLI flags to
+`train_state_head.py` so it inherits the full trainer interface.
+
+Validated on v9 corpus, 5 seeds × 30 epochs, lr=1e-3:
+
+| seed | val_AUC | fitness  | MOTA   | FPTr |
+|-----:|--------:|---------:|-------:|-----:|
+|   0  | 0.9447  | 0.1174 ⚠ | 0.1219 |    8 |
+|   1  | 0.9441  | **0.6211** | 0.6519 |   54 |  ←best
+|   2  | 0.9455  | 0.0785 ⚠ | 0.0884 |   19 |
+|   3  | 0.9478  | 0.4325   | 0.4636 |   57 |
+|   4  | 0.9446  | 0.0164 ⚠ | 0.0224 |   12 |
+
+11 min total wall time (5×~140s seed). 3/5 broken, 1/5 mid, 1/5
+strong — the K-seed methodology correctly recovers the strong head
+where val AUC alone (range 0.004 across all 5) cannot. v23 lands at
+−0.007 fitness vs prod nn_state_v14 (0.6278). Across 8 fresh heads
+trained this session the best is v23.s1 / v21_baseline_s1 at
+~0.621 — the v9-corpus + 32-dim arch hits a ceiling slightly below
+prod, so retraining is genuinely net-zero EV here without changing
+the corpus or architecture.
+
+### 20.11 — Files
+
+- `bench/train_state_head.py`: +`--track-loss-enable`,
+  `--lambda-phantom`, `--lambda-miss`, `--tracks-per-batch`
+- `bench/train_kseed_fitpick.py`: K-seed wrapper with diverse-29
+  fitness pick.
+- v21 / v22 heads: `bench/data/state_head_{v21,v22}_*.{pt,bin}` —
+  artefacts of the variance investigation; kept for reproducibility.
+- v23 head: `bench/data/state_head_v23.{pt,bin,kseed.json}`.
+- Logs: `/tmp/joint_retrain/state_head_v2{1,2,3}_*.log`
+- Diverse-subset benches: `/tmp/joint_retrain/diverse_v2{1,2,3}_*.json`
+
+### 20.7 — Status / next steps
+
+Phase 20a (closed-loop eval primitive) and 20b (fitness-select
+training hook) **landed and remain useful** — they let us discover
+that 20c was failing within minutes rather than hours. They also
+let us reject 20c rigorously instead of shipping it.
+
+Phase 20c (sequence-level loss as designed) **does not work** and
+has been disabled by default (still flag-gated for future
+experiments). The implementation in `bench/train_state_head.py` is
+correct and reusable for variants — the failure is the *loss
+design*, not the plumbing.
+
+Bumped to 20d (future): closed-loop / counterfactual training. The
+groundwork in `bench/assign_sim.py` is the natural starting point.
+Until then, the offline pipeline's role is selection (via 20b's
+fitness-select), not exploration.
+
+### 20.8 — Files
+
+- `bench/train_state_head.py`: +`--track-loss-enable`,
+  `--lambda-phantom`, `--lambda-miss`, `--tracks-per-batch`. Track-
+  batched sampling and per-track P(emit) loss implementation.
+- v21 heads: `bench/data/state_head_v21_baseline{,_s1}.{pt,bin}`,
+  `bench/data/state_head_v21_20c{,_light}.{pt,bin}` — kept as
+  artefacts of the failed experiment for reproducibility.
+- Logs: `/tmp/joint_retrain/state_head_v21_*.log`
+- Diverse-subset bench: `/tmp/joint_retrain/diverse_{prod,v21_baseline_s1}.json`
 
 ### 7.6 — Files (Phase 7 base)
 

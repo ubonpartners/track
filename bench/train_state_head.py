@@ -225,6 +225,30 @@ def main():
                         "'diverse'≈80s/eval but covers MOT20-05 etc.")
     p.add_argument("--fitness-workers",     type=int, default=4,
                    help="parallel workers for fitness eval (default 4).")
+    # Phase 20c — sequence-level (track-batched) surrogate loss.
+    p.add_argument("--track-loss-enable",   action="store_true",
+                   help="Enable Phase 20c sequence-level loss. Switches "
+                        "training to track-batched sampling (each batch = T "
+                        "tracks' UNCONFIRMED rows) and adds two terms to the "
+                        "BCE: phantom_loss = E_track[P(emit)*is_phantom], "
+                        "miss_loss = E_track[(1-P(emit))*is_real]. P(emit) per "
+                        "track = 1 - exp(-Σ softplus(promote_logit_i)) over "
+                        "the track's UNCONFIRMED frames in the batch — i.e., "
+                        "1 - Π(1-sigmoid). This penalises 'promote at f1, drop "
+                        "at f2 on the same phantom track' the same way "
+                        "fp_tracks does, which per-frame BCE cannot. See "
+                        "Phase 20c in STATE_HEAD_RETRAIN_PLAN.md.")
+    p.add_argument("--lambda-phantom",      type=float, default=1.0,
+                   help="weight on per-track phantom_loss (only with "
+                        "--track-loss-enable). Default 1.0.")
+    p.add_argument("--lambda-miss",         type=float, default=0.5,
+                   help="weight on per-track miss_loss (only with "
+                        "--track-loss-enable). Default 0.5 (lower than phantom "
+                        "because miss already dominates BCE on real tracks).")
+    p.add_argument("--tracks-per-batch",    type=int, default=64,
+                   help="tracks per batch in track-batched mode. With avg ~124 "
+                        "UNCONFIRMED frames/track, 64 ≈ 8K rows/batch — same "
+                        "magnitude as random-row --batch-size 8192.")
     p.add_argument("--summary-out",         type=str, default=None,
                    help="if set, write JSON {best_score, best_aucs, params} to this path")
     p.add_argument("--seed",                type=int, default=0)
@@ -380,6 +404,53 @@ def main():
               f"{n_fp} examples ({n_fp/len(rec_tr)*100:.1f}% of train)")
     sw_tr = torch.from_numpy(sw_tr_np).to(device)
 
+    # Phase 20c — sequence-level loss prep. Group rows by (sequence, track_id)
+    # so each batch can carry all of a track's UNCONFIRMED rows and we can
+    # compute the correct per-track P(emit) via scatter_add.
+    track_loss_enabled = bool(getattr(args, "track_loss_enable", False))
+    if track_loss_enabled:
+        if "gt_id_now" not in rec_tr.dtype.names:
+            sys.exit("--track-loss-enable requires corpus with gt_id_now field")
+        seq_arr = rec_tr["sequence"].astype(str)
+        tid_arr = rec_tr["track_id"].astype(np.int64)
+        gid_arr = rec_tr["gt_id_now"]
+        keys = np.char.add(seq_arr, np.char.add("#", tid_arr.astype(str)))
+        _, track_idx_per_row = np.unique(keys, return_inverse=True)
+        n_tracks_all = int(track_idx_per_row.max()) + 1
+
+        # is_phantom[t] = 1 iff track t never matches GT (matches the
+        # `fp_tracks` definition in src/track_test.py).
+        is_phantom_arr = np.ones(n_tracks_all, dtype=np.float32)
+        matched_mask = (gid_arr >= 0)
+        if matched_mask.any():
+            is_phantom_arr[np.unique(track_idx_per_row[matched_mask])] = 0.0
+
+        # Per-track row indices — *all* rows of a track (any state). The
+        # demote/drop_lost heads need TRACKED/LOST rows for their BCE; the
+        # sequence loss masks itself down to valid_promote=1 (UNCONFIRMED).
+        # Tracks with zero UNCONFIRMED rows are dropped from the trainable set
+        # because they can't contribute to the sequence loss; BCE on those
+        # rows still happens via the random-row path when --track-loss is off.
+        valid_p_arr = rec_tr["valid_promote"].astype(bool)
+        rows_by_track_all = [[] for _ in range(n_tracks_all)]
+        n_unc_by_track = np.zeros(n_tracks_all, dtype=np.int32)
+        for i in range(len(rec_tr)):
+            t = track_idx_per_row[i]
+            rows_by_track_all[t].append(i)
+            if valid_p_arr[i]:
+                n_unc_by_track[t] += 1
+        kept = [t for t in range(n_tracks_all) if n_unc_by_track[t] > 0]
+        track_all_rows = [np.asarray(rows_by_track_all[t], dtype=np.int64) for t in kept]
+        track_phantom = is_phantom_arr[kept].astype(np.float32)
+        n_phantom = int(track_phantom.sum())
+        total_unc = int(n_unc_by_track[kept].sum())
+        total_rows = sum(len(r) for r in track_all_rows)
+        print(f"[track-loss] {len(kept)} trainable tracks "
+              f"({n_phantom} phantom, {len(kept)-n_phantom} real); "
+              f"{total_rows} rows total ({total_unc} UNCONFIRMED, "
+              f"{total_unc/max(1,len(kept)):.1f}/track)")
+        track_phantom_t = torch.from_numpy(track_phantom).to(device)
+
     head_names = ["promote", "demote", "drop_unconfirmed", "drop_lost"]
 
     bs = args.batch_size
@@ -390,35 +461,100 @@ def main():
     # Each entry: dict(epoch, score, aucs, state_dict_cpu).
     candidates = []
     K = max(1, int(getattr(args, "fitness_top_k", 3))) if getattr(args, "fitness_select", False) else 0
+    def _build_track_batch(t_indices: np.ndarray):
+        """Returns (flat_row_idx, within_batch_track_idx) — concatenated all-state
+        rows for the given tracks plus a per-row 0..T-1 index used by scatter_add."""
+        rows = [track_all_rows[t] for t in t_indices]
+        flat = np.concatenate(rows)
+        within = np.concatenate([np.full(len(r), bi, dtype=np.int64)
+                                  for bi, r in enumerate(rows)])
+        return flat, within
+
     for ep in range(args.epochs):
         model.train()
-        perm = torch.randperm(len(X_tr_t), device=device)
         ep_loss = 0.0
+        ep_phantom = 0.0
+        ep_miss = 0.0
         n_batches = 0
-        for i in range(0, len(perm), bs):
-            idx = perm[i:i+bs]
-            xb = X_tr_t[idx]
-            pl, dl, rl_u, rl_l = model(xb)
-            logits = {"promote": pl, "demote": dl,
-                      "drop_unconfirmed": rl_u, "drop_lost": rl_l}
-            loss = 0.0
-            sw_b = sw_tr[idx]
-            for name in head_names:
-                lbl, mask = lm_tr[name]
-                lbl_b = lbl[idx]; mask_b = mask[idx]
-                eff = mask_b * sw_b
-                if eff.sum() < 1e-6:
-                    continue
-                pos_w = torch.tensor([pw[name]], device=device)
-                bce = F.binary_cross_entropy_with_logits(
-                    logits[name], lbl_b, pos_weight=pos_w, reduction="none",
-                )
-                loss = loss + (bce * eff).sum() / eff.sum()
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-            ep_loss += float(loss.item())
-            n_batches += 1
+        if track_loss_enabled:
+            T = max(1, int(args.tracks_per_batch))
+            tperm = np.random.permutation(len(track_all_rows))
+            for i in range(0, len(tperm), T):
+                t_batch = tperm[i:i+T]
+                flat_rows, within = _build_track_batch(t_batch)
+                idx = torch.from_numpy(flat_rows).to(device)
+                within_t = torch.from_numpy(within).to(device)
+                phantom_b = track_phantom_t[torch.from_numpy(t_batch).to(device)]
+                xb = X_tr_t[idx]
+                pl, dl, rl_u, rl_l = model(xb)
+                logits = {"promote": pl, "demote": dl,
+                          "drop_unconfirmed": rl_u, "drop_lost": rl_l}
+                loss = 0.0
+                sw_b = sw_tr[idx]
+                for name in head_names:
+                    lbl, mask = lm_tr[name]
+                    lbl_b = lbl[idx]; mask_b = mask[idx]
+                    eff = mask_b * sw_b
+                    if eff.sum() < 1e-6:
+                        continue
+                    pos_w = torch.tensor([pw[name]], device=device)
+                    bce = F.binary_cross_entropy_with_logits(
+                        logits[name], lbl_b, pos_weight=pos_w, reduction="none",
+                    )
+                    loss = loss + (bce * eff).sum() / eff.sum()
+                # Sequence loss on the promote head. P(track emitted) =
+                # 1 - Π_i (1 - sigmoid(pl_i)) over the track's UNCONFIRMED
+                # rows. Numerically stable via softplus identity:
+                # log(1 - sigmoid(x)) = -softplus(x). Masked to valid_promote
+                # rows so TRACKED/LOST states (which the promote head doesn't
+                # gate) don't leak into the per-track product.
+                n_tb = len(t_batch)
+                _, valid_p_mask = lm_tr["promote"]
+                vp_b = valid_p_mask[idx]
+                sum_softplus = torch.zeros(n_tb, device=device)
+                sum_softplus.scatter_add_(0, within_t, F.softplus(pl) * vp_b)
+                # log_p_not_emit = -sum_softplus  →  p_emit = 1 - exp(-S).
+                p_emit = -torch.expm1(-sum_softplus)
+                n_phantom_b = phantom_b.sum().clamp(min=1.0)
+                n_real_b    = (1.0 - phantom_b).sum().clamp(min=1.0)
+                phantom_loss = (p_emit * phantom_b).sum() / n_phantom_b
+                miss_loss    = ((1.0 - p_emit) * (1.0 - phantom_b)).sum() / n_real_b
+                loss = (loss
+                        + args.lambda_phantom * phantom_loss
+                        + args.lambda_miss * miss_loss)
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+                ep_loss += float(loss.item())
+                ep_phantom += float(phantom_loss.item())
+                ep_miss += float(miss_loss.item())
+                n_batches += 1
+        else:
+            perm = torch.randperm(len(X_tr_t), device=device)
+            for i in range(0, len(perm), bs):
+                idx = perm[i:i+bs]
+                xb = X_tr_t[idx]
+                pl, dl, rl_u, rl_l = model(xb)
+                logits = {"promote": pl, "demote": dl,
+                          "drop_unconfirmed": rl_u, "drop_lost": rl_l}
+                loss = 0.0
+                sw_b = sw_tr[idx]
+                for name in head_names:
+                    lbl, mask = lm_tr[name]
+                    lbl_b = lbl[idx]; mask_b = mask[idx]
+                    eff = mask_b * sw_b
+                    if eff.sum() < 1e-6:
+                        continue
+                    pos_w = torch.tensor([pw[name]], device=device)
+                    bce = F.binary_cross_entropy_with_logits(
+                        logits[name], lbl_b, pos_weight=pos_w, reduction="none",
+                    )
+                    loss = loss + (bce * eff).sum() / eff.sum()
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+                ep_loss += float(loss.item())
+                n_batches += 1
 
         # Validation AUCs (per head, masked appropriately).
         model.eval()
@@ -437,7 +573,11 @@ def main():
         aucs["drop_lost"]        = per_head_auc(arr["drop_lost"],        rec_va["drop_label"],    extra_va["valid_drop_lost"])
         vals = [aucs[k] for k in head_names]
         score = float(np.mean(vals)) if not any(np.isnan(vals)) else -1.0
-        print(f"ep {ep:3d}  loss={ep_loss/max(1,n_batches):.4f}  AUC " +
+        seq_str = ""
+        if track_loss_enabled:
+            seq_str = (f"  L_phantom={ep_phantom/max(1,n_batches):.4f} "
+                       f"L_miss={ep_miss/max(1,n_batches):.4f}")
+        print(f"ep {ep:3d}  loss={ep_loss/max(1,n_batches):.4f}{seq_str}  AUC " +
               " ".join(f"{k[:4]}={aucs[k]:.4f}" for k in head_names))
         if score > best_score:
             best_score = score
