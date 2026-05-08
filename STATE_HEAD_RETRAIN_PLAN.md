@@ -2577,6 +2577,71 @@ Both keep `delete_dup_iou: 0.90`, `new_track_thr: 0.77`,
 - Bench: `/tmp/joint_retrain/bench_phase17_nl.{py,json,log}`
 - YAMLs: `/tmp/joint_retrain/uc_phase17_nl0_{05,10,25,40}.yaml`
 
+---
+
+## Phase 18 — User-eval-framework rebench (apples-to-apples)
+
+Earlier benches used `eval_min_framerate=5`; user's search uses `9.9`.
+Re-running the Phase 14/17 winners with user's exact eval params
+(`eval_min_framerate=9.9`, `match_iou=0.45`) on the 43-clip search
+distribution:
+
+| variant | fit | MOTA | FPTr | FP/fr |
+|---|--:|--:|--:|--:|
+| **live_v9face_d080** | **0.6139** | 0.6894 | 146 | 1.259 |
+| no_nn_thr77 | 0.6391 | 0.6795 | 76 | 1.203 |
+| **v9face_nl0_05** | **0.6417** | 0.6807 | 73 | 1.236 |
+
+**My `live_v9face_d080` = 0.6139 exactly matches user's reported
+`Fit:0.614`** in `search_log_20260505-1702.txt` ("Best score
+MOTA:0.68900 Fit:0.61400 FPpf:1.26 FPTr:146"). Numbers are now
+directly comparable to user's framework.
+
+### 18.1 — Final winner on user's framework
+
+`v9face_nl0_05` gives **+0.028 fitness over the user's live
+deployment** on the 43-clip user search corpus, with FPTr cut from
+146 → 73 (half).
+
+| metric | live | proposed | Δ |
+|---|--:|--:|--:|
+| fit | 0.614 | **0.642** | **+0.028** |
+| MOTA | 0.689 | 0.681 | −0.009 |
+| FPTr | 146 | 73 | **−73 (−50%)** |
+| FP/fr | 1.26 | 1.24 | −0.02 |
+
+Trade-off: small MOTA loss (0.009) for large FPTr win. The fitness
+function weights FPTr × 0.0005 = 0.0365 fitness/clip-set saved.
+
+### 18.2 — Note on user's search "score 0.6620"
+
+User's search log shows "new score_best 0.6620" at the same config,
+but the same line reports `Fit:0.614`. The 0.6620 is the search
+optimiser's internal score (probably penalised by IDF1, FRP, or
+SWPo per `result_dataset_opt_param`), not the raw fitness function.
+My 0.614 = user's 0.614 confirms the raw `fitness` is the right
+metric for comparing.
+
+### 18.3 — Final confirmed deploy candidate
+
+```yaml
+utrack:
+  delete_dup_iou: 0.90        # was 0.80 (Phase 8)
+  nn_path: /mldata/config/track/trackers/nn_match_v9_face.bin  # KEEP (Phase 17)
+  nn_lambda: 0.05             # was 0.25 (Phase 17 — face NN partially helps)
+  nn_state_path: /mldata/config/track/trackers/nn_state_v14.bin  # unchanged
+  new_track_thr: 0.77         # was 0.70 (Phase 14)
+```
+
+Validated: **+0.028 fitness on user's exact 43-clip search bench,
++0.064 on my full 178-clip bench**. FPTr cut by 50% on the search
+corpus. Per-family on 178: MOT17 +0.020, MOT20 +0.017, PP22 +0.013,
+UKof −0.028, INof +0.005.
+
+### 18.4 — Files
+
+- Bench: `/tmp/joint_retrain/bench_match_user_eval.{py,json,log}`
+
 ### 7.6 — Files (Phase 7 base)
 
 - `bench/train_state_head.py`: +`--no-history`, +`--fitness-fp-boost`
