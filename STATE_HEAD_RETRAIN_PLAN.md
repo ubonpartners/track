@@ -2943,6 +2943,31 @@ trained this session the best is v23.s1 / v21_baseline_s1 at
 prod, so retraining is genuinely net-zero EV here without changing
 the corpus or architecture.
 
+### 20.10b — Capacity ablation: hidden=64 makes it worse
+
+Same K=5 wrapper, lr=1e-3, 30 epochs, but `--hidden 64` (vs default 32):
+
+| seed | val_AUC | fitness  | MOTA   | FPTr |
+|-----:|--------:|---------:|-------:|-----:|
+|   0  | 0.9468  | 0.0125 ⚠ | 0.0156 |    6 |
+|   1  | 0.9478  | 0.1228   | 0.1436 |   40 |
+|   2  | 0.9460  | 0.0534 ⚠ | 0.0587 |   10 |
+|   3  | 0.9474  | **0.3347** | 0.3447 |   17 | ←best
+|   4  | 0.9477  | 0.1548   | 0.1703 |   29 |
+
+Best seed: 0.3347, vs v23 (hidden=32) best 0.6211. **No seed reached
+the working basin** (>0.5). AUC, again, is identical between v23 and
+v24 (same range 0.945–0.948).
+
+Hypothesis confirmed: more capacity ⇒ tighter fit on the legacy-
+biased val distribution ⇒ worse off-distribution generalization to
+the deployment manifold. The smaller hidden=32 head is *correctly
+sized* — the bottleneck is data distribution, not model capacity.
+
+This rules out "model architecture" as a lever for beating prod
+without changing one of: the corpus distribution, the runtime input
+dim, or the training loop (closed-loop / RL).
+
 ### 20.11 — Files
 
 - `bench/train_state_head.py`: +`--track-loss-enable`,
