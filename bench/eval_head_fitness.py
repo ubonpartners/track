@@ -45,6 +45,7 @@ import src.track_test as tt
 
 DIVERSE_SUBSET_PATH = Path(__file__).resolve().parent / "eval_subset_diverse.json"
 FAST_SUBSET_PATH    = Path(__file__).resolve().parent / "eval_subset_fast.json"
+FULL_SUBSET_PATH    = Path(__file__).resolve().parent / "eval_subset_full178.json"
 DEFAULT_DATASET_CFG = Path(__file__).resolve().parent / "pair_log_config_v6_with_pp22.yaml"
 
 # User's search-bench eval params (Phase 18 confirmed match).
@@ -52,7 +53,8 @@ EVAL_PARAMS = dict(eval_rate_divisor=1, eval_min_framerate=9.9, match_iou=0.45)
 
 
 def load_subset(name: str = "diverse") -> list:
-    p = {"diverse": DIVERSE_SUBSET_PATH, "fast": FAST_SUBSET_PATH}[name]
+    p = {"diverse": DIVERSE_SUBSET_PATH, "fast": FAST_SUBSET_PATH,
+         "full":    FULL_SUBSET_PATH}[name]
     return json.loads(p.read_text())["clips"]
 
 
@@ -61,17 +63,75 @@ def load_dataset_paths(dataset_cfg=DEFAULT_DATASET_CFG) -> dict:
     return {name: info["trackset"] for name, info in cfg["dataset"].items()}
 
 
+_LOAD_FAIL_PATTERNS = (
+    "failed to load",
+    "in_dim mismatch",
+    "in_dim out of range",
+    "short header",
+)
+
+
 def _run_one_clip(args):
-    """Worker: run tracker on one clip and return its raw metrics."""
+    """Worker: run tracker on one clip and return its raw metrics.
+    On a tracker exception (e.g., trackset assertion on non-monotonic frame
+    times in a few PP22 clips), return a sentinel so the bench can continue
+    on the remaining clips. Skipped clips contribute zero to the aggregate.
+
+    We also capture C-runtime stderr at fd-level via a temp file and scan
+    it for known load-failure patterns. The C tracker's `log_error` writes
+    to fd 2 directly and is otherwise invisible to Python — without this
+    capture, a silently-disabled state head produces a "no head" bench
+    that *looks* like a normal result. The §20.19 retraction was caused
+    exactly by this failure mode."""
     clip, path, yaml_path, frame_cap_sec = args
-    gt = ts.TrackSet(path)
-    out = ts.TrackSet()
-    end_time = frame_cap_sec if frame_cap_sec else 100000
-    out.import_create(gt, track_min_interval=0.199, debug=False,
-                      config_file=yaml_path, debug_enable=False, params=None,
-                      end_time=end_time)
-    m = tt.compute_metrics(gt, out, frame_metrics=False, show_pbar=False,
-                            metrics="python", **EVAL_PARAMS)
+    import tempfile
+    saved_fd = None
+    err_path = None
+    err_text = ""
+    try:
+        # Redirect fd 2 to a temp file so we capture C-side log_error output.
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".stderr",
+                                          prefix=f"clip_{clip}_", delete=False) as ef:
+            err_path = ef.name
+        sys.stderr.flush()
+        saved_fd = os.dup(2)
+        ef_fd = os.open(err_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        os.dup2(ef_fd, 2)
+        os.close(ef_fd)
+        try:
+            gt = ts.TrackSet(path)
+            out = ts.TrackSet()
+            end_time = frame_cap_sec if frame_cap_sec else 100000
+            out.import_create(gt, track_min_interval=0.199, debug=False,
+                              config_file=yaml_path, debug_enable=False, params=None,
+                              end_time=end_time)
+            m = tt.compute_metrics(gt, out, frame_metrics=False, show_pbar=False,
+                                    metrics="python", **EVAL_PARAMS)
+        finally:
+            sys.stderr.flush()
+            os.dup2(saved_fd, 2)
+            os.close(saved_fd); saved_fd = None
+            try:
+                with open(err_path, "r", errors="replace") as f: err_text = f.read()
+            except OSError: pass
+    except Exception as e:
+        if saved_fd is not None:
+            try: os.dup2(saved_fd, 2); os.close(saved_fd)
+            except OSError: pass
+        return clip, {"_skip_reason": f"{type(e).__name__}: {str(e)[:200]}",
+                       "_stderr": err_text[:1000]}
+    finally:
+        if err_path:
+            try: os.unlink(err_path)
+            except OSError: pass
+
+    # Detect the silent-disable failure mode: any known head-load error
+    # pattern in C-runtime stderr → mark as load-failed so the parent can
+    # abort rather than silently producing a "no head" bench.
+    for pat in _LOAD_FAIL_PATTERNS:
+        if pat in err_text:
+            return clip, {"_load_fail": err_text[:500]}
+
     return clip, {
         "num_objects":         float(m["num_objects"]),
         "num_false_positives": float(m["num_false_positives"]),
@@ -110,11 +170,26 @@ def eval_config(yaml_path: str, clips: list[str] | None = None,
         work.append((clip, path, yaml_path, frame_cap_sec))
 
     raw = {}
+    skipped = {}
+    def _ingest(clip, m):
+        if "_load_fail" in m:
+            # Abort loud — never silently produce a "no head" bench.
+            raise RuntimeError(
+                f"Tracker config produced a state-head load failure "
+                f"on clip {clip!r}. The C runtime was disabled rather than "
+                f"using the head you intended; results would be invalid. "
+                f"Captured stderr:\n{m['_load_fail']}")
+        if "_skip_reason" in m:
+            skipped[clip] = m["_skip_reason"]
+            print(f"  [warn] skip {clip}: {m['_skip_reason']}", file=sys.stderr)
+        else:
+            raw[clip] = m
+            if verbose: print(f"  [{clip}] fit={m['fitness']:.4f}", file=sys.stderr)
+
     if workers <= 1:
         for w in work:
             clip, m = _run_one_clip(w)
-            raw[clip] = m
-            if verbose: print(f"  [{clip}] fit={m['fitness']:.4f}", file=sys.stderr)
+            _ingest(clip, m)
     else:
         # Use 'spawn' to avoid CUDA + fork incompatibility (TensorRT engines
         # don't survive a fork from a parent that touched CUDA).
@@ -123,8 +198,7 @@ def eval_config(yaml_path: str, clips: list[str] | None = None,
             futs = {ex.submit(_run_one_clip, w): w[0] for w in work}
             for fut in as_completed(futs):
                 clip, m = fut.result()
-                raw[clip] = m
-                if verbose: print(f"  [{clip}] fit={m['fitness']:.4f}", file=sys.stderr)
+                _ingest(clip, m)
 
     # Aggregate fitness across selected clips.
     def aggregate(keys):
@@ -158,6 +232,7 @@ def eval_config(yaml_path: str, clips: list[str] | None = None,
         "overall": overall,
         "per_family": per_family,
         "raw": raw,
+        "skipped": skipped,
     }
 
 
@@ -180,9 +255,11 @@ def main():
     p.add_argument("--state-bin", help="state head .bin; will be plugged into base config")
     p.add_argument("--base", default=None,
                    help="base YAML when --state-bin used (default: live prod)")
-    p.add_argument("--subset", default="diverse", choices=["diverse", "fast"],
+    p.add_argument("--subset", default="diverse", choices=["diverse", "fast", "full"],
                    help="eval subset: 'diverse' (29 clips, ~3 min seq) or "
-                        "'fast' (~20 clips, drops expensive ones)")
+                        "'fast' (~20 clips, drops expensive ones) or "
+                        "'full' (178 clips from pair_log_config_v6_with_pp22.yaml — "
+                        "for final validation; ~8 min per run with 4 workers)")
     p.add_argument("--workers", type=int, default=1,
                    help="parallel clip eval workers (1 = sequential)")
     p.add_argument("--frame-cap-sec", type=float, default=None,

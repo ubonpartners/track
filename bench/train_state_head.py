@@ -251,6 +251,22 @@ def main():
                         "magnitude as random-row --batch-size 8192.")
     p.add_argument("--summary-out",         type=str, default=None,
                    help="if set, write JSON {best_score, best_aucs, params} to this path")
+    # Phase 20.21 — corpus rebalancing: 98% of UNCONFIRMED rows are
+    # absent-track artefacts (matched=0, det_conf=0). They contribute
+    # zero discriminative signal. Filtering to matched=1 only means the
+    # promote-head training is dominated by the 1.7% rows where the
+    # head actually has to decide.
+    p.add_argument("--filter-matched-only",        action="store_true",
+                   help="Drop training rows where matched=0 (i.e., absent-track "
+                        "artefacts emitted by the corpus builder for tracks alive "
+                        "but not seen this frame). 98% of UNCONFIRMED rows are "
+                        "trivial matched=0 'no det → don't promote' examples; "
+                        "filtering rebalances the loss toward the 1.7% matched=1 "
+                        "rows that contain the actual hard discriminations the "
+                        "head needs to learn for low-conf track-rescue. "
+                        "Reduces train set ~50× — typical sign-of-life is whether "
+                        "history-feature weight norms increase vs an unfiltered "
+                        "v29 baseline.")
     p.add_argument("--seed",                type=int, default=0)
     args = p.parse_args()
 
@@ -261,6 +277,25 @@ def main():
                               zero_spatial=args.zero_spatial)
     rec_va, X_va = load_split(args.val,   zero_e_track=args.zero_e_track,
                               zero_spatial=args.zero_spatial)
+
+    if getattr(args, "filter_matched_only", False):
+        # Per-head fix: invalidate valid_promote on matched=0 rows so the
+        # promote head only trains on examples it'll actually see at
+        # deployment (the C runtime calls promote_head only on matched
+        # detections at match time). Demote/drop heads keep their
+        # matched=0 rows because drop_unc/drop_lost ARE supposed to fire
+        # on absent tracks, and demote fires on TRACKED state regardless.
+        # Naive row-filtering would kill drop-head training.
+        for r in (rec_tr, rec_va):
+            unmatched = ~r["matched"].astype(bool)
+            n_promote_before = int(r["valid_promote"].sum())
+            # Mutate via a copy since rec dtype is structured.
+            vp = r["valid_promote"].copy()
+            vp[unmatched] = 0
+            r["valid_promote"] = vp
+            n_promote_after = int(r["valid_promote"].sum())
+            print(f"--filter-matched-only: valid_promote {n_promote_before} -> "
+                  f"{n_promote_after} ({n_promote_after/max(1,n_promote_before)*100:.1f}% kept)")
     if args.no_history:
         # Drop the 5 history-aggregate columns (14:19) so the trained head
         # is drop-in deployable with the C runtime's UTRACK_NN_STATE_IN_DIM=32.

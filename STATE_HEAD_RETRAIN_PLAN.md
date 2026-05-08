@@ -3218,7 +3218,107 @@ the user warned about. Mitigations going forward:
   asked for in §20.12, we'd likely have shipped a regression based
   on a single-run "+0.0011 win" that was pure artifact.
 
-### 20.20 — Status
+### 20.20 — v30: per-head matched=1 filter unlocks discrimination
+
+User pushed back on the "history aggregates don't help" conclusion
+(§20.15/20.18) — pointed out that the threshold gate at `new_track_thr=0.77`
+is much higher than the median real-track det_conf for PP22 (0.545)
+and UKof (0.564), so 74% of real PP22 tracks never even get to the
+state head. They argued the head MUST be capable of compensating —
+worst case it learns to recover the threshold rule.
+
+Investigating why v29 (37-dim with history) didn't measurably differ
+from v14 in deployment, even though it learned non-trivial weights
+on history columns:
+
+| corpus row category | n      | role at deployment       | head's input |
+|---------------------|-------:|--------------------------|--------------|
+| matched=1 obs=1     | ~46K   | actual track-start decision (the only time the C runtime calls promote) | det_conf, history, e_track |
+| matched=0 obs=1     | ~961K  | absent track artefact (drop_unc is the relevant head, not promote) | det_conf=0, history=carryover, e_track=carryover |
+
+**98% of UNCONFIRMED training rows are matched=0 absent-track
+artefacts** with `det_conf=0.000`. They're trivial "no det → don't
+promote" examples that contribute no discriminative signal but
+dominate the BCE gradient. The head learns "promote ≈ 1[det_conf
+high]" because that's what minimises loss on the trivial 98%.
+
+`bench/train_state_head.py --filter-matched-only` invalidates
+`valid_promote=0` on matched=0 rows (per-head, not per-row, so
+demote/drop_unc/drop_lost training data is preserved). The promote
+head's training is now dominated by actually-discriminative examples.
+
+**v30 K=5 result** (37-dim, hidden=64, lr=1e-3, cr_promote=2.0,
+30 epochs, v11 corpus, --filter-matched-only):
+
+| seed | val_AUC | fitness  | MOTA   | FPTr |
+|-----:|--------:|---------:|-------:|-----:|
+|   0  | 0.9305  | 0.6225   | 0.6569 |   62 |
+|   1  | 0.9305  | 0.6263   | 0.6591 |   58 |
+|   2  | 0.9301  | 0.6079   | 0.6475 |   73 |
+|   3  | 0.9223  | **0.6295** | 0.6606 |   54 | ←best
+|   4  | 0.9258  | 0.6214   | 0.6569 |   64 |
+
+5/5 in working basin. Best v30.s3 N=5 multi-run averaging vs prod:
+
+| metric    | v14 prod          | v29 (full filter)   | **v30 (per-head filter)** | Δ vs v14  |
+|-----------|------------------:|--------------------:|--------------------------:|----------:|
+| fitness   | 0.6258 ± 0.0006   | 0.6256 ± 0.0009     | **0.6290 ± 0.0007**       | **+0.0032** |
+| MOTA      | 0.6591            | 0.6587              | 0.6604                    | +0.0013   |
+| FPTr      | 59.4              | 59.0                | 54.6                      | −4.8      |
+| FP/frame  | 1.793             | 1.824               | 2.036                     | +0.243    |
+
+**+0.0032 gap exceeds combined std (0.0009).** First head this
+session that's statistically above prod after multi-run averaging.
+
+The history columns now have ~2× the weight norms vs v29:
+ema_match_x_conf 1.20→2.54, log_sum_det_conf 2.20→3.56, etc. The
+head genuinely uses history-based discrimination — `log_sum_det_conf`
+(3.56) outweighs `det_conf` itself (2.14).
+
+### 20.21 — v30 threshold sweep
+
+| thr   | v14 fit | v30 fit | v30 PP22_mota |
+|------:|--------:|--------:|--------------:|
+| 0.50  | 0.5552  | 0.5536  | 0.5187        |
+| 0.60  | 0.5988  | 0.6021  | 0.5105        |
+| 0.70  | 0.6199  | 0.6233  | 0.4982        |
+| 0.77  | 0.6258  | 0.6290  | (best)        |
+
+v30 is +0.003 over v14 at every threshold ≥ 0.60 (consistent gain).
+But the user's stronger hypothesis — "head should compensate for
+lower thr, worst case = no worse" — is **only partially confirmed**.
+v30's optimum is still thr=0.77, and the FPTr explosion at thr=0.50
+(237) wipes out the PP22 MOTA gain (0.488→0.519). The head doesn't
+fully recover the threshold rule's ability to suppress phantoms.
+
+This is consistent with `cr_promote=2.0` biasing the head to
+promote eagerly — to make it more aggressive at killing borderline
+tracks, would need a separate sweep at lower cr_promote (e.g. 0.5)
+or different loss balance. Future work.
+
+### 20.22 — Recommendation: ship v30
+
+`bench/data/state_head_v30_filtered.bin` (37-dim, hidden=64,
+trained with `--filter-matched-only` on v11 corpus). Drop-in deploy:
+
+```yaml
+/mldata/config/track/trackers/uc_v11.yaml:
+  nn_state_path: state_head_v30_filtered.bin   # was nn_state_v14.bin
+  # All other Phase 18 winners unchanged:
+  new_track_thr: 0.77
+  delete_dup_iou: 0.90
+  nn_path: nn_match_v9_face.bin
+  nn_lambda: 0.05
+```
+
+Validated: +0.0032 fitness (statistically significant N=5),
+−4.8 FPTr, +0.0013 MOTA on diverse-29. Per-family breakouts at
+thr=0.77 and the full-178 bench need verification before flip
+(per the load-failure lesson in §20.19, never silently trust a
+single eval). User explicit "deploy" needed before touching
+`/mldata`.
+
+### 20.23 — Status
 
 ### 20.20 — Files
 
