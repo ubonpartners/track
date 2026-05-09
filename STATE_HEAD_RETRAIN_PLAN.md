@@ -4555,10 +4555,13 @@ noise. v8+no-demote produces **13× fewer FP tracks** (11 vs 144).
 | variant | fitness mean ± std | MOTA | fp_tracks |
 |---|--:|--:|--:|
 | **v8 + bayes_disable_demote** | **0.4700 ± 0.0019** | 0.5259 | 107 |
+| **v10 + bayes_disable_demote** | **0.4691 ± 0.0013** | 0.5283 | 114 |
 | v41 (legacy MLP)              | 0.4597 ± 0.0002     | 0.5302 | 137 |
 
-**v8 + no-demote BEATS v41 by +0.0103 fitness, with -22% fewer FP
-tracks**. Both means well separated (Δ/std ≈ 5σ).
+**Both v8 and v10 + no-demote BEAT v41 by ~0.010 fitness with fewer
+FP tracks**. v8 vs v10 is a statistical tie (Δ=0.0009, ~0.5σ). v10
+has the μ_TP loss-gating fix and slightly higher MOTA but a few more
+FPs; v8 is the simpler shippable choice.
 
 Critical fix that unlocked the win: dropping `bayes_c_FP_track=0.025`
 override (which was over-suppressing). With the runtime default
