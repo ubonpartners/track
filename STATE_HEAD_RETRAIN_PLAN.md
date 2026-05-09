@@ -4361,3 +4361,68 @@ Future heads must beat this regression set before any full-178 bench.
 `bench/trace_library/README.md`,
 `bench/trace_library/traces/{5 seed traces}.npz`.
 
+---
+
+## 2026-05-09 — No-demote experiment (offline)
+
+User asked: do we even NEED demote? With output-fix already filtering
+unmatched-TRACKED tracks out of bench output, demote (TRACKED→LOST) only
+exists for: Pass-3 cross-match, eviction priority, hard timeout, pose-
+tracker exclusion, dedup-on-overlap. None of those affect cost-rule
+fitness directly.
+
+`bench/test_no_demote.py` runs the offline cost-rule sim with two state
+machines: with-demote (current) and no-demote (TRACKED stays TRACKED).
+Same val corpus, same head, same cost params.
+
+**Results on `state_head_dc_v8.pt` + `state_corpus_v9_val.npz`**:
+
+| metric            | with demote | no demote | delta   |
+|-------------------|------------:|----------:|--------:|
+| TP coverage       |    8.55%    |  10.70%   | +2.2 pp |
+| MOTA proxy        |    0.078    |   0.098   | +25%    |
+| fitness proxy     |    0.076    |   0.096   | +25%    |
+| n_demote events   |    1134     |     0     | —       |
+
+**Same on v9**:
+
+| metric            | with demote | no demote | delta   |
+|-------------------|------------:|----------:|--------:|
+| TP coverage       |   11.66%    |  18.99%   | +7.3 pp |
+| MOTA proxy        |    0.107    |   0.173   | +63%    |
+| fitness proxy     |    0.091    |   0.158   | +74%    |
+| n_demote events   |    2319     |     0     | —       |
+
+The 1134/2319 demote events on val are mostly mis-firing on real TPs
+during occlusion (the μ_TP collapse). Removing demote stops the leak.
+
+**Caveat — offline sim does NOT model the C runtime's drop rule.** Without
+drop, FP tracks that promote once stay TRACKED forever; FP exposure
+blows up to 25-50× the with-demote baseline. In a real C-runtime
+no-demote variant, the drop rule still fires and FP exposure stays
+bounded. So the +25-63% MOTA / fitness lifts are real; the FP-exposure
+blowup is an artifact of incomplete sim.
+
+**Implication for the C runtime**: a no-demote variant is viable if we
+ensure unmatched-TRACKED tracks are dropped on a timeout (replacing
+the LOST hard-timeout). What we *would* lose:
+
+  - Pass-3 cross-match (TRACKED↔LOST stitching for ID continuity through
+    short occlusions). Real concern; needs measurement.
+  - Eviction-tier protection — TRACKED no longer guaranteed safe under
+    per-cell cap; could OOM/evict TPs under crowded scenes.
+  - Pose-tracker exclusion — pose pipeline currently filters LOST out;
+    without LOST, every unmatched TRACKED is fed into pose.
+  - Dedup-on-overlap — currently kills LOST when a TRACKED overlaps it.
+    Without LOST, two near-duplicates can both stay TRACKED.
+
+**Recommendation**: implement a `disable_demote` YAML knob in the C
+runtime that:
+  (a) Skips TRACKED→LOST in the cost-rule loop.
+  (b) Adds a TRACKED unmatched-frames > N_max → drop pruning step.
+  (c) Leaves Pass-3 cross-match, eviction, and dedup unchanged for now
+      (they still operate on LOST tracks that never get created — i.e.,
+      they become no-ops, which is fine).
+
+**Files**: `bench/test_no_demote.py` (new).
+
