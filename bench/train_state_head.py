@@ -46,18 +46,36 @@ N_INPUT = 3 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 5 + 5 + N_E_TRACK   # = 37
 
 
 def build_input_matrix(rec: np.ndarray) -> np.ndarray:
-    """(N, 32) float32. Order matches the C-side runtime feeder
-    (utrack_build_state_features in utrack.c). Don't reorder without
-    bumping UTRACK_NN_STATE_IN_DIM and the C builder.
+    """(N, 23) float32. Order MUST match the C-side runtime feeder
+    (utrack_build_state_features in utrack.c, in_dim=23 branch). Don't
+    reorder without bumping UTRACK_NN_STATE_IN_DIM and the C builder.
 
-    The 5 spatial / detection-quality features (near_edge through
-    log_pose_kp) were added 2026-05-05 to give the heads context that
-    e_track's 16-dim compression of the Phase 3 obs features couldn't
-    preserve at full fidelity (in particular: edge proximity, raw
-    detection size, and the keypoint-visibility count)."""
+    Layout (2026-05-09 — state_head v45+):
+      [0..2]   prior_state one-hot (UNCONFIRMED, TRACKED, LOST)
+      [3]      matched
+      [4..10]  log1p(obs), log1p(missed), time_since_det,
+               log1p(scene_density), det_conf, prev_det_conf, pair_score
+      [11..15] near_edge, det_w, det_h, log_aspect, log_pose_kp
+      [16..20] ema_match_x_conf, log_sum_det_conf, min_match_score,
+               mean_match_score, n_strong_matches
+      [21..22] log1p(time_since_creation), log1p(time_in_state)
+
+    History (2026-05-09): the 16-dim e_track input was dropped — weight-
+    inspection of v33/v41 trained heads showed all 16 columns sat at
+    near-init magnitude and were uniform across runs (the match-cost NN
+    failed to load during pair-log generation, so e_track was always 0
+    in both corpus and runtime). 16 of 37 dims were dead weight. The new
+    layout drops them and adds two explicit track-age signals so the
+    head can distinguish 'rock-solid TRACKED that just lost a frame'
+    from 'barely-promoted track already faltering'."""
     n = len(rec)
     state_oh = np.zeros((n, 3), dtype=np.float32)
     state_oh[np.arange(n), np.clip(rec["prior_state"].astype(np.int32), 0, 2)] = 1.0
+
+    def _get(name):
+        return (rec[name] if name in rec.dtype.names
+                else np.zeros(n, np.float32)).astype(np.float32).reshape(-1, 1)
+
     cols = [
         state_oh,
         rec["matched"].astype(np.float32).reshape(-1, 1),
@@ -73,19 +91,13 @@ def build_input_matrix(rec: np.ndarray) -> np.ndarray:
         rec["det_h"].astype(np.float32).reshape(-1, 1),
         rec["log_aspect"].astype(np.float32).reshape(-1, 1),
         rec["log_pose_kp"].astype(np.float32).reshape(-1, 1),
-        # v3 (history aggregates) — fall back to zeros for old corpora
-        # that don't have these fields.
-        (rec["ema_match_x_conf"] if "ema_match_x_conf" in rec.dtype.names
-         else np.zeros(len(rec), np.float32)).astype(np.float32).reshape(-1, 1),
-        (rec["log_sum_det_conf"] if "log_sum_det_conf" in rec.dtype.names
-         else np.zeros(len(rec), np.float32)).astype(np.float32).reshape(-1, 1),
-        (rec["min_match_score"] if "min_match_score" in rec.dtype.names
-         else np.zeros(len(rec), np.float32)).astype(np.float32).reshape(-1, 1),
-        (rec["mean_match_score"] if "mean_match_score" in rec.dtype.names
-         else np.zeros(len(rec), np.float32)).astype(np.float32).reshape(-1, 1),
-        (rec["n_strong_matches"] if "n_strong_matches" in rec.dtype.names
-         else np.zeros(len(rec), np.float32)).astype(np.float32).reshape(-1, 1),
-        rec["e_track"].astype(np.float32),
+        _get("ema_match_x_conf"),
+        _get("log_sum_det_conf"),
+        _get("min_match_score"),
+        _get("mean_match_score"),
+        _get("n_strong_matches"),
+        np.log1p(_get("time_since_creation")),
+        np.log1p(_get("time_in_state")),
     ]
     return np.concatenate(cols, axis=1)
 
@@ -173,7 +185,7 @@ def main():
     p.add_argument("--val",   required=True)
     p.add_argument("--save",  default="bench/data/state_head_v1.pt")
     p.add_argument("--epochs", type=int, default=50)
-    p.add_argument("--batch_size", type=int, default=8192)
+    p.add_argument("--batch_size", type=int, default=65536)
     p.add_argument("--lr", type=float, default=3e-3)
     p.add_argument("--wd", type=float, default=1e-4)
     p.add_argument("--hidden", type=int, default=32)
@@ -267,6 +279,12 @@ def main():
                         "Reduces train set ~50× — typical sign-of-life is whether "
                         "history-feature weight norms increase vs an unfiltered "
                         "v29 baseline.")
+    p.add_argument("--no-drop-heads",       action="store_true",
+                   help="Skip the drop_unconfirmed and drop_lost loss terms "
+                        "entirely. The head still has 4 outputs in the .bin "
+                        "for backward-compat, but only promote and demote "
+                        "get gradient. Pairs with the unified state-pass C "
+                        "runtime that calls only promote and demote heads.")
     p.add_argument("--seed",                type=int, default=0)
     args = p.parse_args()
 
@@ -487,6 +505,13 @@ def main():
         track_phantom_t = torch.from_numpy(track_phantom).to(device)
 
     head_names = ["promote", "demote", "drop_unconfirmed", "drop_lost"]
+    if getattr(args, "no_drop_heads", False):
+        # 2-head training: only promote and demote get gradient. drop heads
+        # stay at random init in the saved checkpoint (the runtime ignores
+        # them — see utrack.c unified state-transition pass).
+        head_names = ["promote", "demote"]
+        print(f"--no-drop-heads: training only {head_names}; drop_* heads "
+              f"frozen at init.")
 
     bs = args.batch_size
     best_score = -1.0
@@ -507,9 +532,12 @@ def main():
 
     for ep in range(args.epochs):
         model.train()
-        ep_loss = 0.0
-        ep_phantom = 0.0
-        ep_miss = 0.0
+        # Accumulate loss/phantom/miss as device tensors; sync once per epoch.
+        # Per-batch .item() syncs CPU↔GPU thousands of times/epoch which
+        # dominates wall time on this tiny model.
+        ep_loss_t    = torch.zeros((), device=device)
+        ep_phantom_t = torch.zeros((), device=device)
+        ep_miss_t    = torch.zeros((), device=device)
         n_batches = 0
         if track_loss_enabled:
             T = max(1, int(args.tracks_per_batch))
@@ -560,9 +588,9 @@ def main():
                 opt.zero_grad()
                 loss.backward()
                 opt.step()
-                ep_loss += float(loss.item())
-                ep_phantom += float(phantom_loss.item())
-                ep_miss += float(miss_loss.item())
+                ep_loss_t    = ep_loss_t    + loss.detach()
+                ep_phantom_t = ep_phantom_t + phantom_loss.detach()
+                ep_miss_t    = ep_miss_t    + miss_loss.detach()
                 n_batches += 1
         else:
             perm = torch.randperm(len(X_tr_t), device=device)
@@ -588,7 +616,7 @@ def main():
                 opt.zero_grad()
                 loss.backward()
                 opt.step()
-                ep_loss += float(loss.item())
+                ep_loss_t = ep_loss_t + loss.detach()
                 n_batches += 1
 
         # Validation AUCs (per head, masked appropriately).
@@ -608,6 +636,10 @@ def main():
         aucs["drop_lost"]        = per_head_auc(arr["drop_lost"],        rec_va["drop_label"],    extra_va["valid_drop_lost"])
         vals = [aucs[k] for k in head_names]
         score = float(np.mean(vals)) if not any(np.isnan(vals)) else -1.0
+        # Single CPU↔GPU sync per epoch for the running totals.
+        ep_loss    = float(ep_loss_t.item())
+        ep_phantom = float(ep_phantom_t.item())
+        ep_miss    = float(ep_miss_t.item())
         seq_str = ""
         if track_loss_enabled:
             seq_str = (f"  L_phantom={ep_phantom/max(1,n_batches):.4f} "

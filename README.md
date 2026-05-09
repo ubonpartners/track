@@ -39,6 +39,10 @@ Runtime requirements:
 | `src/upyc_tracker/` | Python wrapper over `ubon_pycstuff` tracking results |
 | `src/track_test.py` | MOT metrics, detection metrics, benchmark/test orchestration |
 | `src/track_search.py` | Parameter search over `ubon_cstuff` config values |
+| `track_analysis.py` | CLI entry for modular UBTRK2 analysis (generation + metrics + compare) |
+| `src/analysis/` | Analysis engine and metric modules used by `track_analysis.py` |
+| `TRACK_ANALYSIS.md` | Design and config contract for the analysis app |
+| `experiments/archive/` | Historical one-off sweeps and experiment notes (not part of the supported CLI) |
 | `TRACKER_DEBUG.md` | Detailed tracker-result/debug format and migration/design notes |
 
 ## Supported Formats

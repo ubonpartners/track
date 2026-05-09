@@ -230,7 +230,18 @@ EXAMPLE_DTYPE = np.dtype([
     ("min_match_score",  "<f4"),  # min match_cost_score over last 8 matches
     ("mean_match_score", "<f4"),  # mean match_cost_score over last 8 matches
     ("n_strong_matches", "<f4"),  # count where match_cost_score > 0.6 in last 8
-    # e_track[16] from Phase 3 f_obs replay — zeros if --phase3-model not given
+    # 2026-05-09: track-age + state-age, in seconds (head sees log1p of these).
+    # Lets the head distinguish 'rock-solid TRACKED that just lost a frame'
+    # from 'barely-promoted track already faltering' — the signal the legacy
+    # num_missed≥2 floor implicitly used.
+    ("time_since_creation", "<f4"),
+    ("time_in_state",       "<f4"),
+    # e_track[16] from Phase 3 f_obs replay — zeros if --phase3-model not given.
+    # Kept in dtype for backward-compat (older consumers may still read it);
+    # NOT included in the 23-dim runtime feature vector built by
+    # train_state_head.py:build_input_matrix as of 2026-05-09. Inspection
+    # showed all 16 cols sat at near-init magnitude across runs because
+    # the match-cost NN failed to load during pair-log generation.
     ("e_track",          "<f4", (16,)),
 
     # labels (only meaningful where valid_<x>=1)
@@ -969,15 +980,16 @@ def extract_sequence_label_driven(
                     )
                     held_remaining[tid] = int(delay_offset)
                     e_track_state[tid] = (np.zeros(E_TRACK_DIM, dtype=np.float32), False)
-                    # immediate-confirm short-circuit: matches utrack.c:1707.
-                    # Only fires on the natural trajectory (delay_offset==0)
-                    # and only when this frame's matched det conf is above
-                    # the threshold. For delay augmentation we always force
-                    # UNCONFIRMED on first appearance.
-                    if (delay_offset == 0
-                        and matched
-                        and float(match_rec["det_conf"]) > immediate_confirm_thr):
-                        prior_state = STATE_TRACKED
+                    # 2026-05-09: track-age timestamps. Both equal frame_time
+                    # at creation; state_entered_time will be re-set if the
+                    # oracle promotes this frame.
+                    creation_time = frame_time
+                    state_entered_time = frame_time
+                    # Pure-NN runtime no longer applies an immediate-confirm
+                    # short-circuit at creation; the promote head decides at
+                    # site B every time. Corpus now mirrors that — first
+                    # appearance is always prior=UNCONFIRMED. (immediate_confirm_thr
+                    # arg is retained for legacy-runtime corpus builds.)
                 else:
                     th = tracks[tid]
                     prior_state = th.state
@@ -996,6 +1008,13 @@ def extract_sequence_label_driven(
                         float(first_rec["track_x1"]),
                         float(first_rec["track_y1"]),
                     )
+                    # 2026-05-09: carry forward track-age timestamps. The
+                    # head reads PRE-transition values (matching the
+                    # runtime's pre-transition feature snapshot); transition-
+                    # caused bumps to state_entered_time happen below in the
+                    # state-update block.
+                    creation_time = th.creation_time
+                    state_entered_time = th.state_entered_time
 
                 scene_density = int(first_rec["scene_density"])
                 time_since_det = float(frame_time - last_detect_time)
@@ -1055,7 +1074,14 @@ def extract_sequence_label_driven(
                     hist["recent_match_scores"] = rec
                 match_score_history[tid] = hist
 
-                valid_promote = 1 if prior_state == STATE_UNCONFIRMED else 0
+                # valid_promote covers UNCONFIRMED examples (the head fires
+                # on every UNCONFIRMED match in the runtime) AND LOST+matched
+                # (recovery), since the new pure-NN runtime puts that
+                # decision through the promote head too.
+                valid_promote = 1 if (
+                    prior_state == STATE_UNCONFIRMED
+                    or (prior_state == STATE_LOST and matched)
+                ) else 0
                 valid_demote  = 1 if prior_state == STATE_TRACKED else 0
                 valid_drop    = 1 if prior_state in (STATE_UNCONFIRMED, STATE_LOST) else 0
 
@@ -1081,13 +1107,23 @@ def extract_sequence_label_driven(
                     min_match_score=float(min_match),
                     mean_match_score=float(mean_match),
                     n_strong_matches=float(n_strong),
+                    time_since_creation=float(frame_time - creation_time),
+                    time_in_state=float(frame_time - state_entered_time),
                     e_track=e_track_cur.copy(),
                     promote_label=0, demote_label=0, drop_label=0,
                     gt_id_now=-1,
                     weight=float(weight),
                 ))
 
-                # ----- label-driven transition -----
+                # ----- label-driven transition (mirrors the unified
+                # state-pass C runtime semantics: 2 effective heads
+                # (promote, demote); UNCONFIRMED has no exit-on-unmatched
+                # other than state-age timeout; LOST timeout is
+                # state-age based (matches that don't promote don't reset
+                # the timer); drop_unconfirmed / drop_lost heads are not
+                # consulted by the runtime so the oracles don't drive
+                # transitions here either). -----
+                state_age = float(frame_time - state_entered_time)
                 if prior_state == STATE_UNCONFIRMED:
                     if matched:
                         if held_remaining.get(tid, 0) > 0:
@@ -1100,30 +1136,41 @@ def extract_sequence_label_driven(
                         else:
                             next_state = STATE_UNCONFIRMED
                     else:
-                        if oracle_drop_unconfirmed(tid, fi):
-                            next_state = STATE_REMOVED
-                        else:
-                            next_state = STATE_UNCONFIRMED
+                        next_state = STATE_UNCONFIRMED
+                    # Hard state-age timeout (matches utrack.c).
+                    if (next_state == STATE_UNCONFIRMED
+                        and state_age > buffer_sec):
+                        next_state = STATE_REMOVED
                 elif prior_state == STATE_TRACKED:
                     if matched:
                         next_state = STATE_TRACKED
-                    elif num_missed >= 2:
-                        next_state = STATE_LOST  # hard floor
                     elif oracle_demote(tid, fi):
                         next_state = STATE_LOST
                     else:
                         next_state = STATE_TRACKED
                 elif prior_state == STATE_LOST:
                     if matched:
-                        next_state = STATE_TRACKED
-                    elif (time_since_det >= buffer_sec or num_missed >= max_missed):
-                        next_state = STATE_REMOVED  # hard floor
-                    elif oracle_drop_lost(tid, fi):
-                        next_state = STATE_REMOVED
+                        if oracle_promote(tid, fi):
+                            next_state = STATE_TRACKED
+                        else:
+                            next_state = STATE_LOST
                     else:
                         next_state = STATE_LOST
+                    # Hard state-age timeout (matches utrack.c).
+                    if (next_state == STATE_LOST
+                        and state_age > buffer_sec):
+                        next_state = STATE_REMOVED
                 else:
                     next_state = STATE_REMOVED
+
+                # Track-age timestamp updates: state_entered_time bumps to
+                # frame_time iff the state actually changed. creation_time
+                # is preserved (unless the track is first appearance, in
+                # which case it was set above).
+                if next_state != prior_state:
+                    new_state_entered_time = float(frame_time)
+                else:
+                    new_state_entered_time = float(state_entered_time)
 
                 if next_state == STATE_REMOVED:
                     if tid in tracks:
@@ -1140,6 +1187,8 @@ def extract_sequence_label_driven(
                         last_detect_time=float(last_detect_time),
                         last_box=last_box,
                         prev_det_conf=float(det_conf if matched else prev_det_conf),
+                        creation_time=float(creation_time),
+                        state_entered_time=new_state_entered_time,
                     )
 
             # Tracks alive but absent from this frame's trace — treat as
@@ -1185,31 +1234,29 @@ def extract_sequence_label_driven(
                     phase3_pair_score=0.0,
                     near_edge=near_edge, det_w=det_w, det_h=det_h,
                     log_aspect=log_aspect, log_pose_kp=log_pose_kp,
+                    time_since_creation=float(frame_time - th.creation_time),
+                    time_in_state=float(frame_time - th.state_entered_time),
                     e_track=e_track_cur.copy(),
                     promote_label=0, demote_label=0, drop_label=0,
                     gt_id_now=-1,
                     weight=float(weight),
                 ))
 
+                # Pure-NN runtime transitions for absent-this-frame tracks
+                # — same as the matched branch's policy: state-age timeout
+                # is the only hard backstop; oracle_demote drives TRACKED.
+                state_age = float(frame_time - th.state_entered_time)
                 if prior_state == STATE_UNCONFIRMED:
-                    if oracle_drop_unconfirmed(tid, fi):
-                        next_state = STATE_REMOVED
-                    else:
-                        next_state = STATE_UNCONFIRMED
+                    next_state = (STATE_REMOVED if state_age > buffer_sec
+                                  else STATE_UNCONFIRMED)
                 elif prior_state == STATE_TRACKED:
-                    if num_missed >= 2:
-                        next_state = STATE_LOST
-                    elif oracle_demote(tid, fi):
+                    if oracle_demote(tid, fi):
                         next_state = STATE_LOST
                     else:
                         next_state = STATE_TRACKED
                 elif prior_state == STATE_LOST:
-                    if (time_since_det >= buffer_sec or num_missed >= max_missed):
-                        next_state = STATE_REMOVED
-                    elif oracle_drop_lost(tid, fi):
-                        next_state = STATE_REMOVED
-                    else:
-                        next_state = STATE_LOST
+                    next_state = (STATE_REMOVED if state_age > buffer_sec
+                                  else STATE_LOST)
                 else:
                     next_state = STATE_REMOVED
 
@@ -1222,6 +1269,8 @@ def extract_sequence_label_driven(
                 else:
                     tracks[tid].state = int(next_state)
                     tracks[tid].num_missed = int(num_missed)
+                    if next_state != prior_state:
+                        tracks[tid].state_entered_time = float(frame_time)
 
     if not examples:
         return np.empty((0,), dtype=EXAMPLE_DTYPE)
@@ -1253,6 +1302,12 @@ def extract_sequence_label_driven(
         elif prior_state == STATE_TRACKED:
             demote_label = int(oracle_demote(tid, fi))
         elif prior_state == STATE_LOST:
+            # LOST+matched is a recovery candidate: the runtime calls the
+            # promote head to decide whether to put it back into TRACKED.
+            # Use the same lookahead oracle as UNCONFIRMED promotion.
+            # Loss-masking via valid_promote=1 only when matched (set above)
+            # makes this label only apply to the recovery regime.
+            promote_label = int(oracle_promote(tid, fi))
             drop_label = int(oracle_drop_lost(tid, fi))
 
         if fitness_fp_boost != 1.0 and tid in fp_track_ids:
@@ -1277,6 +1332,11 @@ class _TH:
     last_detect_time: float
     last_box: Tuple[float, float, float, float]
     prev_det_conf: float
+    # 2026-05-09: track-age and state-age timestamps — set at first
+    # appearance, state_entered_time bumped on every state change. Mirror
+    # the C runtime's utdet_t.creation_time / state_entered_time.
+    creation_time: float = 0.0
+    state_entered_time: float = 0.0
 
 
 # --- driver -----------------------------------------------------------------

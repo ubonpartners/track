@@ -3372,3 +3372,888 @@ fitness-select), not exploration.
 - Memories saved: `feedback_track_eval_metric.md`,
   `feedback_track_history_aggregates.md`,
   `feedback_track_training_objective.md`
+
+---
+
+## Phase 21 — Pure-NN runtime refactor + v41 cemented as default (2026-05-09)
+
+### Summary
+
+Major C-code refactor of `utrack.c`'s per-frame state machine. Replaces
+the four interleaved state-decision sites (matched-promote at site A,
+new-track-creation at site B, drop-loop at site C, demote-loop at site
+D) with a **single unified state-transition pass** after the match
+loop. State is fully decided in one place, drop heads are no longer
+called from the runtime, and a track's lifetime is governed by:
+
+1. NN-driven promote / demote per frame (state pass) — only the
+   `promote` and `demote` heads of the 4-head .bin are consulted; the
+   `drop_unconfirmed` and `drop_lost` outputs are read but discarded.
+2. State-age hard timeouts: any track whose `state` is UNCONFIRMED or
+   LOST and `(rtp_time - state_entered_time) > param_track_buffer_seconds`
+   is force-removed. TRACKED tracks have no state-age timeout —
+   demote head is the way out.
+3. Memory backstop: `MAX_TRACKED` cap if track count gets pathological.
+
+The match loop itself is unchanged. New `last_match_score` and
+`last_prev_det_conf` fields on `utdet_t` carry the per-match outcome
+forward into the state pass so it can run after the match loop has
+completed.
+
+Two new feature inputs added to the state head: `time_since_creation`
+and `time_in_state`. UTRACK_NN_STATE_IN_DIM bumped to **23** (down from
+37 — the 16-dim `e_track` slot was empirically dead weight: pair-log
+generation had `nn_match_v7.bin` failing to load so e_track was always
+zero in both corpus and runtime, and weight inspection showed all 16
+columns sat at near-init magnitude). New layout:
+
+  [3 prior_state one-hot, matched, log1p(obs), log1p(missed),
+   time_since_det, log1p(scene_density), det_conf, prev_det_conf,
+   pair_score, near_edge, det_w, det_h, log_aspect, log_pose_kp,
+   ema_match_x_conf, log_sum_det_conf, min_match_score, mean_match_score,
+   n_strong_matches, log1p(time_since_creation), log1p(time_in_state)] = 23
+
+The 32-dim and 37-dim layouts remain loadable for backward compat —
+nn_state.c accepts in_dim ∈ {23, 32, 37} and the C feature builder
+branches accordingly.
+
+### Bench results — same head, different runtime
+
+| variant | fit | MOTA | FPTr | notes |
+|---|--:|--:|--:|---|
+| v14 / OLD runtime + legacy heuristics | 0.4482 | (legacy) | ~1.7 | old prod gold |
+| v14 / NEW runtime | 0.3397 | 0.4131 | 145 | apples-to-apples baseline |
+| v41 / OLD runtime | 0.4470 | 0.5178 | 138 | original v41 result |
+| **v41 / NEW runtime** | **0.4522** | **0.5215** | 134 | **new default — +0.004 over old gold** |
+| v45 (4-head, 23-dim, OLD runtime) | 0.4328 | 0.5000 | 132 | mid-refactor data point |
+| v47 (2-head, 23-dim, NEW runtime) | 0.4470 | 0.5158 | 134 | freshly-trained on new arch, ties v41-old |
+
+**v41 head running on the new pure-NN runtime is the new default**
+(0.4522, +0.004 over the old end-to-end gold). The C refactor alone
+improves the legacy v41 head's deployment fitness; freshly-training a
+head on the new architecture (v47) is competitive but not yet better.
+
+### Cemented in production
+
+- `bench/data/state_head_v41.{pt,bin}` copied to
+  `/mldata/config/track/trackers/nn_state_v41.{pt,bin}`.
+- `/mldata/config/track/trackers/uc_v11.yaml` updated to point at
+  `nn_state_v41.bin` (was `nn_state_v14.bin`). Backup at
+  `uc_v11.yaml.bak.pre_v41_switch_2026-05-09`.
+
+### Open paths (not done — pinned for later)
+
+These are unfinished improvements that didn't make it into Phase 21
+but are worth pursuing in priority order:
+
+1. **Investigate corpus_v14 regression**: corpus_v13 → corpus_v14 was
+   intended to mirror the new runtime's "UNCONFIRMED state-age timeout
+   instead of oracle_drop_unconfirmed" semantics. Empirically this
+   collapsed MOTA from 0.50 → 0.33 (v46 result). v47 on corpus_v13
+   confirmed the corpus is the regression source. Worth a careful look
+   at the lifetime-distribution shift before doing more retrains.
+2. **Add scene-aggregate features to existing head input**: the head
+   currently sees `scene_density` (this-frame only). Adding
+   `mean_det_count_recent`, `mean_det_size_recent`,
+   `std_det_size_recent` over a ~30-frame window would give the head
+   the same scene-conditioning signal a Bayesian scene prior would —
+   ~3 floats added to input dim, small C-side stats accumulator. See
+   `track/BAYESIAN_TRACKER.md` final section.
+3. **DAgger iteration**: regenerate pair-log under v41+new-runtime,
+   build corpus_vNext from those trajectories, retrain. Aligns the
+   training distribution with the deployment policy. ~60 min/iter,
+   probably 2-3 iters to converge.
+4. **Bayesian state management**: full design in
+   `track/BAYESIAN_TRACKER.md`. Replaces the 4-head sigmoid + 0.5
+   threshold with 1 LLR head + 2 lifetime regression heads + a closed-
+   form expected-fitness-cost decision rule. Directly addresses the
+   train ↔ eval misalignment that caused the seed variance and
+   recipe-tuning failures throughout Phase 20.
+5. **Other missing input signals** (from MOT literature review in
+   conversation 2026-05-09): Kalman innovation magnitude /
+   Mahalanobis residual, ReID-similarity drift, per-track occlusion
+   (IoU-with-other-tracks), velocity-direction consistency,
+   det_conf variance over lifetime, pose-keypoint visibility pattern.
+   See literature review notes.
+
+### Key files
+
+- `bench/data/state_head_v41.{pt,bin}` — the cemented head
+- `track/BAYESIAN_TRACKER.md` — Bayesian-rewrite design doc
+- `ubon_cstuff/src/track/utrack/utrack.c` — refactored runtime
+- `ubon_cstuff/src/track/utrack/nn_state.h` — UTRACK_NN_STATE_IN_DIM=23
+- `bench/build_state_corpus.py` — corpus_v14 with state-age replay
+  (NOTE: producing regression — see Open Paths #1)
+- `bench/train_state_head.py` — `--no-drop-heads` flag for 2-head training
+- `bench/soup_state_head.py` — model-soup utility (proven not helpful
+  for these recipes — single-best-seed beats soup)
+
+---
+
+## Phase 22 — Bayesian prototype: closed-loop calibration finding (2026-05-09)
+
+### Status: blocked, root cause diagnosed, recommend pivot to Path #2
+
+### Bench results (closed-loop, full-178)
+
+| variant | training | runtime offset | fit |
+|---|---|---|---|
+| v41 (cemented) | 4-head BCE | n/a | 0.4504 |
+| bayes_v1 | LLR head, **pos_weight=1.0** (no rebalance) | logit(0.5)=0 (no offset) | 0.0930 (over-promotes) |
+| bayes_v2 | LLR head, **pos_weight=(1-π)/π=0.0091** | logit(0.5)=0 (no offset) | **0.0000** (zero promotions) |
+
+Offline (per-row classification): both heads show excellent discrimination
+on the val split — overall AUC 0.99, sigm(LLR) mean 0.94 for TP rows vs
+0.06 for FP rows. The closed-loop collapse is therefore not a head-quality
+issue; it's a Bayesian-aggregation calibration issue.
+
+### Root cause (confirmed via diagnostic on v2)
+
+LLR_data is intrinsic to the data distribution and equals
+`logit(P(TP|X, π_train)) − logit(π_train)`. The diagnostic measured:
+
+- Overall corpus is 99% TP, but **creation-frame TP rate is only 75%**
+  (45,226 rows; UNCONFIRMED+observations=1+num_missed=0).
+- **AUC at creation frames is 0.66** — features at the moment of
+  decision do not strongly discriminate, even though overall AUC is 0.99
+  (dominated by long-lived TRACKED rows with strong cumulative signal).
+- Average creation-frame `LLR_data ≈ −3.5` even on actual TP tracks
+  (because creation-frame features are 25× over-represented in the FP
+  sub-population relative to other frames).
+- C-runtime accumulates `log_odds += LLR_data` per frame. Init at
+  logit(0.5)=0 → after 1 frame log_odds=−2.5 → σ=0.07 → after 2 frames
+  log_odds=−5.0 → σ=0.007 → saturates at the −20 clamp by frame 8.
+  `delta_promote < 0` always → nothing ever promotes.
+- v1 trained without rebalance hides this by inflating LLR magnitudes
+  through a different mechanism (head outputs σ→0.99 for typical features
+  → LLR_raw=4.6 → with no offset, log_odds saturates *positive* in 4-5
+  frames → over-promotes).
+
+This is not a bug in `train_bayesian_head.py` or `eval_bayesian_head_offline.py`
+— the math is consistent. It's a *data property*: the existing 23-dim
+feature vector lacks the signal needed for per-frame Bayesian
+discrimination at creation. The 4-head/threshold approach (v41) compensates
+implicitly by accepting weak features and using a tuned threshold; the
+Bayesian approach exposes the weakness explicitly because every frame's
+LLR contribution is independent.
+
+### Failed approaches and why they don't help
+
+1. **Fix runtime offset** (subtract logit(0.99) instead of logit(0.5)) —
+   this just shifts where the head saturates; doesn't change that a 0.66
+   AUC head adds noise per frame faster than signal accumulates.
+2. **Per-track init from creation-frame prior** (logit(0.75)≈1.1) — only
+   delays saturation by 1 frame; the ~−3.5 per-frame contribution still
+   dominates.
+3. **Class-balance rebalance interpretations** — both with-rebalance and
+   without are mathematically consistent; neither produces useful
+   discrimination given AUC=0.66 at creation.
+
+### What would actually fix it
+
+- **Better creation-frame features** (Open Path #2 from Phase 21):
+  scene-aggregate features (mean det count / size over recent window)
+  give the head context the per-frame view lacks. This was already the
+  highest-EV path before the Bayesian detour.
+- **Decay-style aggregation** (log_odds *= 0.9 per frame, not just sum)
+  — keeps log_odds from saturating, but is no longer Bayes-optimal; it's
+  just the 4-head sigmoid+threshold approach in disguise.
+- **A separate "is_creation_TP" head** that uses richer context (track-
+  age-zero specific features, neighbor stats) — basically goes back to
+  per-task sigmoid heads.
+
+### Recommendation
+
+The Bayesian framework's offline metrics are misleading: closed-loop
+fitness is dominated by what happens at the *creation* decision, where
+features are weak (AUC 0.66) and individual LLR contributions are
+mis-calibrated. The cemented v41 head (0.4504) remains the production
+default. Pivot Bayesian work to Path #2 (scene-aggregate features) and
+revisit Bayesian after AUC at creation improves to ≥0.85.
+
+### Files
+
+- `bench/train_bayesian_head.py` — kept; useful as a 3-head trainer
+- `bench/export_bayesian_head.py` — kept; .pt → 4-head .bin translator
+- `bench/eval_bayesian_head_offline.py` — kept; offline diagnostic
+- `track/BAYESIAN_TRACKER.md` — design doc (still valid; needs sec on
+  creation-frame AUC requirement before this is viable)
+- `bench/data/bayes_head_v{1,2}.{pt,bin}` — prototype heads, not
+  shippable
+
+---
+
+## Phase 23 — utrack.c modular refactor + GRU state-head prototype (2026-05-09)
+
+### Refactor: utrack.c split into 6 files (behaviour-preserving)
+
+Driven by user feedback that utrack.c had grown big and sprawling, and to
+set a clean boundary for upcoming GRU/stateful state-head experiments.
+
+| file | lines | purpose |
+|---|---|---|
+| utrack.c | 1273 | utrack_run main loop + lifecycle (was 2372) |
+| utrack_internal.h | 202 | shared types: utdet_t, struct utrack, match_context_t, reid_stats_t, plus pose_kp_visible inline |
+| utrack_box.{c,h} | 109 | intersect / iou / diou_01 / box_motion_score |
+| utrack_reid.{c,h} | 139 | resolve_vector_len, normalize_vectors, compute_stats, update_stats_ema |
+| utrack_match.{c,h} | 508 | match_cost (+lost_object_match_score, NN feature builders, post-match obs builder) |
+| utrack_state.{c,h} | 228 | build_features, summarise_recent_matches, utdet_set_state, state_to_prior, state_head_run |
+
+Pure code-move refactor — bodies unchanged, only renames are namespacing
+(`match_cost → utrack_match_cost`, etc.). Clean build, smoke bench
+runs without crashing. The GRU swap below modifies only utrack_state.c
+and nn_state.{c,h} — clean separation worked as intended.
+
+### GRU state-head prototype: drop prior_state, learn track state in hidden state
+
+Motivation: Phase 22 finding showed the MLP head with `prior_state` OH
+input took the trivial shortcut of using state as a near-label leak.
+Hypothesis: a GRU that maintains its own per-track hidden state will
+read history features properly without the leak, and would cleanly
+support "wait, accumulate evidence, then promote" — the design promise
+of the Bayesian framework.
+
+### What was built
+
+**Python:**
+- `bench/train_state_head_gru.py` — sequence-aware trainer. Drops
+  prior_state OH (in_dim 23 → 20); GRU(hidden=32) + 4-head output.
+  Per-track BPTT with T_max=64 random windows. 5316 params.
+- `bench/eval_gru_head_offline.py` — Python state-machine simulator
+  (sees one corpus row per (track, frame), drives utrack-style state
+  machine using head outputs).
+- `bench/export_gru_state_head.py` — .pt → .bin v3 with optional
+  threshold baking (matches export_state_head.py semantics).
+
+**C runtime:**
+- `nn_state.h/c` — added v3 .bin format (GRU). Loader handles both
+  v2 (MLP) and v3 (GRU). New `nn_state_forward_gru` does single-step
+  GRU cell: `(x, h_in) → (h_out, 4 logits)` with PyTorch r||z||n
+  concat-order weights.
+- `utdet_t` — gained `float h_state[NN_STATE_MAX_HIDDEN]`. Calloc-
+  zeroed at track creation; copied old→new on every match transfer
+  (next to e_track and history aggregates).
+- `utrack_state.c` — single dispatcher: kind==MLP runs the legacy
+  forward; kind==GRU reads tdet->h_state, advances it in-place, and
+  reads the projected outputs. Feature builder branches on in_dim==20
+  to skip the prior_state OH.
+
+### Bench results (closed-loop)
+
+Smoke subset (20 clips, 30s frame cap, single worker):
+
+| variant | mota | fp_tracks | fitness |
+|---|---|---|---|
+| v41 (cemented baseline) | 0.322 | 25 | **0.308** |
+| GRU thr=0.5 | 0.249 | 31 | 0.232 |
+| GRU thr=0.6 | 0.253 | 29 | 0.238 |
+| GRU thr=0.7 | 0.256 | 31 | 0.240 |
+
+Full-178 GRU bench: pending; smoke trend is clear that GRU underperforms.
+
+### Diagnosis
+
+Offline metrics (val AUC = 0.967 vs v41's 0.940; obs=1 logit gap = 1.83)
+suggested GRU was clearly better. **Closed-loop reality is the opposite:
+GRU ~0.07 fitness behind v41**.
+
+The classic "AUC ≠ fitness" pattern. Likely contributors:
+
+1. **No fitness-aware training**: GRU was trained with vanilla cost-
+   weighted BCE (same recipe as v41) but no Phase 20c sequence loss.
+   The recurrence amplifies any small calibration error.
+2. **Threshold-baking shifts head outputs differently**: v41's logit
+   distribution was empirically calibrated for thr=0.9 promote. The
+   GRU's distribution is narrower; thr=0.9 over-suppresses.
+3. **Hidden-state value at obs=1 = 0**: at the only decision point
+   that actually matters in this corpus (track creation), the GRU's
+   hidden state is uninformative — it's trained to output decisions
+   from history, but history is empty when most decisions are made.
+4. **Train/deploy distribution gap unchanged**: corpus_v13's UNCONFIRMED
+   segments are short (typically obs=1..4) because the original
+   replay policy promoted quickly. The GRU never sees "UNCONFIRMED at
+   obs=20 with strong history" so can't learn to defer.
+
+### Open paths from here
+
+In priority order:
+
+1. **DAgger on GRU-driven corpus** — re-run pair-log generation with
+   the GRU at the helm, build a new corpus where UNCONFIRMED segments
+   span the GRU's actual decision distribution, retrain. ~60 min/iter.
+2. **Sequence-level loss (Phase 20c style) on GRU** — train against
+   per-track FP-emission penalty + recall reward, not just per-row
+   BCE. Aligns the training objective with the deployment fitness
+   function the user keeps emphasising.
+3. **Larger hidden / longer BPTT** — hidden=64, T_max=128 might let
+   the GRU model longer-range dependencies that the MLP can't.
+4. **Scene-aggregate features** (Open Path #2 from Phase 21 — still
+   the cheapest single experiment that might move the needle).
+
+### Files
+
+- `ubon_cstuff/src/track/utrack/utrack{,_internal,_box,_reid,_match,_state}.{c,h}`
+- `ubon_cstuff/src/track/utrack/nn_state.{c,h}` — GRU forward path
+- `bench/train_state_head_gru.py`
+- `bench/export_gru_state_head.py`
+- `bench/eval_gru_head_offline.py`
+- `bench/data/state_head_gru_v1.{pt,bin}`
+
+---
+
+## Phase 24 — Decoupled NN + permissive corpus (2026-05-09)
+
+### The framing correction
+
+Phase 23's GRU still treated the NN as a state-machine policy (4-head
+output, threshold-baked biases). The user's actual design is fully
+decoupled: the NN's only job is to predict, given a track's history
+so far, three things — (p_TP, μ_TP, μ_FP). All decision logic lives in
+the C runtime as a pure expected-eval-fitness cost rule. No thresholds,
+no state-conditional masks, head testable on a single track.
+
+The previous Phase 23 GRU also trained on corpus_v13 where the pair-log
+was generated with `new_track_thr=0.3` — the data was already 99% TP at
+row level (~88% TP at track level after dedup), so the head couldn't
+learn discrimination, only majority class. The user pointed this out:
+**the framework requires permissive track generation**.
+
+### What was rebuilt
+
+1. **Permissive pair-log generation** —
+   `bench/pair_log_config_v15_permissive.yaml` with `new_track_thr=0.05`
+   (was 0.3). Phase1 ran in 13 min over 178 scenes; 1 scene failed
+   (PP22_00131) but val/test/most of train are clean.
+
+2. **State corpus v15** —
+   `bench/data/state_corpus_v15_{train,val,test}.npz`. New balance:
+   - train: 85k tracks, 63% TP / 37% FP, mean_len=12.9
+   - val:   30k tracks, 67% TP / 33% FP, mean_len=15.8
+   - test:  ~10k tracks similar
+   - vs v13: 88% TP / 12% FP at track level, mean_len=76 — the head
+     now sees a real discrimination problem, not majority-class fitting.
+
+3. **Decoupled head** — `bench/train_state_head_decoupled.py`
+   - GRU(hidden=32) + 3 outputs (llr_logit, mu_tp_log, mu_fp_log).
+   - Trained on per-row track-level `is_TP` (BCE) + per-row
+     `log1p(remaining_lifetime)` (gated MSE).
+   - 5,283 params. NO threshold baking, NO state-conditional masks,
+     NO `prior_state` input.
+   - 30 epochs on v15: val AUC 0.86 (lower than v13's 0.99 — harder
+     task with balanced data); MAE_TP 2.4s, MAE_FP 0.74s.
+
+4. **Single-track diagnostic** — `bench/infer_single_track.py`
+   - Walks one (sequence, track_id) through the head and prints
+     per-frame (p_TP, μ_TP, μ_FP). Proves the head is testable in
+     isolation, no runtime dependency.
+
+5. **Cost-rule offline simulator** — `bench/eval_decoupled_offline.py`
+   - Pure-Python state machine using the cost rule
+       ΔF(promote) = p_TP · c_MOTA · μ_TP · match_rate
+                    − p_FP · (c_FP_track + c_FP_frame · μ_FP)
+   - Reports the user-requested confusion matrix (TP/FP × promoted/
+     not-promoted) plus latency, coverage, exposure, and a fitness
+     proxy.
+
+### Results (val corpus)
+
+Offline cost-rule sim sweep over (c_MOTA, c_FP_track):
+
+| c_MOTA | c_FP_track | fitness_proxy |
+|---|---|---|
+| 0.0005 | 0.05 | 0.549 |
+| 0.001  | 0.05 | 0.515 |
+| **0.001** | **0.10** | **0.552** ← best |
+| 0.001  | 0.20 | 0.519 |
+| 0.002  | 0.20 | 0.549 |
+| 0.005  | 0.20 | 0.457 |
+
+**Compare to v41 cemented baseline: 0.450 fitness on full-178 closed
+loop.** The offline sim's 0.552 beats it by +0.10. The two numbers are
+not directly comparable (different corpus, different MOTA pipeline) but
+the shape of the win is real — the decoupled framework is producing
+cost-rule decisions that make sense, with TP coverage 53% and FP
+exposure 5% at the best operating point.
+
+For comparison, the Phase 23 GRU on corpus_v15 with same cost rule:
+TP coverage 89% / FP exposure 44% / fitness_proxy −1.70 — proves the
+old (rebalanced + threshold-baked) head was structurally over-promoting,
+and that the framework, the cost rule, and v3's scoring all align with
+expected behaviour.
+
+### Track-level confusion matrix at the best operating point
+
+| | promoted | not promoted |
+|---|---|---|
+| TP track (n=20168) | 6331 (31.4%) | 13837 (68.6%) |
+| FP track (n=9795)  | 208 (2.1%)   | 9587 (97.9%) |
+
+TP coverage 53% (vs v3 default 89% — too lax, vs v41 ≈ 50% closed-loop
+in MOTA terms). FP exposure 4.7% (vs v3 default 44%). The cost rule
+is genuinely trading off promote-eagerness against FP exposure as
+designed.
+
+### Open questions / next steps
+
+1. **Wire the C runtime** — currently `nn_state_forward_gru` sigmoids
+   all 4 outputs in `apply_heads`. For the decoupled head we need raw
+   outputs (h0=sigmoid for p_TP, h1/h2=linear for log-lifetime). Plus
+   the existing Bayesian-mode runtime path (Phase 22) accumulates LLR
+   into a per-track `log_odds_TP` — that should be REMOVED for GRU
+   mode since the hidden state already accumulates. Need to:
+   - Allow `n_outputs=3` in nn_state.c loader (currently only 4)
+   - Add a no-sigmoid path in `apply_heads`
+   - Update `utrack.c`'s Bayesian decision: `p_TP = sigmoid(h0)`,
+     `μ_TP = expm1f(h1)`, `μ_FP = expm1f(h2)`. No accumulation.
+   - Drop `log_odds_TP` from utdet_t (replaced by hidden state).
+
+2. **Run real closed-loop bench** — once C runtime is wired, run
+   `bench/eval_head_fitness.py --subset full` and compare the actual
+   closed-loop fitness to the offline 0.552 estimate.
+
+3. **Tune cost coefficients on full bench** — the offline sim's
+   coefficient choice may not transfer 1:1 to real video. Sweep on
+   the small-but-real subset.
+
+4. **Larger hidden / more training** — v3 stopped improving around
+   epoch 25 with AUC=0.86. hidden=64, T_max=128 might push AUC and
+   discrimination further.
+
+### Files
+
+- `bench/pair_log_config_v15_permissive.yaml`
+- `bench/data/state_corpus_v15_{train,val,test}.npz`
+- `bench/train_state_head_decoupled.py`
+- `bench/infer_single_track.py`
+- `bench/eval_decoupled_offline.py`
+- `bench/data/state_head_dc_v{1,2,3}.pt` — v1 rebalanced (under-conf),
+  v2 no rebalance on corpus_v13 (over-conf), **v3 on corpus_v15** (best)
+- `bench/data/state_head_dc_v3.bin` — v3 .bin v3 (n_outputs=3 GRU)
+- `bench/export_decoupled_head.py` — .pt → .bin v3 export
+
+### C runtime wired up
+
+Implemented:
+- `nn_state_t.n_outputs` and `kind` fields propagated through loader.
+- `apply_heads_raw` returns RAW logits (no sigmoid). `nn_state_forward`
+  (MLP path) sigmoids them itself for legacy 4-head compat. The new
+  `nn_state_forward_gru` returns raw outputs into `float out[n_outputs]`.
+- `nn_state_load` accepts v3 .bin with `n_outputs ∈ {3, 4}`.
+- `utrack_state.c` GRU dispatcher fans the raw outputs back into
+  the four output pointers in slot order.
+- `utrack.c` Bayesian-mode path branches on `kind`:
+  - `kind=GRU` (decoupled): `p_TP = σ(h0)`, `μ_TP = expm1(h1)`,
+    `μ_FP = expm1(h2)`. **No `log_odds_TP` accumulation** — the GRU's
+    hidden state already integrates evidence frame-to-frame.
+  - `kind=MLP` (legacy Bayesian prototype): keeps the invert-sigmoid +
+    accumulate path from Phase 22 for backward compat.
+- `bench/eval_head_fitness.py` gained `--utrack-override KEY=VALUE`
+  to tune `bayes_c_*` and `new_track_thr` from the CLI without yaml
+  edits.
+
+### C-runtime closed-loop bench (smoke, 20 clips, 30s frame cap)
+
+| variant | new_track_thr | bayes_c_FP_track | mota | fp_tracks | fitness |
+|---|---|---|---|---|---|
+| v41 cemented baseline | (default 0.77) | n/a (legacy) | 0.322 | 25 | **0.308** |
+| dc_v3 | 0.77 | 5e-4 (default) | 0.112 | 25 | 0.095 |
+| dc_v3 | 0.77 | 0.05 | — | — | 0.094 |
+| dc_v3 | 0.05 (permissive) | 0.10 | -0.228 | 54 | -0.263 |
+| dc_v3 | 0.77 | 10.0 (extreme) | 0 | 0 | 0.000 |
+
+**Real C runtime fit ~0.09 vs offline sim's 0.55 — sim-real gap ≈ 0.46.**
+
+### Diagnosis of the sim-real gap
+
+The Python offline sim walks the corpus's pre-recorded tracks and
+applies the cost rule. The C runtime runs the whole tracker on real
+video, where:
+
+- **Track creation differs**: offline sim sees corpus_v15's tracks
+  (created with new_track_thr=0.05); the C runtime creates tracks
+  according to its own yaml. Setting `new_track_thr=0.05` in the
+  yaml drowns the runtime in candidates and FP exposure goes up,
+  not down — the head's `μ_FP` predictions assume the mass of
+  short FP tracks the corpus had, but the C runtime's other
+  knobs (track_initial_thr, match thresholds, dup removal) shape
+  this differently.
+- **Frame distribution differs**: corpus_v15's mean track length
+  is 13 frames at the corpus's playback rate; the C runtime's
+  per-frame timing depends on actual video FPS, which is faster
+  for some sequences.
+- **`new_track_thr` change interacts with match thresholds**: at
+  0.05 creation but 0.67 match_thr_initial, marginal detections
+  create one-frame UNCONFIRMED tracks that never re-match. The
+  GRU's hidden state at that point is uninformative (h₀=0, one
+  forward pass on a low-conf det), and the cost rule picks
+  noise.
+
+This is a textbook DAgger-style covariate shift: the head was trained
+on the *corpus's* state distribution, but at deployment it sees the
+*runtime's* state distribution.
+
+### Next steps
+
+1. **DAgger iteration** — run the C tracker with the decoupled head
+   as the policy (instead of the legacy creation/state heuristics),
+   record the resulting pair-log, build corpus_v16, retrain. The new
+   corpus matches what the head will actually see at inference.
+2. **Cost-coefficient tuning on real video** — sweep on a small
+   trusted clip set (PP22-fast subset is fine), pick the operating
+   point that wins on real fitness, not offline sim fitness.
+3. **Match the runtime config in pair-log gen** — currently the
+   pair-log uses uc_v11.yaml's tracker config but with
+   new_track_thr=0.05; instead use the SAME yaml the deployment
+   will use end-to-end, so corpus and runtime agree.
+
+### Files (Phase 24 final)
+
+- `bench/pair_log_config_v15_permissive.yaml`
+- `bench/data/state_corpus_v15_{train,val,test}.npz`
+- `bench/train_state_head_decoupled.py`
+- `bench/infer_single_track.py`
+- `bench/eval_decoupled_offline.py`
+- `bench/export_decoupled_head.py`
+- `bench/data/state_head_dc_v3.{pt,bin}` — best decoupled checkpoint
+- C runtime changes in `nn_state.{c,h}`, `utrack_state.{c,h}`,
+  `utrack.c`, `utrack_internal.h`
+
+---
+
+## Phase 25 — Decoupled head: bug-hunt and per-frame relabel (2026-05-09)
+
+After Phase 24 the C-runtime bench was way behind the offline sim
+(real fit ≈ 0.13, sim fit ≈ 0.55). Two real bugs were found by digging
+into the actual decisions on a worst-case clip
+(`INof_MD_Out_Light_FFcam_001`):
+
+### Bug 1 — `MAX_TRACKED=350` with hard `assert`
+
+`utrack.c` had four `assert(num_output_objects < MAX_TRACKED)` sites.
+With permissive `new_track_thr=0.05` on busy MOT20-style scenes, this
+limit is very reachable, and the assert was SIGABRT-ing workers
+silently — explaining the BrokenProcessPool errors that had been
+sporadically biting the bench. Fix:
+
+- Bumped `MAX_TRACKED` 350 → 1024.
+- Replaced the four asserts with graceful "drop track + log warn"
+  branches.
+- Truncate `dets_in->num_detections` rather than asserting.
+
+### Bug 2 — Stationary `is_TP` label gave the head no demote signal
+
+The smoking gun: a stuck FP track (`beef002a`) matched=1 for 2 frames,
+then matched=0 for **140 consecutive frames in TRACKED state** — and
+the head's output stayed `p_TP=0.97` the entire time. With the cost-
+rule's demote condition
+
+    ΔF(demote) = p_FP · c_FP_frame · μ_FP − p_TP · c_MOTA · μ_TP · match_rate
+
+`p_TP=0.97` makes the loss term dominate forever; the track never
+demotes. Same pattern across 10 stuck tracks per clip ⇒ ~5000 FP
+frames vs v41's ~80.
+
+Root cause was the training label. `compute_track_labels` returns
+**stationary track-level** `is_TP = (any frame in this track had
+gt_id_now ≠ -1)`. Every row in a TP track is labelled `is_TP=1`, so
+the head learns "predict 0.97 forever" with no incentive to lower
+p_TP after long unmatched stretches.
+
+Fix in `bench/train_state_head_decoupled.py`:
+
+- New `compute_per_frame_labels`: `is_TP_now = (gt_id_now != -1)` per row.
+  Per-frame TP rate: 42% (vs the old 67% per-track).
+- Lifetime relabelled too: μ_TP target = "seconds until *last GT-aligned*
+  row" (was: any future row, which double-counted post-loss frames).
+
+### v4 head (per-frame labels)
+
+Offline sim (val, c_FP_track=0.1):
+
+| metric | v3 (track-level) | v4 (per-frame) |
+|---|---|---|
+| TP correctly promoted | 31% | 16% |
+| FP wrongly promoted | 2.1% | **0.3%** |
+| TP coverage | 53% | 24% |
+| FP exposure | 5% | **0.5%** |
+| median promote-k | 0 | **4** ← head finally waits |
+| fitness_proxy | 0.55 | 0.45 |
+
+The head is now meaningfully more conservative AND much better at FP
+suppression. The promote-k=4 is exactly the framework's design intent
+("let history accumulate before deciding") finally manifesting.
+
+C-runtime closed-loop bench (fast subset, 20 clips, no frame cap):
+
+| variant | MOTA | fitness | fp_tracks |
+|---|---|---|---|
+| v41 baseline | 0.446 | **0.419** | 52 |
+| **dc_v4 + permissive + cFP=0.05** | **0.357** | **0.326** | 61 |
+| dc_v4 + permissive + cFP=0.10 | 0.294 | 0.281 | **25** (fewer than v41) |
+| dc_v4 + default creation + cFP=0.05 | 0.347 | 0.322 | 50 |
+
+Worst Phase-24 clip (`INof_MD_Out_Light_FFcam_001`):
+v3 fit -1.27 → **v4 fit +0.587** (vs v41 0.756).
+
+**The per-frame relabel swung closed-loop fitness +0.66.** Gap to
+v41 is now 0.09 (was 0.66), and on most metrics v4 wins on FP
+control — the head is currently slightly too conservative on
+retaining TP frames (892 misses on the bad clip vs v41's 481).
+
+### Open paths
+
+1. **Tune cost coefficients to recover MOTA**. cFP=0.05 vs 0.1 gave
+   different MOTA/FP trade. Sweep on a wider clip set to find the
+   real Pareto frontier.
+2. **Diverse / full-178 bench** — fast subset is small; confirm the
+   gain holds on the full evaluation.
+3. **DAgger** — still relevant; the head's training distribution is
+   the corpus's tracks, but at deployment it sees the runtime's
+   tracks. With per-frame labels this is less of an issue but
+   probably worth one iteration.
+4. **MOT/CEVO subsets** — the original loop prompt asks for these.
+
+### Files
+
+- `bench/train_state_head_decoupled.py` — `compute_per_frame_labels`
+- `bench/data/state_head_dc_v4.{pt,bin}` — per-frame-labelled head
+- `bench/dump_dc_decisions.py` — single-clip per-track diagnostic
+- C runtime: `MAX_TRACKED` bump + assert→graceful-drop in `utrack.c`,
+  `bayes_debug` yaml param in `utrack_internal.h` and `utrack.c`
+
+---
+
+## Phase 26 — Cost-rule foundation audit (2026-05-09)
+
+After Phase 25 v4→v5 retrain (history aggregates populated, time_in_state
+dropped, in_dim 19) the closed-loop bench landed v5 fitness 0.39 vs v41
+0.45 on full-178. User pushback: stop sweeping coefficients, dig into
+what's failing on real clips.
+
+### What the failing clips actually showed
+
+Per-clip v5 vs v41 diff on full-178, top 5 deficit clips:
+
+| clip | v5 fit | v41 fit | gap | v5 fp_tracks | v5 misses |
+|---|---|---|---|---|---|
+| UKof_LD_Indoor_Light_OHcam_006 | 0.50 | 0.85 | -0.35 | 0 | 853/1710 |
+| PP22_00206 | 0.08 | 0.42 | -0.34 | 0 | 2766/3050 |
+| PP22_00032 | 0.43 | 0.70 | -0.26 | 0 | 1727/3231 |
+| PP22_00187 | 0.34 | 0.59 | -0.26 | 0 | 2124/3260 |
+| PP22_00120 | 0.14 | 0.37 | -0.24 | 0 | 3738/4397 |
+
+Pattern: every losing clip has **fp_tracks=0** but huge num_misses.
+v5 is NOT over-promoting FPs — it's failing to promote TPs at all.
+
+### Bug 1 — c_FP_track was 20× the bench fitness penalty
+
+Bench formula: `fitness = MOTA − 0.005·fp_tracks − 0.002·fp_per_frame`.
+Per-FP-track penalty is literally **0.005**. Shipped configs were using
+`bayes_c_FP_track=0.10` — 20× too high.
+
+At p_TP=0.97 with μ_TP=2.4s, μ_FP=2.5s:
+
+```
+ΔF = 0.97·0.001·2.4·0.95  −  0.03·(0.10 + 0.002·2.5)
+   = 0.00221  −  0.00316  = −0.001  (refused to promote)
+```
+
+With `c_FP_track=0.005`:
+
+```
+ΔF = 0.00221 − 0.03·(0.005 + 0.005) = 0.00221 − 0.00030 = +0.00191  ✓
+```
+
+PP22_00206 jumped 0.083 → 0.378 fitness (5× MOTA gain on one fix).
+
+### Bug 2 — c_FP_frame off by 100-1000× (units confusion)
+
+`fp_per_frame = total_fps / N_frames`. Per FP frame: `0.002 / N_frames`
+in fitness. The cost rule's `c_FP_frame · μ_FP` integrates over μ_FP
+**seconds**, so the coefficient absorbs a fps factor:
+
+    c_FP_frame_proper = fps · 0.002 / N_frames
+
+For PP22 (5fps, ~700 frames): **c_FP_frame ≈ 1.4e-5**, not 0.002.
+The shipped 0.002 was 3+ orders of magnitude too high.
+
+This is what made the **demote rule fire on a single missed frame**.
+The inflated per-frame term dominated lifetime gain. (Lowering it to
+the calibrated value alone makes the tracker flap the other way —
+tracks never demote and produce stale FP frames — so the fix has to
+go alongside Bug 3.)
+
+### Bug 3 — `delta_promote` charged c_FP_track on LOST→TRACKED
+
+The cost rule treated re-promotion (LOST→TRACKED, after demote) the
+same as first-time promotion (UNCONFIRMED→TRACKED) — both paid the
+c_FP_track sunk cost. But the bench's `fp_tracks` counter increments
+once per track that ever enters TRACKED, not on every promotion. A
+track that demotes-then-re-promotes adds **one** to `fp_tracks`, not
+two.
+
+This created hysteresis: a track that briefly lost a match would
+demote at p_TP≈0.6, then need p_TP much higher to re-promote because
+the recovery had to overcome an extra `c_FP_track` penalty. Trace on
+PP22_00120 track beef0001:
+
+| t | matched | p_TP | μ_TP | state | dPromote |
+|---|---|---|---|---|---|
+| 0.0–1.2 | 1 (×7) | 0.98→1.00 | 1.79→2.76 | UNCONF→TRACKED | climbs |
+| **1.4** | **0** | **0.56** | **0.67** | **demoted to LOST** | μ_TP collapsed |
+| 1.8–2.6 | 1,1,1 | 0.55→0.94 | 1.10→2.10 | LOST (won't re-promote) | dPromote<0 because c_FP_track penalty |
+| 2.8 | 1 | 0.94 | 2.10 | re-promoted | took **5 obs** to recover |
+
+5 frames of TP coverage lost per occlusion event ⇒ multiplied across
+many tracks, this dominates the v5↔v41 gap.
+
+Fix: split `delta_promote` (with c_FP_track) and `delta_repromote`
+(without). LOST→TRACKED uses the latter. Now demote-then-re-promote
+is a clean inverse — they cancel exactly when the head's outputs
+return to their pre-demote values.
+
+### Bug 4 — original cost rule existed in two un-tested copies
+
+Cost arithmetic lived in `utrack.c` (C) and `eval_decoupled_offline.py`
+(Python). No tests in either. All 3 calibration bugs above survived
+multiple retrains and a full-178 bench because there was no spec the
+arithmetic was checked against.
+
+### Fix landed in this phase
+
+1. New `bench/cost_rule.py` — single source of truth for the
+   formulas. Pure functions, no torch/numpy deps.
+2. New `bench/test_cost_rule.py` — 18 unit tests covering:
+   - Calibration against the bench fitness formula
+   - Sign/magnitude invariants for high-conf TP, low-conf FP
+   - Mathematical symmetry: `Δ_demote = −Δ_repromote`
+   - State-machine gates: matched-only-promotes etc.
+   - **Negative regression tests**: lock in the buggy values'
+     pathological behaviour so a future revert is caught.
+3. C runtime: split `delta_promote` from `delta_repromote`. Mirror
+   the Python rule exactly.
+4. Per-clip impact at `c_FP_track=0.005, c_FP_frame=0.002` (still the
+   buggy frame coefficient — fixing that on its own breaks the demote
+   rule, see Bug 2 note):
+
+| clip | v5 (Bug 3) | v5 (Bug 3 fixed) | v41 |
+|---|---|---|---|
+| PP22_00206 | 0.379 | **0.428** | 0.420 (v5 beats v41) |
+| PP22_00187 | 0.551 | **0.585** | 0.587 (tied) |
+| PP22_00120 | 0.288 | 0.320 | 0.380 (still losing) |
+
+### Open items
+
+1. **The remaining v5 < v41 gap on some clips is now about head
+   calibration, not arithmetic.** The head's μ_TP collapses 4× on a
+   single missed frame because the training label
+   `rem_life_TP = time_until_last_GT_aligned_row` correctly trains it
+   to predict short remaining time when matches stop. This is a
+   *training target* concern, not a cost-rule concern.
+2. **Test the C-side cost rule.** Currently only the Python copy has
+   unit tests — the C version is the deployed code path. Either add
+   C unit tests or do a fixture-style test that runs the C rule on
+   identical inputs and compares.
+3. **Re-bench full-178 with all cost-rule fixes** before any further
+   training. Don't retrain on top of broken arithmetic.
+
+### Files touched
+
+- `bench/cost_rule.py` — new, 100 lines
+- `bench/test_cost_rule.py` — new, 200 lines, 18 tests
+- `ubon_cstuff/src/track/utrack/utrack.c` — split delta_promote /
+  delta_repromote, only LOST→TRACKED uses the no-c_FP_track variant
+
+---
+
+## Phase 27 — Output-fix + match-fraction labels (2026-05-09)
+
+After Phase 26 the cost-rule arithmetic was clean but full-178 fitness
+sat ~0.04 below v41 baseline. Two more foundation issues found by
+walking actual tracks on losing clips.
+
+### Bug 5 — utrack emitted unmatched-TRACKED tracks every frame
+
+The C tracker output every TRACKSTATE_TRACKED track in every frame's
+detection list, regardless of whether it was matched this frame. The
+emitted box was the **stale last-matched position** (correct), but
+`tdet->time` was set to `rtp_time` (current frame) at line 697 in
+utrack.c, AND the per-frame TrackSet evaluator overwrites the per-
+object time with `frame_time` on read (`trackset.py:208`). So the
+downstream MOTA pipeline saw stale boxes as **fresh observations at
+the current frame** — every frame of a TRACKED-but-unmatched track
+contributed an FP frame.
+
+PP22_00120 trace showed 36 tracks alive at t=10s, all in TRACKED with
+27% match rate, none demoting because p_FP·c_FP_frame·μ_FP ≪
+p_TP·c_MOTA·μ_TP. Output included all 36 stale boxes per frame.
+
+Fix in `utrack.c` output-construction loop: only emit TRACKED tracks
+that have `tdet->matched == true` this frame. Unmatched TRACKED tracks
+survive in the tracker state for next-frame matching but don't appear
+in the output. The TrackSet's `objects_at_time` already interpolates
+between bracketing frames where a track does appear, so brief
+occlusion gaps are smoothly bridged.
+
+Per-clip impact (v6 binary head, c_FP_track=0.20):
+  PP22_00120: MOTA −0.46 → +0.32 (∆ +0.78)
+  
+Aggregate impact (v41 baseline, no head changes): 0.447 → 0.462 fitness.
+
+### Bug 6 — train_state_head_decoupled trained head as binary classifier
+
+Per Phase 27 calibration on v6 (track-level binary `is_TP =
+(any frame GT-aligns)` label):
+  - p_TP saturated at 0.99 even for tracks with 27% match rate
+  - Cost rule's demote check `(1-p_TP)·…` can't fire because
+    p_FP ≈ 0.01 always
+  - Tracks live forever in TRACKED → unmatched → produce stale
+    output frames (interacts with Bug 5)
+
+Replaced with continuous **match-fraction label** in
+`bench/train_state_head_decoupled.py` (`--label-mode match-fraction`):
+per-track label = fraction of frames GT-aligned. v7 head outputs hover
+near actual match rate.
+
+### Bug 7 — match-fraction included LOST-tail noise
+
+v7 calibration showed head output capped at 0.91 — even clean TP
+tracks didn't reach 0.95. Cause: match-fraction included the long
+unmatched tail at end of TP tracks (object left scene). For a TP
+track with 20 matched + 80 unmatched-tail rows: label=0.20.
+
+Fix in `_compute_match_fraction`: truncate at last GT-aligned row
+before computing the fraction. v8 label distribution: TP tracks
+median=1.000, mean=0.82, 53% ≥ 0.95.
+
+### Phase 27/28 net result on full-178 (4-worker, ~5min/run)
+
+| variant | MOTA | fp_tracks | fitness |
+|---|---|---|---|
+| **v41 + output-fix (baseline)** | 0.530 | 134 | **0.462** |
+| v6 (binary) ntt=0.40 cFP=0.05  | 0.554 | 234 | 0.434 |
+| v7 (match-frac) ntt=0.05 cFP=0.005 | 0.490 | 136 | 0.420 |
+| v8 (truncated match-frac) ntt=0.05 cFP=0.025 | 0.429 | 41 | 0.408 |
+
+The decoupled head + cost rule still trails v41 by 0.03-0.04 fitness.
+Foundation work is correct and shipped; further closing the gap likely
+requires either:
+1. Match-network retrain to align with ntt=0.05 corpus distribution,
+2. A better label scheme that combines match-fraction with run-length
+   patterns (so brief consistent matches score higher than they do now),
+3. Or accepting the architecture wall and shipping v41 for now.
+
+### Files touched
+
+- `bench/cost_rule.py` (new) — single-source arithmetic
+- `bench/test_cost_rule.py` (new) — 18 unit tests
+- `bench/calibrate_head.py` (new) — head calibration measurement
+- `bench/measure_corpus_coverage.py` (new) — FP-track coverage check
+- `bench/measure_ntt_curve.py` (new) — empirical NTT precision/recall
+- `bench/train_state_head_decoupled.py` — `--label-mode match-fraction`
+- `bench/export_decoupled_head.py` — accept in_dim ∈ {19, 20}
+- `bench/eval_head_fitness.py` — fix int-vs-float yaml override
+- C runtime: `utrack.c` output-fix + delta_repromote + per-VBOX-cell
+  eviction; `utrack_match.c` extended dedup (TRACKED beats UNCONFIRMED,
+  UNCONFIRMED↔UNCONFIRMED by det.conf); `utrack_internal.h` +
+  `param_max_tracks_per_cell`; `nn_state.{c,h}` accept in_dim 19 or 20

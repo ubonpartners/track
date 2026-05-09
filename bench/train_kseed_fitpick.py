@@ -44,6 +44,16 @@ def main():
                    help="fitness-eval workers per head (default 4)")
     p.add_argument("--keep-all", action="store_true",
                    help="keep all per-seed .pt/.bin (default: only best)")
+    p.add_argument("--fitness-subset", default="diverse",
+                   choices=["diverse", "fast", "full"],
+                   help="which clip subset to use for the per-seed fitness "
+                        "eval that picks the best seed. 'diverse' (29 clips, "
+                        "default, ~70s/seed) is fast but susceptible to "
+                        "selection overfitting — with K seeds, the best-on-"
+                        "diverse-29 isn't guaranteed to generalize. 'full' "
+                        "(178 clips, ~3-5min/seed) is statistically more "
+                        "robust at ~3-5× cost. See §20.23 in "
+                        "STATE_HEAD_RETRAIN_PLAN.md.")
     args, passthrough = p.parse_known_args()
 
     prefix = args.out_prefix
@@ -83,10 +93,11 @@ def main():
             continue
         export_dt = time.time() - t0
 
-        # 3. Fitness on diverse subset.
+        # 3. Fitness on the chosen subset (default diverse-29; full-178 for
+        # statistically-robust selection).
         t0 = time.time()
         from bench.eval_head_fitness import eval_config, load_subset, make_yaml_with_state_bin
-        clips = load_subset("diverse")
+        clips = load_subset(args.fitness_subset)
         yaml_path = make_yaml_with_state_bin(bn)
         try:
             res = eval_config(yaml_path, clips=clips, workers=args.workers)
