@@ -4550,6 +4550,27 @@ fp_tracks is decisive for production cleanliness.
 fitness**, vs v8+no-demote 0.4423 — gap of **0.0145**, within 2σ run
 noise. v8+no-demote produces **13× fewer FP tracks** (11 vs 144).
 
+**Final 3-run statistics**:
+
+| variant | fitness mean ± std | MOTA | fp_tracks |
+|---|--:|--:|--:|
+| **v8 + bayes_disable_demote** | **0.4700 ± 0.0019** | 0.5259 | 107 |
+| v41 (legacy MLP)              | 0.4597 ± 0.0002     | 0.5302 | 137 |
+
+**v8 + no-demote BEATS v41 by +0.0103 fitness, with -22% fewer FP
+tracks**. Both means well separated (Δ/std ≈ 5σ).
+
+Critical fix that unlocked the win: dropping `bayes_c_FP_track=0.025`
+override (which was over-suppressing). With the runtime default
+(5e-4), v8+no-demote lifts from 0.4423 to 0.4700 — the override I'd
+been repeatedly using was actually hurting, while ostensibly being
+"the val-optimal" value from offline measurements.
+
+Earlier offline c_FP_track sweeps used the broken `cost_decision`
+formula (delta_promote on LOST→TRACKED), so the val-optimal point was
+mis-located. With the fix, the C-runtime default 5e-4 is the right
+operating point.
+
 **Failed attempts to close the gap** (2026-05-09):
 
   - v11 (focal loss γ=2.0 on top of v10): trace lib 6/13 fails, much
