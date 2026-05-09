@@ -270,6 +270,12 @@ def main():
                         "'expected match rate' which correctly down-weights "
                         "tracks that match only occasionally.")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--focal-gamma", type=float, default=0.0,
+                   help="if > 0, apply focal loss weighting (1-p_t)^γ * BCE "
+                        "to the LLR head. Targets hard examples (where the "
+                        "head's prediction is far from the label) — useful "
+                        "for over-confident heads like v10 that fail on "
+                        "consistent_match FPs.")
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -378,9 +384,18 @@ def main():
             llr_l, mtp_l, mfp_l, _ = model(X_b)
 
             # BCE on llr_logit: per-frame label is the (broadcast) track-
-            # level is_TP. Mask out pads.
+            # level is_TP. Mask out pads. With --focal-gamma > 0, we apply
+            # focal loss weighting (1-p_t)^γ * BCE which emphasises rows
+            # where the head's prediction is far from the label — the
+            # "hard examples" that aggregate BCE de-emphasises. v10's
+            # weakness on consistent_match FPs was over-confidence on
+            # those rows; focal loss should target it directly.
             bce_per = F.binary_cross_entropy_with_logits(
                 llr_l, isTP_b, pos_weight=pos_weight, reduction="none")
+            if args.focal_gamma > 0.0:
+                p = torch.sigmoid(llr_l)
+                p_t = isTP_b * p + (1.0 - isTP_b) * (1.0 - p)
+                bce_per = bce_per * (1.0 - p_t).clamp(min=0.0).pow(args.focal_gamma)
             llr_loss = (bce_per * pad.float()).sum() / pad.float().sum().clamp(min=1.0)
 
             # Lifetime: gated MSE. The μ_TP target is "remaining matched-

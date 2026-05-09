@@ -4522,6 +4522,25 @@ either a head change beyond what v10's μ_TP fix does, or a different
 NN architecture for the decoupled-head + cost-rule path. Documented as
 the open frontier.
 
+**Failed attempts to close the gap** (2026-05-09):
+
+  - v11 (focal loss γ=2.0 on top of v10): trace lib 6/13 fails, much
+    worse. Focal too aggressive; suppresses easy positives.
+  - v11b (focal loss γ=1.0): trace lib 3/13 fails. Still worse.
+  - v12 (v10 + `--rebalance`, pos_weight=0.755): trace lib 4/13 fails.
+
+The discriminative gap on the consistent_match_FP trace (PP22_00220
+tid=3203334308) is structural: v10's p_TP outputs 0.85 on a 22-frame
+all-matched-no-GT track, while v8's stays 0.30-0.50. Loss-shape tweaks
+on the same architecture and corpus can't move that delta enough.
+Closing the v8/v10 → v41 gap likely needs:
+
+  - More discriminating input features (track-level FP-pattern signals
+    that distinguish "consistent match but wrong object" from "real TP")
+  - Or a different head architecture (more capacity, attention over the
+    track sequence, etc.)
+  - Or accept v8 + no-demote as ship and v41 as still ahead
+
 **Files**: see `bench/trace_library/`, `bench/eval_decoupled_offline.py`,
 `utrack.c` (`param_bayes_disable_demote`), `utrack_internal.h`.
 
