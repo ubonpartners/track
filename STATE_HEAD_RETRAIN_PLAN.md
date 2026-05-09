@@ -4546,6 +4546,10 @@ The "0.115 gap" reported earlier was an apples-vs-oranges comparison
 across operating points. Real gap is ~0.020 and the win column on
 fp_tracks is decisive for production cleanliness.
 
+**Fresh v41 re-bench (full-178, native, no overrides) confirms 0.4568
+fitness**, vs v8+no-demote 0.4423 — gap of **0.0145**, within 2σ run
+noise. v8+no-demote produces **13× fewer FP tracks** (11 vs 144).
+
 **Failed attempts to close the gap** (2026-05-09):
 
   - v11 (focal loss γ=2.0 on top of v10): trace lib 6/13 fails, much
