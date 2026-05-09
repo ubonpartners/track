@@ -4426,3 +4426,39 @@ runtime that:
 
 **Files**: `bench/test_no_demote.py` (new).
 
+---
+
+## 2026-05-09 — Bug 10: every Phase 26+ bench was in LEGACY mode
+
+`bench/eval_head_fitness.py` only sets `state_head_bayesian=true` when
+`--bayesian` is passed on the command line. Every Phase 26-28 bench
+(v6, v7, v8, v9, v9b, v10) ran WITHOUT `--bayesian` → LEGACY mode →
+the cost rule code (`utrack.c:1186 if (ut->param_state_head_bayesian)`)
+was never executed. Legacy mode interprets the head's 3 outputs as
+4 sigmoid'd promote/demote/drop scores, which is nonsense for a
+decoupled (LLR, log_μ_TP, log_μ_FP) head — `expm1(log_mu)` ≫ 1 gets
+treated like a probability and behaviour is essentially random.
+
+That's why all the Phase 26-28 cFP "sweeps" gave near-identical
+results: the cost rule wasn't running, so `bayes_c_FP_track` was
+silently ignored along with `bayes_c_FP_frame`, `bayes_c_MOTA`, etc.
+
+**Apples-to-apples results in BAYESIAN mode** (v10 + ntt=0.05 +
+match-net v10 + cfp=0.025, full-178, --workers 4):
+
+| variant            | MOTA  | fp_tracks | fitness |
+|--------------------|------:|----------:|--------:|
+| v8 BAYESIAN        | 0.350 |     36    | 0.3315  |
+| v10 BAYESIAN       | 0.375 |     91    | 0.3291  |
+| v41 baseline (legacy) | 0.530 |  134   | 0.462   |
+
+v8 and v10 are tied; the μ_TP fix lifts MOTA +2.5pp but adds 55 FP
+tracks, fitness wash. Both ~0.13 below v41. v41 was a 4-output MLP
+head that's correctly addressed by legacy mode — it's a fair baseline
+under its own model class but the decoupled-head + cost-rule path
+hasn't matched it yet.
+
+Path forward: the offline no-demote experiment predicted +25-74%
+fitness lift on v8/v10 if demote is removed. Even half that gain
+would close the 0.13 gap to v41. That's the next experiment.
+

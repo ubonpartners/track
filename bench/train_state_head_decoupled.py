@@ -383,8 +383,14 @@ def main():
                 llr_l, isTP_b, pos_weight=pos_weight, reduction="none")
             llr_loss = (bce_per * pad.float()).sum() / pad.float().sum().clamp(min=1.0)
 
-            # Lifetime: gated MSE.
-            tp_mask = pad & (isTP_b > 0.5)
+            # Lifetime: gated MSE. The μ_TP target is "remaining matched-
+            # seconds from this row"; for tail rows past the last GT-aligned
+            # frame the target is 0, which conflicts with mid-track-occlusion
+            # rows where time_since_det looks similar but real μ_TP > 0. Mask
+            # out tail rows from the μ_TP loss (logrem_b == 0 for TP tracks
+            # iff we're at-or-past last_aligned_t) so the head only learns
+            # μ_TP from rows where it's a meaningful positive target.
+            tp_mask = pad & (isTP_b > 0.5) & (logrem_b > 0)
             fp_mask = pad & (isTP_b <= 0.5)
             life_loss = X_b.new_zeros(())
             if tp_mask.any():
