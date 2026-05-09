@@ -4462,3 +4462,66 @@ Path forward: the offline no-demote experiment predicted +25-74%
 fitness lift on v8/v10 if demote is removed. Even half that gain
 would close the 0.13 gap to v41. That's the next experiment.
 
+---
+
+## 2026-05-09 — Bug 11 audit + verified best result (v8 + no-demote)
+
+After the user (rightly) called out repeated foundation bugs, did a
+clean audit of the full chain — head export/load contract, Python ↔ C
+feature builder layout, cost-rule arithmetic, bench wiring, trace
+library correctness. Four more bugs found:
+
+- **A**: `bench/eval_decoupled_offline.cost_decision` used delta_promote
+  (with c_FP_track) for LOST→TRACKED. C runtime uses delta_repromote
+  (no c_FP_track on re-entry). Python sim was double-charging
+  c_FP_track on demote→re-promote cycles. Fixed.
+
+- **B**: `bench/trace_library/capture.py` used a raw `(seq, tid)` mask
+  which combined multiple distinct track-segments (track_id is reused
+  after a kill, plus the corpus emits multiple state-replay rows per
+  frame). All 5 seed traces had wrong row counts and wrong matched/gt
+  patterns — the "clean_tp_baseline" had 170 rows / 12 GT-aligned
+  (should have been 102 rows / 86 aligned). Fixed via group_rows_by_track.
+
+- **C**: trace runner had no way to mirror runtime's bayes_disable_demote.
+  Added `--disable-demote` flag.
+
+- **D**: trace asserts were written against the bogus data from B. All
+  re-curated against actual matched/gt patterns.
+
+After audit, on the verified pipeline (BAYESIAN mode, match-net v10,
+ntt=0.05, full-178, --workers 4):
+
+| variant            | MOTA  | fp_tracks | fitness |
+|--------------------|------:|----------:|--------:|
+| v8  + with-demote  | 0.350 |     36    | 0.3315  |
+| v8  + no-demote    | 0.371 |   **27**  | **0.3564** ← best |
+| v10 + with-demote  | 0.375 |     91    | 0.3291  |
+| v10 + no-demote    | 0.385 |     74    | 0.3472  |
+| v41 baseline (legacy MLP) | 0.530 | 134 | 0.462 |
+
+Trace library (12 asserts across 5 traces) on the same heads:
+
+| variant            | passes |
+|--------------------|-------:|
+| v8  + no-demote    |  6/12  |
+| v10 + no-demote    | 12/12  |
+
+**Important**: trace lib showed v10 strictly better, but full-178 ranks
+v8 above v10 (0.3564 vs 0.3472). The 5 traces are too narrow to predict
+aggregate fitness; they catch specific failure modes but miss the
+discrimination problem v10 has across the whole PP22 distribution
+(v10 over-promotes 47 more FP tracks than v8 across 133 PP22 clips).
+
+The trace library is now **reliable**: pass = head correctly handles
+named failure modes. It doesn't predict aggregate fitness alone.
+
+**Best verified result**: v8 + bayes_disable_demote = 0.3564 fitness.
+Still 0.115 below v41 (legacy MLP baseline). Closing that gap requires
+either a head change beyond what v10's μ_TP fix does, or a different
+NN architecture for the decoupled-head + cost-rule path. Documented as
+the open frontier.
+
+**Files**: see `bench/trace_library/`, `bench/eval_decoupled_offline.py`,
+`utrack.c` (`param_bayes_disable_demote`), `utrack_internal.h`.
+
