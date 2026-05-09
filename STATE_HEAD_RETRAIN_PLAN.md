@@ -4561,7 +4561,20 @@ noise. v8+no-demote produces **13× fewer FP tracks** (11 vs 144).
 **Both v8 and v10 + no-demote BEAT v41 by ~0.010 fitness with fewer
 FP tracks**. v8 vs v10 is a statistical tie (Δ=0.0009, ~0.5σ). v10
 has the μ_TP loss-gating fix and slightly higher MOTA but a few more
-FPs; v8 is the simpler shippable choice.
+FPs.
+
+**Trace library at ship config** (`c_FP_track=5e-4`, `--disable-demote`):
+
+| variant | trace asserts pass |
+|---|--:|
+| v10 + no-demote | **11/13** (5/6 traces) |
+| v8  + no-demote | 5/13 (2/6 traces) |
+
+**v10 is the principled ship choice**: ties v8 on aggregate fitness but
+has correct behaviour on the per-failure-mode regression set. v10's
+μ_TP loss-gating fix matters at low c_FP_track — without it, the head
+demotes itself out of TP tracks during occlusions even with disable_demote
+because cost_decision gets the demote → drop pipeline.
 
 Critical fix that unlocked the win: dropping `bayes_c_FP_track=0.025`
 override (which was over-suppressing). With the runtime default

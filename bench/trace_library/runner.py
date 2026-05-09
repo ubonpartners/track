@@ -70,7 +70,7 @@ def run_head(model: torch.nn.Module,
 
 
 def walk_cost_rule(p_TP, mu_TP, mu_FP, matched,
-                   c_MOTA=1e-3, c_FP_track=2.5e-2, c_FP_frame=2e-3,
+                   c_MOTA=1e-3, c_FP_track=5e-4, c_FP_frame=2e-3,
                    match_rate_TP=0.95, disable_demote=False) -> np.ndarray:
     """Per-row state from the offline cost-rule sim. Mirrors the C runtime.
 
@@ -158,8 +158,13 @@ def main():
                     help="directory of .npz traces to run")
     ap.add_argument("--trace", default=None,
                     help="single trace name (without .npz) to run")
+    # Defaults match the C runtime's defaults in utrack.c around line 226-230:
+    #   bayes_c_MOTA=1e-3, bayes_c_FP_track=5e-4, bayes_c_FP_frame=2e-3.
+    # Earlier this defaulted to c_FP_track=0.025 which over-suppressed
+    # traces relative to runtime; the trace lib's pass/fail must match
+    # the cost rule the head actually runs under.
     ap.add_argument("--c-mota",     type=float, default=1e-3)
-    ap.add_argument("--c-fp-track", type=float, default=2.5e-2)
+    ap.add_argument("--c-fp-track", type=float, default=5e-4)
     ap.add_argument("--c-fp-frame", type=float, default=2e-3)
     ap.add_argument("--disable-demote", action="store_true",
                     help="mirror runtime's bayes_disable_demote knob: "
