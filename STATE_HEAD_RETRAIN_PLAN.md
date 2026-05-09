@@ -4257,3 +4257,107 @@ requires either:
   eviction; `utrack_match.c` extended dedup (TRACKED beats UNCONFIRMED,
   UNCONFIRMED↔UNCONFIRMED by det.conf); `utrack_internal.h` +
   `param_max_tracks_per_cell`; `nn_state.{c,h}` accept in_dim 19 or 20
+
+---
+
+## Open notes — test AFTER current top-of-stack experiments
+
+**Top of stack (in priority order):**
+1. Diagnose the v9 head fp_tracks explosion (10772 vs v41's 134, fitness −4.90).
+   First check: is `--utrack-override c_FP_track=0.025` actually being applied,
+   or is the C runtime using a default that's much smaller?
+2. "No demote" experiment — replace TRACKED→LOST→drop with TRACKED→drop after
+   N unmatched frames; measure ID-switch impact. Cost rule simplifies to
+   ΔF(promote) + ΔF(drop) only. Real concern is loss of Pass-3 cross-match
+   re-stitching (utrack.c:121).
+
+**Queued for after the above resolves:**
+
+### Test μ_TP collapse-during-occlusion bug
+
+Investigation agent (2026-05-09) found v8's μ_TP collapses from 1.82 → 0.31
+during mid-track occlusion of real TPs (rows 23-26 of an INof_FD_OutFD TP
+track), causing the cost rule's demote check to fire on real objects.
+p_TP correctly stays at 0.94 throughout — the bug is in μ_TP, not p_TP, so
+calibration remapping won't fix it.
+
+**Initial diagnosis (loss gating)** was wrong: in `--label-mode match-fraction`
+(what v8 used), `is_TP_tr` is broadcast per-track at corpus build time, so
+the loss masks `pad & (isTP_b > 0.5)` evaluate the same for every row. μ_TP
+DOES get training signal during mid-track occlusions in match-fraction mode.
+
+**Real candidate causes**:
+1. **Threshold-at-0.5 is bimodal**: tracks with match_frac ∈ (0, 0.5) get
+   pushed entirely to μ_FP training. The μ_TP head never sees intermittent-
+   matching patterns. Bench: change the threshold to per-frame `gt_id_now != -1`
+   for μ_TP gating, keep track-level for μ_FP.
+2. **GRU lacks distinguishing features**: at runtime, "unmatched in middle"
+   and "unmatched near end-of-track" both have `time_since_det` incrementing
+   and look identical. Add `cum_match_count`, `frames_since_last_match` (and
+   maybe `time_since_first_match`) to the input matrix so the GRU can tell
+   "previously matched, currently in gap" from "never matched / track ending".
+   This is the cleanest fix per the diagnosis.
+
+**Predicted outcome if (2) is the bug**: μ_TP stays high during mid-track
+gaps, demote gate stops firing on real TPs, recovers ~50-70% of v8→v41 gap
+without any threshold sweep.
+
+**Memory pointer**: feedback_track_mu_tp_truncation.md
+
+---
+
+## 2026-05-09 — Bug 8: bench `--utrack-override` keys were silently ignored
+
+The C runtime reads cost-rule parameters from YAML keys prefixed `bayes_`:
+
+  - `bayes_c_FP_track`  (default 5e-4)
+  - `bayes_c_FP_frame`  (default 2e-3)
+  - `bayes_c_MOTA`      (default 1e-3)
+  - `bayes_match_rate_TP` (default 0.95)
+
+Every Phase 26-28 bench used `--utrack-override "c_FP_track=0.025"` (no
+`bayes_` prefix). YAML doesn't error on unrecognized keys; the override
+was silently dropped and the runtime fell back to the **default 5e-4 —
+50× weaker than the labeled `0.025`**. So every "cFP=X" benchmark in the
+plan above ran at the same effective cost rule (the runtime default).
+
+This is why v6/v7/v8 all landed near v41 baseline regardless of cost
+override: the override never reached the C runtime.
+
+**Verified for v9** (post-fix re-bench at `bayes_c_FP_track=0.025`):
+v9 still produces `fp_tracks=10833, fitness=−4.94`. The head's
+over-promotion is structural (hidden=64 + match-net v10 corpus drift),
+not a calibration knob. Even 50× more cost penalty doesn't suppress.
+
+**Files touched**: `bench/eval_head_fitness.py` already documents the
+correct key in its `--utrack-override` help text — the bug was at the
+caller, not the script.
+
+---
+
+## 2026-05-09 — Bug 9: trace-library regression infra + 5 seed traces
+
+Added `bench/trace_library/` per the user's "interesting traces" idea.
+Captures (sequence, track_id) pairs from a corpus into self-contained
+`.npz` files with embedded asserts; the runner checks every head against
+every trace and reports per-issue pass/fail. Stops the whack-a-mole
+where each new bug is found by walking traces, then forgotten.
+
+Seed traces (in `bench/trace_library/traces/`):
+
+  - `clean_tp_baseline.npz` — high-match-rate TP, head must promote
+  - `mu_tp_collapse_occlusion.npz` — TP with 20-frame mid-track gap
+    (rows 196-215); head must keep μ_TP > 0.5 there
+  - `pure_fp_suppression.npz` — no-GT track; head must keep p_TP < 0.5
+  - `brief_match_fp.npz` — FP with 3 GT-aligned rows; head must not
+    lock to high p_TP
+  - `intermittent_match_tp.npz` — long real track with sparse hits
+    (match_frac=0.25); head's p_TP must not collapse to zero
+
+Both v8 and v9 fail multiple asserts — the library is doing its job.
+Future heads must beat this regression set before any full-178 bench.
+
+**Files**: `bench/trace_library/{__init__,runner,capture}.py`,
+`bench/trace_library/README.md`,
+`bench/trace_library/traces/{5 seed traces}.npz`.
+
