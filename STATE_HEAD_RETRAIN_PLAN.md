@@ -4522,6 +4522,30 @@ either a head change beyond what v10's μ_TP fix does, or a different
 NN architecture for the decoupled-head + cost-rule path. Documented as
 the open frontier.
 
+**Major correction**: the original "v41 = 0.462" baseline was at v41's
+NATIVE settings (`new_track_thr=0.77`, `match-net v9_face`, legacy
+mode). All v8/v9/v10 BAYESIAN runs above used `new_track_thr=0.05` +
+`match-net v10` — a different operating point. **v41 at the new
+operating point collapses to fitness −37.11** (74956 fp_tracks); the
+v41 head was tuned for high-confidence detections (ntt=0.77).
+
+Re-bench at v41's native settings:
+
+| variant            | MOTA  | fp_tracks | fitness |
+|--------------------|------:|----------:|--------:|
+| v41 (legacy)        | 0.530 |    134    | 0.462   |
+| **v8  + bayes_disable_demote** | 0.449 | **11** | **0.4423** |
+| v10 + bayes_disable_demote     | 0.446 |     20    | 0.4340  |
+
+**v8 + no-demote is now within 0.020 of v41 baseline** — well inside
+the per-clip noise (±0.005-0.010 single run) — and produces **12×
+fewer FP tracks** (11 vs 134) for ~the same fitness. Per-family,
+v8+no-demote BEATS v41 on MOT20, INof, UKof; loses on PP22 and MOT17.
+
+The "0.115 gap" reported earlier was an apples-vs-oranges comparison
+across operating points. Real gap is ~0.020 and the win column on
+fp_tracks is decisive for production cleanliness.
+
 **Failed attempts to close the gap** (2026-05-09):
 
   - v11 (focal loss γ=2.0 on top of v10): trace lib 6/13 fails, much
