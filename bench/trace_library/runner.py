@@ -71,22 +71,32 @@ def run_head(model: torch.nn.Module,
 
 def walk_cost_rule(p_TP, mu_TP, mu_FP, matched,
                    c_MOTA=1e-3, c_FP_track=2.5e-2, c_FP_frame=2e-3,
-                   match_rate_TP=0.95) -> np.ndarray:
-    """Per-row state from the offline cost-rule sim. Mirrors the C runtime."""
+                   match_rate_TP=0.95, disable_demote=False) -> np.ndarray:
+    """Per-row state from the offline cost-rule sim. Mirrors the C runtime.
+
+    `disable_demote` mirrors the `bayes_disable_demote` YAML knob in the C
+    runtime: TRACKED tracks never transition to LOST; the bench's intent is
+    that TRACKED-unmatched-too-long → drop replaces the LOST middle state.
+    The trace library tests the rule the head will actually run under, so
+    when the deployment mode uses no-demote, the runner should too."""
     state = UNCONFIRMED
     out = np.zeros(len(p_TP), dtype=np.int8)
     for k in range(len(p_TP)):
-        state = cost_decision(
+        next_state = cost_decision(
             float(p_TP[k]), float(mu_TP[k]), float(mu_FP[k]),
             state, bool(matched[k]),
             c_MOTA=c_MOTA, c_FP_track=c_FP_track,
             c_FP_frame=c_FP_frame, match_rate_TP=match_rate_TP)
+        if disable_demote and state == TRACKED and next_state == LOST:
+            next_state = TRACKED
+        state = next_state
         out[k] = state
     return out
 
 
 def check_trace(trace_path: str, model, device,
-                c_MOTA: float, c_FP_track: float, c_FP_frame: float):
+                c_MOTA: float, c_FP_track: float, c_FP_frame: float,
+                disable_demote: bool = False):
     """Returns (n_pass, n_fail, [failure_messages])."""
     blob = np.load(trace_path, allow_pickle=False)
     inputs   = blob["inputs"]
@@ -98,7 +108,8 @@ def check_trace(trace_path: str, model, device,
     states = walk_cost_rule(p_TP, mu_TP, mu_FP, matched,
                             c_MOTA=c_MOTA,
                             c_FP_track=c_FP_track,
-                            c_FP_frame=c_FP_frame)
+                            c_FP_frame=c_FP_frame,
+                            disable_demote=disable_demote)
 
     n_rows = len(p_TP)
     failures = []
@@ -150,6 +161,9 @@ def main():
     ap.add_argument("--c-mota",     type=float, default=1e-3)
     ap.add_argument("--c-fp-track", type=float, default=2.5e-2)
     ap.add_argument("--c-fp-frame", type=float, default=2e-3)
+    ap.add_argument("--disable-demote", action="store_true",
+                    help="mirror runtime's bayes_disable_demote knob: "
+                         "TRACKED never drops to LOST")
     args = ap.parse_args()
 
     ckpt = torch.load(args.head, map_location="cpu", weights_only=False)
@@ -171,7 +185,8 @@ def main():
 
     print(f"head: {args.head}  in_dim={in_dim} hidden={hidden}")
     print(f"running {len(paths)} trace(s) "
-          f"(c_FP_track={args.c_fp_track}, c_MOTA={args.c_mota})\n")
+          f"(c_FP_track={args.c_fp_track}, c_MOTA={args.c_mota}, "
+          f"disable_demote={args.disable_demote})\n")
 
     total_pass = 0
     total_fail = 0
@@ -181,7 +196,8 @@ def main():
             p, model, device,
             c_MOTA=args.c_mota,
             c_FP_track=args.c_fp_track,
-            c_FP_frame=args.c_fp_frame)
+            c_FP_frame=args.c_fp_frame,
+            disable_demote=args.disable_demote)
         total_pass += n_pass
         total_fail += n_fail
         all_failures.extend(fails)

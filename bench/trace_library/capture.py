@@ -20,7 +20,7 @@ import os
 
 import numpy as np
 
-from bench.train_state_head_gru import build_input_matrix_no_state
+from bench.train_state_head_gru import build_input_matrix_no_state, group_rows_by_track
 
 
 def main():
@@ -41,16 +41,30 @@ def main():
     rec = np.load(args.corpus, allow_pickle=False)["records"]
     seq = rec["sequence"].astype(str)
     tid = rec["track_id"]
-    fi  = rec["frame_idx"]
 
-    mask = (seq == args.sequence) & (tid == args.track_id)
-    n = int(mask.sum())
-    if n == 0:
+    # Use the same grouping the trainer/runner uses. group_rows_by_track
+    # dedups by frame_idx (the corpus emits multiple state-pass rows per
+    # frame; the head only sees ONE per frame at runtime). Without this,
+    # a "len=149" track captured naively comes out as 170+ rows.
+    groups = group_rows_by_track(rec)
+    matching = [g for g in groups
+                if seq[g[0]] == args.sequence and int(tid[g[0]]) == args.track_id]
+    if not matching:
         raise SystemExit(
-            f"no rows for sequence={args.sequence!r} track_id={args.track_id} "
+            f"no group for sequence={args.sequence!r} track_id={args.track_id} "
             f"in {args.corpus}")
-    rows = np.where(mask)[0]
-    rows = rows[np.argsort(fi[rows])]
+    if len(matching) > 1:
+        # Multiple track-segments share the (seq, tid) pair (track_id reuse
+        # after a kill). Pick the longest segment by default; warn so the
+        # caller knows.
+        sizes = [len(g) for g in matching]
+        idx = int(np.argmax(sizes))
+        print(f"  WARNING: {len(matching)} segments share (seq, tid); "
+              f"picking the longest (len={sizes[idx]} of {sizes})")
+        rows = matching[idx]
+    else:
+        rows = matching[0]
+    n = len(rows)
 
     inputs   = build_input_matrix_no_state(rec)[rows]
     matched  = (rec["matched"][rows] != 0).astype(bool)
