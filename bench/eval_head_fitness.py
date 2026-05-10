@@ -240,7 +240,7 @@ def make_yaml_with_state_bin(state_bin: str, base_yaml: str | None = None,
                               utrack_overrides: dict | None = None) -> str:
     """Produce a temp YAML with nn_state_path pointing at `state_bin`,
     other params from `base_yaml` (defaults to current /mldata prod).
-    Extra `utrack_overrides` (e.g. {"state_head_bayesian": True}) are
+    Extra `utrack_overrides` (e.g. {"new_track_thr": 0.05}) are
     merged into cfg["utrack"]."""
     if base_yaml is None:
         base_yaml = "/mldata/config/track/trackers/uc_v11.yaml"
@@ -281,10 +281,6 @@ def main():
                         "mean ± std. Each run is independent; total wall time "
                         "scales linearly.")
     p.add_argument("--quiet", action="store_true")
-    p.add_argument("--bayesian", action="store_true",
-                   help="Run with state_head_bayesian=true. The .bin slot "
-                        "outputs are interpreted as (LLR, μ_TP, μ_FP, _) "
-                        "instead of 4 sigmoids. See track/BAYESIAN_TRACKER.md.")
     p.add_argument("--utrack-override", action="append", default=[],
                    metavar="KEY=VALUE",
                    help="Extra yaml override for the utrack: section, "
@@ -316,13 +312,9 @@ def main():
     if args.config:
         cfg = args.config
     elif args.state_bin:
-        overrides = dict(extra_overrides)
-        if args.bayesian:
-            overrides["state_head_bayesian"] = True
         cfg = make_yaml_with_state_bin(args.state_bin, args.base,
-                                       overrides if overrides else None)
-        mode = "BAYESIAN" if args.bayesian else "legacy"
-        print(f"Built temp YAML with nn_state_path={args.state_bin} ({mode} mode)",
+                                       extra_overrides if extra_overrides else None)
+        print(f"Built temp YAML with nn_state_path={args.state_bin}",
               file=sys.stderr)
     else:
         sys.exit("Need --config or --state-bin")

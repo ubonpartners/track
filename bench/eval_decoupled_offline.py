@@ -34,9 +34,9 @@ import argparse, json
 import numpy as np
 import torch
 
-from bench.train_state_head_gru        import build_input_matrix_no_state, group_rows_by_track
-from bench.train_state_head_decoupled  import DecoupledGRUHead
-from bench.train_bayesian_head         import compute_track_labels
+from bench.train_state_head_decoupled import (
+    build_input_matrix_no_state, group_rows_by_track,
+    compute_track_labels, DecoupledGRUHead)
 
 
 UNCONFIRMED, TRACKED, LOST = 0, 1, 2
