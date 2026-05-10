@@ -96,6 +96,14 @@ OBS_FEATURE_NAMES_V2 = OBS_FEATURE_NAMES + [
     "det_subbox_conf", "track_subbox_conf", "det_fiqa_score",
 ]
 
+# v3 schema: append log1p(time_since_det) — the time gap (s) since the
+# track's last matched detection. Captured in every pair-trace record
+# but historically not exposed to the NN. Enabled via --with-time on
+# the trainer; the C runtime feature builder must mirror this.
+OBS_FEATURE_NAMES_V3 = OBS_FEATURE_NAMES_V2 + [
+    "log_time_since_det",
+]
+
 DET_FEATURE_NAMES = [
     "det_conf", "det_w", "det_h", "det_aspect", "pose_kp_visible",
 ]
@@ -108,6 +116,10 @@ PAIR_FEATURE_NAMES = [
 
 PAIR_FEATURE_NAMES_V2 = PAIR_FEATURE_NAMES + [
     "subbox_iou", "det_subbox_conf", "track_subbox_conf", "det_fiqa_score",
+]
+
+PAIR_FEATURE_NAMES_V3 = PAIR_FEATURE_NAMES_V2 + [
+    "log_time_since_det",
 ]
 
 
@@ -128,12 +140,17 @@ def compute_iou(records: np.ndarray) -> np.ndarray:
     return iou.astype(np.float32)
 
 
-def build_obs_matrix(r: np.ndarray, *, with_face: bool = False) -> np.ndarray:
+def build_obs_matrix(r: np.ndarray, *, with_face: bool = False,
+                     with_time: bool = False) -> np.ndarray:
     """f_obs input matrix (raw, not z-scored — model has BatchNorm).
 
     `with_face=True` appends the v2 face/subbox features
     (det_subbox_conf, track_subbox_conf, det_fiqa_score). The base
     13-feature variant is preserved for old corpora.
+
+    `with_time=True` further appends `log1p(time_since_det)` (v3
+    schema). Requires `with_face=True` to keep the column layout
+    invariant (V3 = V2 + [log_time_since_det]).
     """
     cols = [
         np.nan_to_num(r["reid_cos_raw"]).astype(np.float32),
@@ -156,6 +173,9 @@ def build_obs_matrix(r: np.ndarray, *, with_face: bool = False) -> np.ndarray:
             r["track_subbox_conf"].astype(np.float32),
             r["det_fiqa_score"].astype(np.float32),
         ]
+    if with_time:
+        assert with_face, "v3 (time) requires v2 (face) base"
+        cols.append(np.log1p(np.maximum(0.0, r["time_since_det"].astype(np.float32))))
     x = np.stack(cols, axis=1)
     x = np.where(np.isnan(x), 0.0, x)
     return x
@@ -174,11 +194,14 @@ def build_det_matrix(r: np.ndarray) -> np.ndarray:
     return x
 
 
-def build_pair_matrix(r: np.ndarray, *, with_face: bool = False) -> np.ndarray:
+def build_pair_matrix(r: np.ndarray, *, with_face: bool = False,
+                      with_time: bool = False) -> np.ndarray:
     """Pair feature matrix. With `with_face=True`, append v2 features:
     subbox_iou, det_subbox_conf, track_subbox_conf, det_fiqa_score —
     same numbers also fed to f_obs but it can also serve as a direct
     input to the head (skip path).
+
+    `with_time=True` further appends `log1p(time_since_det)` (v3 schema).
     """
     iou = compute_iou(r)
     reid_z = np.nan_to_num(r["reid_z"]).astype(np.float32)
@@ -208,6 +231,9 @@ def build_pair_matrix(r: np.ndarray, *, with_face: bool = False) -> np.ndarray:
             r["track_subbox_conf"].astype(np.float32),
             r["det_fiqa_score"].astype(np.float32),
         ]
+    if with_time:
+        assert with_face, "v3 (time) requires v2 (face) base"
+        cols.append(np.log1p(np.maximum(0.0, r["time_since_det"].astype(np.float32))))
     x = np.stack(cols, axis=1)
     x = np.where(np.isnan(x), 0.0, x)
     return x
@@ -359,13 +385,17 @@ def train(args):
     # model. We refuse to make that mistake automatically.
     face_cols = {"det_subbox_conf", "track_subbox_conf", "det_fiqa_score"}
     has_face = face_cols.issubset(set(r_tr.dtype.names))
-    print(f"building features... with_face={has_face}")
+    with_time = bool(args.with_time)
+    if with_time:
+        assert "time_since_det" in r_tr.dtype.names, \
+            "corpus lacks time_since_det column"
+    print(f"building features... with_face={has_face} with_time={with_time}")
 
-    obs_tr = build_obs_matrix(r_tr, with_face=has_face)
-    obs_va = build_obs_matrix(r_va, with_face=has_face)
+    obs_tr = build_obs_matrix(r_tr, with_face=has_face, with_time=with_time)
+    obs_va = build_obs_matrix(r_va, with_face=has_face, with_time=with_time)
     det_tr = build_det_matrix(r_tr); det_va = build_det_matrix(r_va)
-    pair_tr = build_pair_matrix(r_tr, with_face=has_face)
-    pair_va = build_pair_matrix(r_va, with_face=has_face)
+    pair_tr = build_pair_matrix(r_tr, with_face=has_face, with_time=with_time)
+    pair_va = build_pair_matrix(r_va, with_face=has_face, with_time=with_time)
 
     # Z-score using train stats
     obs_tr_n, obs_mean, obs_std = standardise(obs_tr)
@@ -554,9 +584,11 @@ def train(args):
         "pair_in": pair_tr_n.shape[1], "e_dim": args.e_dim,
         "tower_hidden": args.tower_hidden,
         "alpha": args.alpha, "lambda": lam,
-        "obs_feature_names":  OBS_FEATURE_NAMES_V2  if has_face else OBS_FEATURE_NAMES,
+        "obs_feature_names":  (OBS_FEATURE_NAMES_V3 if with_time else
+                               (OBS_FEATURE_NAMES_V2 if has_face else OBS_FEATURE_NAMES)),
         "det_feature_names":  DET_FEATURE_NAMES,
-        "pair_feature_names": PAIR_FEATURE_NAMES_V2 if has_face else PAIR_FEATURE_NAMES,
+        "pair_feature_names": (PAIR_FEATURE_NAMES_V3 if with_time else
+                               (PAIR_FEATURE_NAMES_V2 if has_face else PAIR_FEATURE_NAMES)),
         "_meta": make_pt_meta(
             artefact_kind="match_cost_two_tower",
             args=args, hparams=hparams, dataset_info=dataset_info,
@@ -588,6 +620,9 @@ def main():
     p.add_argument("--no_skip", action="store_true",
                    help="Disable the train-time skip path; head sees only "
                         "historical e_track (closer to NNUE/spec).")
+    p.add_argument("--with-time", action="store_true",
+                   help="v3 schema: feed log1p(time_since_det) to both obs "
+                        "and pair vectors. obs_in=17, pair_in=20.")
     p.add_argument("--seed", type=int, default=0,
                    help="seed numpy + torch RNGs for reproducibility")
     p.add_argument("--save", required=True,
