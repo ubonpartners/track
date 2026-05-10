@@ -41,10 +41,11 @@ def main():
     in_dim = int(ckpt["in_dim"])
     hidden = int(ckpt["hidden"])
     print(f"  in_dim={in_dim} hidden={hidden} model_kind={ckpt.get('model_kind')}")
-    # Runtime accepts in_dim==19 only (UTRACK_NN_STATE_GRU_IN_DIM in nn_state.h).
-    if in_dim != 19:
+    # Runtime accepts in_dim ∈ {19, 25} (UTRACK_NN_STATE_GRU_IN_DIM and
+    # UTRACK_NN_STATE_GRU_IN_DIM_V2 in nn_state.h).
+    if in_dim not in (19, 25):
         raise SystemExit(
-            f"in_dim={in_dim} but C runtime requires 19; refusing to export."
+            f"in_dim={in_dim} but C runtime requires 19 or 25; refusing to export."
         )
 
     def f32(t):

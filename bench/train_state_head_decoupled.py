@@ -43,12 +43,27 @@ import torch.nn.functional as F
 # ubon_cstuff/src/track/utrack/utrack_state.c. Mismatch is fatal at .bin
 # load time (UTRACK_NN_STATE_GRU_IN_DIM = 19).
 INPUT_DIM = 19
+INPUT_DIM_SCENE = 25     # 19 base + 6 scene-aggregate columns
+
+# Scene-aggregate columns the corpus carries (Phase 29 feature engineering).
+# Each contributes meaningful row-0 signal vs is_TP (AUC ~0.59-0.65) which the
+# 19-dim head currently throws away. Bootstrap defaults are applied if a
+# corpus pre-dates the field — keeps the trainer compatible with old npz.
+SCENE_COL_DEFAULTS = {
+    "scene_promote_rate":             0.5,
+    "scene_mean_det_conf_TRACKED":    0.7,
+    "scene_mean_det_conf_unmatched":  0.3,
+    "scene_track_density_smooth":     5.0,   # passed through log1p
+    "scene_mean_alive_track_age":     5.0,   # passed through log1p
+    "det_conf_minus_scene_TP_avg":    0.0,
+}
 
 
-def build_input_matrix_no_state(rec: np.ndarray) -> np.ndarray:
-    """(N, 19) float32 — state-agnostic per-frame feature vector.
+def build_input_matrix_no_state(rec: np.ndarray, *,
+                                 with_scene: bool = False) -> np.ndarray:
+    """(N, 19) or (N, 25) float32 — state-agnostic per-frame feature vector.
 
-    Layout (same as utrack_state.c):
+    Base layout (must mirror the C-side feature builder in utrack_state.c):
       [ 0]  matched
       [ 1]  log1p(observations)
       [ 2]  log1p(num_missed)
@@ -68,6 +83,14 @@ def build_input_matrix_no_state(rec: np.ndarray) -> np.ndarray:
       [16]  mean_match_score
       [17]  n_strong_matches
       [18]  log1p(time_since_creation)
+
+    Scene-aggregate (with_scene=True), Phase 29 layout:
+      [19]  scene_promote_rate
+      [20]  scene_mean_det_conf_TRACKED
+      [21]  scene_mean_det_conf_unmatched
+      [22]  log1p(scene_track_density_smooth)
+      [23]  log1p(scene_mean_alive_track_age)
+      [24]  det_conf_minus_scene_TP_avg
     """
     n = len(rec)
     def _f(name):
@@ -93,6 +116,25 @@ def build_input_matrix_no_state(rec: np.ndarray) -> np.ndarray:
         _f("n_strong_matches"),
         np.log1p(_f("time_since_creation")),
     ]
+    if with_scene:
+        def _scene(name, default):
+            if name in rec.dtype.names:
+                return rec[name].astype(np.float32).reshape(-1, 1)
+            return np.full((n, 1), default, dtype=np.float32)
+        cols += [
+            _scene("scene_promote_rate",
+                   SCENE_COL_DEFAULTS["scene_promote_rate"]),
+            _scene("scene_mean_det_conf_TRACKED",
+                   SCENE_COL_DEFAULTS["scene_mean_det_conf_TRACKED"]),
+            _scene("scene_mean_det_conf_unmatched",
+                   SCENE_COL_DEFAULTS["scene_mean_det_conf_unmatched"]),
+            np.log1p(_scene("scene_track_density_smooth",
+                            SCENE_COL_DEFAULTS["scene_track_density_smooth"])),
+            np.log1p(_scene("scene_mean_alive_track_age",
+                            SCENE_COL_DEFAULTS["scene_mean_alive_track_age"])),
+            _scene("det_conf_minus_scene_TP_avg",
+                   SCENE_COL_DEFAULTS["det_conf_minus_scene_TP_avg"]),
+        ]
     return np.ascontiguousarray(np.concatenate(cols, axis=1))
 
 
@@ -309,6 +351,10 @@ def main():
     p.add_argument("--lambda-llr",      type=float, default=1.0)
     p.add_argument("--lambda-lifetime", type=float, default=0.3)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--with-scene", action="store_true",
+                   help="Append the 6 Phase-29 scene-aggregate features "
+                        "(in_dim 19 → 25). Shipping the head requires "
+                        "matching plumbing in utrack_state.c.")
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -320,8 +366,8 @@ def main():
     print(f"loading {args.val}",   flush=True)
     rec_va = np.load(args.val,   allow_pickle=False)["records"]
 
-    X_tr = build_input_matrix_no_state(rec_tr)
-    X_va = build_input_matrix_no_state(rec_va)
+    X_tr = build_input_matrix_no_state(rec_tr, with_scene=args.with_scene)
+    X_va = build_input_matrix_no_state(rec_va, with_scene=args.with_scene)
     in_dim = X_tr.shape[1]
     print(f"train rows: {len(rec_tr)}  val rows: {len(rec_va)}  in_dim={in_dim}", flush=True)
 
@@ -469,7 +515,12 @@ def main():
         "state_dict": best_state,
         "in_dim": in_dim, "hidden": args.hidden,
         "model_kind": "decoupled_gru_v1",
-        "feature_layout": "decoupled-19dim (matched, log_obs..pose, hist[5], log_t_creation)",
+        "feature_layout": (
+            "decoupled-25dim-scene (19 base + 6 scene-aggregate)"
+            if args.with_scene else
+            "decoupled-19dim (matched, log_obs..pose, hist[5], log_t_creation)"
+        ),
+        "with_scene": bool(args.with_scene),
         "n_outputs": 3,
         "output_names": ["llr_logit", "mu_tp_log", "mu_fp_log"],
         "_meta": make_pt_meta(

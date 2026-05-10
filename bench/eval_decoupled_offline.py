@@ -102,7 +102,14 @@ def main():
 
     print(f"loading {args.val}", flush=True)
     rec = np.load(args.val, allow_pickle=False)["records"]
-    X = build_input_matrix_no_state(rec)
+    # Auto-detect from in_dim whether the head expects scene-aggregate features.
+    expect_scene = (in_dim == 25)
+    X = build_input_matrix_no_state(rec, with_scene=expect_scene)
+    if X.shape[1] != in_dim:
+        raise SystemExit(
+            f"feature width mismatch: head wants {in_dim}, builder produced "
+            f"{X.shape[1]} (with_scene={expect_scene})"
+        )
     is_TP_row, _ = compute_track_labels(rec)
     matched = rec["matched"].astype(bool)
     gt = rec["gt_id_now"]
