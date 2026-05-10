@@ -106,6 +106,10 @@ PAIR_FEATURE_NAMES = [
     "sim_term", "pass_0", "pass_1", "pass_2",
 ]
 
+PAIR_FEATURE_NAMES_V2 = PAIR_FEATURE_NAMES + [
+    "subbox_iou", "det_subbox_conf", "track_subbox_conf", "det_fiqa_score",
+]
+
 
 def compute_iou(records: np.ndarray) -> np.ndarray:
     """Compute IoU between track box (x0,y0,x1,y1) and det box."""
@@ -349,11 +353,19 @@ def train(args):
         w[fam_tr == f] = fam_target.get(f, 1.0) / max(1, n)
     w *= len(s_tr) / w.sum()
 
-    # Build the three feature matrices
-    print("building features...")
-    obs_tr = build_obs_matrix(r_tr); obs_va = build_obs_matrix(r_va)
+    # Auto-detect face/subbox feature availability from the corpus dtype.
+    # The shipped v9 was trained with these on (obs_in=16, pair_in=19);
+    # building without them when the corpus has them silently downgrades the
+    # model. We refuse to make that mistake automatically.
+    face_cols = {"det_subbox_conf", "track_subbox_conf", "det_fiqa_score"}
+    has_face = face_cols.issubset(set(r_tr.dtype.names))
+    print(f"building features... with_face={has_face}")
+
+    obs_tr = build_obs_matrix(r_tr, with_face=has_face)
+    obs_va = build_obs_matrix(r_va, with_face=has_face)
     det_tr = build_det_matrix(r_tr); det_va = build_det_matrix(r_va)
-    pair_tr = build_pair_matrix(r_tr); pair_va = build_pair_matrix(r_va)
+    pair_tr = build_pair_matrix(r_tr, with_face=has_face)
+    pair_va = build_pair_matrix(r_va, with_face=has_face)
 
     # Z-score using train stats
     obs_tr_n, obs_mean, obs_std = standardise(obs_tr)
@@ -542,9 +554,9 @@ def train(args):
         "pair_in": pair_tr_n.shape[1], "e_dim": args.e_dim,
         "tower_hidden": args.tower_hidden,
         "alpha": args.alpha, "lambda": lam,
-        "obs_feature_names": OBS_FEATURE_NAMES,
-        "det_feature_names": DET_FEATURE_NAMES,
-        "pair_feature_names": PAIR_FEATURE_NAMES,
+        "obs_feature_names":  OBS_FEATURE_NAMES_V2  if has_face else OBS_FEATURE_NAMES,
+        "det_feature_names":  DET_FEATURE_NAMES,
+        "pair_feature_names": PAIR_FEATURE_NAMES_V2 if has_face else PAIR_FEATURE_NAMES,
         "_meta": make_pt_meta(
             artefact_kind="match_cost_two_tower",
             args=args, hparams=hparams, dataset_info=dataset_info,
