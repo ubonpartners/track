@@ -270,12 +270,8 @@ def main():
                         "'expected match rate' which correctly down-weights "
                         "tracks that match only occasionally.")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--focal-gamma", type=float, default=0.0,
-                   help="if > 0, apply focal loss weighting (1-p_t)^γ * BCE "
-                        "to the LLR head. Targets hard examples (where the "
-                        "head's prediction is far from the label) — useful "
-                        "for over-confident heads like v10 that fail on "
-                        "consistent_match FPs.")
+    p.add_argument("--with-scene", action="store_true",
+                   help="Append the 6 Phase 29 per-scene features → in_dim=25")
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -287,8 +283,8 @@ def main():
     print(f"loading {args.val}",   flush=True)
     rec_va = np.load(args.val,   allow_pickle=False)["records"]
 
-    X_tr = build_input_matrix_no_state(rec_tr)
-    X_va = build_input_matrix_no_state(rec_va)
+    X_tr = build_input_matrix_no_state(rec_tr, with_scene=args.with_scene)
+    X_va = build_input_matrix_no_state(rec_va, with_scene=args.with_scene)
     in_dim = X_tr.shape[1]
     print(f"train rows: {len(rec_tr)}  val rows: {len(rec_va)}  in_dim={in_dim}", flush=True)
 
@@ -384,28 +380,13 @@ def main():
             llr_l, mtp_l, mfp_l, _ = model(X_b)
 
             # BCE on llr_logit: per-frame label is the (broadcast) track-
-            # level is_TP. Mask out pads. With --focal-gamma > 0, we apply
-            # focal loss weighting (1-p_t)^γ * BCE which emphasises rows
-            # where the head's prediction is far from the label — the
-            # "hard examples" that aggregate BCE de-emphasises. v10's
-            # weakness on consistent_match FPs was over-confidence on
-            # those rows; focal loss should target it directly.
+            # level is_TP. Mask out pads.
             bce_per = F.binary_cross_entropy_with_logits(
                 llr_l, isTP_b, pos_weight=pos_weight, reduction="none")
-            if args.focal_gamma > 0.0:
-                p = torch.sigmoid(llr_l)
-                p_t = isTP_b * p + (1.0 - isTP_b) * (1.0 - p)
-                bce_per = bce_per * (1.0 - p_t).clamp(min=0.0).pow(args.focal_gamma)
             llr_loss = (bce_per * pad.float()).sum() / pad.float().sum().clamp(min=1.0)
 
-            # Lifetime: gated MSE. The μ_TP target is "remaining matched-
-            # seconds from this row"; for tail rows past the last GT-aligned
-            # frame the target is 0, which conflicts with mid-track-occlusion
-            # rows where time_since_det looks similar but real μ_TP > 0. Mask
-            # out tail rows from the μ_TP loss (logrem_b == 0 for TP tracks
-            # iff we're at-or-past last_aligned_t) so the head only learns
-            # μ_TP from rows where it's a meaningful positive target.
-            tp_mask = pad & (isTP_b > 0.5) & (logrem_b > 0)
+            # Lifetime: gated MSE.
+            tp_mask = pad & (isTP_b > 0.5)
             fp_mask = pad & (isTP_b <= 0.5)
             life_loss = X_b.new_zeros(())
             if tp_mask.any():
@@ -480,7 +461,8 @@ def main():
         "state_dict": best_state,
         "in_dim": in_dim, "hidden": args.hidden,
         "model_kind": "decoupled_gru_v1",
-        "feature_layout": "build_input_matrix-23dim minus prior_state OH (=20dim)",
+        "feature_layout": ("v2-25dim+scene" if args.with_scene
+                           else "build_input_matrix-23dim minus prior_state OH (=19dim)"),
         "n_outputs": 3,
         "output_names": ["llr_logit", "mu_tp_log", "mu_fp_log"],
     }

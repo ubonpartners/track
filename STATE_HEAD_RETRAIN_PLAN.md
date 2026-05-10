@@ -4631,3 +4631,118 @@ Verified prod yaml as-is reproduces the win (3 runs):
 Anyone running the prod tracker now gets v10 + disable_demote behavior
 out of the box without CLI overrides. Iteration loop closed.
 
+---
+
+## 2026-05-10 — Phase 29 (scene-adaptive features): infrastructure landed, head doesn't ship
+
+User asked: can we let the head adapt to per-camera distributions
+(density, mean det conf, etc.)? Idea: maintain 5 EMAs (promote_rate,
+mean_det_conf_TRACKED, mean_det_conf_unmatched, track_density_smooth,
+mean_alive_track_age) per utrack instance + a derived 6th feature
+(det_conf - scene_mean_det_conf_TRACKED). Bootstrap to global priors
+until SCENE_STATS_MIN_SAMPLES=20 observations have accumulated.
+
+Built:
+
+  - C runtime: `utrack_internal.h` adds 6 fields + counters to
+    `struct utrack`; `utrack.c` implements `utrack_scene_stats_*`
+    helpers (reset, EMA update, read with bootstrap fallback,
+    snapshot/restore via dump/seed). Update call sites: per-frame
+    update at end of `utrack_run`, promote outcome on UNCONFIRMED
+    transitions, unmatched-det update at the new-track loop.
+    Public API in `utrack.h`: `utrack_dump_scene_stats` /
+    `utrack_seed_scene_stats` for warm-start validation.
+
+  - State-head integration: `utrack_state_build_features` extended
+    to write 6 scene cols at offsets 19..24 when in_dim==25 (new
+    `UTRACK_NN_STATE_GRU_IN_DIM_V2`). Loader accepts in_dim ∈
+    {19, 20, 25}. Other in_dims unaffected.
+
+  - Python side: `bench/build_state_corpus.py` adds 6 fields to
+    `EXAMPLE_DTYPE` and a `SceneStats` class that replays the same
+    EMAs offline (matches utrack.c update semantics). Trainer flag
+    `--with-scene` in `train_state_head_decoupled.py` and
+    `train_state_head_gru.py`. Exporter accepts in_dim=25.
+    `bench/infer_single_track.py --scene-override` for sensitivity
+    testing.
+
+Per-track sensitivity test (v11_scene head on a known FP track, both
+synthetic scene priors):
+  Easy scene (promote_rate=0.9, mean_det_TRK=0.85): p_TP=0.83 at frame 4
+  Hard scene (promote_rate=0.1, mean_det_TRK=0.45): p_TP=0.34 at frame 4
+i.e. 2.5× swing on the same track from scene context alone — head IS
+using the features in the right direction (FP tracks get more
+skepticism in low-quality scenes).
+
+Aggregate full-178 fitness, single-run each:
+| variant       | corpus | in_dim | fitness | fp_tracks |
+|---------------|--------|-------:|--------:|----------:|
+| v10 (shipped) | v15ld  | 19     | 0.4691  | 113       |
+| v11_noscene   | v17    | 19     | 0.4626  | 129       |
+| v11_scene     | v17    | 25     | 0.4647  | 127       |
+| v12_noscene   | v18    | 19     | 0.4612  | 131       |
+| v12_scene     | v18    | 25     | 0.4608  | 134       |
+| v13_noscene   | v18    | 19     | 0.4637  | 128       |
+| v13_scene     | v18    | 25     | 0.4630  | 130       |
+
+Scene features net effect: +0.002 on v17, -0.0004 on v18. All within
+the seed-noise floor. The head responds to scene context per-track but
+the effect doesn't survive aggregation. Phase 29 plumbing stays merged
+for future iterations; no shipping head uses it as of this commit.
+
+## 2026-05-10 — Two corpus diagnostics that (correctly) ruled out a regression
+
+When the v17/v18 corpus retrains landed below v10 by ~0.007 fitness
+the suspicion was either (a) the recent C-side file restore had lost
+something or (b) my Python corpus changes shifted the corpus. Both
+ruled out by direct evidence:
+
+1. **Corpus bit-diff**: sorted `state_corpus_v15ld_train.npz` and
+   `_v17_train.npz` by (sequence, track_id, frame_idx, prior_state)
+   and compared all 33 common scalar fields. Identical except for
+   one row in `gt_id_now` (one of 1.6M rows differed by 363, almost
+   certainly a stale GT id reference). Bottom line: my code changes
+   to `build_state_corpus.py` preserved the corpus content perfectly;
+   adding the 6 scene-stat columns is purely additive.
+
+2. **Trainer history**: the c8b8892 commit (μ_TP loss tail-row mask)
+   landed AFTER v10's training (v10.pt timestamped 2026-05-09 20:29,
+   commit at 20:55). Reverting the trainer to the pre-c8b8892 state
+   and retraining the same recipe (v16ld corpus, in_dim=19, seed=0)
+   gave fitness 0.4811 — i.e. v10's seed=`?` trained pre-fix; my
+   seed=0 retrain (v14) is a separate, slightly luckier point in
+   the seed distribution.
+
+Aggregate fitness vs trace library is a tradeoff:
+  v10 (lucky seed, pre-c8b8892):  fitness 0.4691 ± 0.0013, traces 11/14
+  v14 (seed=0,    pre-c8b8892):   fitness 0.4797 ± 0.0011, traces 5/14
+  v13_noscene (seed=0, post-c8b8892): fitness 0.4637, traces n/a (worse)
+
+The c8b8892 mask DOES improve the failure-mode trace asserts but
+costs ~0.011 aggregate fitness on this corpus.
+
+## 2026-05-10 — Shipped: state-head v14 (replaces v10)
+
+User decision: ship by aggregate fitness. v14 it is.
+
+`/mldata/config/track/trackers/uc_v11.yaml` (`/mldata/config` commit `79743dc`):
+  - `nn_state_path: /mldata/config/track/trackers/nn_state_v14_dc.bin`
+  - Backup: `uc_v11.yaml.bak.pre_v14_dc_switch_2026-05-10`
+
+`bench/data/state_head_dc_v14_oldtrainer.{pt,bin}`: the v14 ckpt and
+.bin v3 export, identical to nn_state_v14_dc.bin (same md5).
+
+3-run audited bench on prod yaml as-is:
+  fitness 0.4797 ± 0.0011, fp_tracks 72-74, MOTA 0.519
+  vs v10 baseline 0.4691 ± 0.0013 → +0.011 fitness, -36% fp_tracks.
+
+v14 fails 9/14 trace library asserts (vs v10's 3/14). Specifically
+the `pp22_consistent_matched_fp` and `mu_tp_collapse_occlusion`
+traces — the same failure modes the c8b8892 commit was added to
+fix. Acceptable tradeoff for the +0.011 aggregate fitness.
+
+Future work: a head that wins both metrics. K-seed search through the
+pre-c8b8892 trainer recipe is the obvious next step — one of the seeds
+might land in a basin that's both higher-fitness AND trace-pass. Phase
+29 scene-adaptive features remain in-tree but unused.
+

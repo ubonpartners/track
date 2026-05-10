@@ -41,8 +41,8 @@ def main():
     in_dim = int(ckpt["in_dim"])
     hidden = int(ckpt["hidden"])
     print(f"  in_dim={in_dim} hidden={hidden} model_kind={ckpt.get('model_kind')}")
-    if in_dim not in (19, 20):
-        print(f"  WARNING: decoupled GRU expects in_dim ∈ {{19,20}}, got {in_dim}; "
+    if in_dim not in (19, 20, 25):
+        print(f"  WARNING: decoupled GRU expects in_dim ∈ {{19,20,25}}, got {in_dim}; "
               f"runtime will reject")
 
     def f32(t):
