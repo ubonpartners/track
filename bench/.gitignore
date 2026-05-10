@@ -1,0 +1,13 @@
+# Stale-experiment dump. README is kept; bulk content stays untracked.
+_archive/*
+!_archive/README.md
+
+# Per-run training artefacts. Shipping artefacts live in /mldata, not in git.
+data/*.pt
+data/*.bin
+data/*.npz
+data/*.json
+!data/feature_norm.json
+
+# Bench output dirs
+output/
