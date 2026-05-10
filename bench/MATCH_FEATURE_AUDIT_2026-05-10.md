@@ -144,3 +144,65 @@ The pair-trace record has additional fields the model never sees:
   ship.
 
 Order: A2 first (single highest-EV experiment), then A1, then A3.
+
+## A2 outcome — `time_since_det` does NOT ship
+
+Trained `phase3_v11_time.pt` (v3 schema, obs_in=17 / pair_in=20) and
+exported to `bench/data/nn_match_v11_time.bin`. v11's
+log_time_since_det landed as the #4-most-important feature in
+permutation importance (Σ Δ_deploy +0.00259, ~25% of the residual
+signal). Offline pairs_val AUC (combined with deployment-λ):
+
+| Head            | λ_deploy | val AUC | Δ vs pre_thr |
+|-----------------|----------|---------|--------------|
+| pre_thr only    | —        | 0.96504 | —            |
+| v10 (shipped)   | 0.05     | 0.97045 | +0.00541     |
+| v10             | 0.10     | 0.97150 | +0.00646     |
+| v11_time        | 0.05     | 0.97038 | +0.00534     |
+| v11_time        | 0.10     | 0.97210 | +0.00706     |
+| v11_time        | 0.20     | 0.97342 | +0.00839     |
+
+**On paper v11 wins by +0.0019 AUC at the optimal λ.**
+
+But the C-runtime fitness story is the opposite (3-run mean on
+`diverse-29`):
+
+| Recipe                | fitness | mota    | fp_per_frame | fp_tracks |
+|-----------------------|---------|---------|--------------|-----------|
+| v10 + λ=0.05 (shipped)| 0.6393  | 0.6559  | 2.291        | 24.0      |
+| v11_time + λ=0.03     | 0.6378  | 0.6554  | 2.304        | 26.0      |
+| v11_time + λ=0.05     | 0.6369  | 0.6550  | 2.381        | 26.7      |
+| v11_time + λ=0.10     | 0.6360  | 0.6539  | 2.476        | 26.0      |
+| v11_time + λ=0.20     | 0.6337  | 0.6535  | 2.468        | 29.7      |
+
+v11 regresses fitness by 0.0015–0.0056 across the λ grid, with the
+gap widening as λ grows. mota is also slightly worse (-0.0005 to
+-0.0024); fp_per_frame is up; fp_tracks rises from 24 → 26-30.
+
+Reading: with the time-gap feature available, the head re-attaches
+drifting tracks more confidently. That increases TP-pair AUC offline
+but in deployment it manifests as lingering / resurrected tracks
+that score as FP — exactly the case the fp_tracks coefficient
+penalises. Adding capacity to the residual makes worse decisions
+worse.
+
+This is a textbook reproduction of the user's "offline ≠ online gap"
+finding (see memory `feedback_offline_online_gap.md`). The pairs_val
+AUC is not a reliable predictor of deployment fitness for the
+match-cost head; future retrains should run `eval_head_fitness`
+before any architecture or feature decision.
+
+**Decision**: v11 does NOT ship. v10 stays default. The C runtime's
+v2/v3 dim acceptance is kept (additive, tested, harmless for v10) so
+a future fitness-aware retrain can re-use the schema bump without
+re-plumbing.
+
+Open follow-ups for A2:
+- Train a v3 head with explicit FP-track penalty in the loss
+  (analogous to state-head v20's pos_weight<1) — the goal is to make
+  the head reluctant to use time_since_det for re-attachment of stale
+  tracks. Until that's tried, A2 is not fully closed.
+- A1 (drop dead features) and A3 (scene_density) are still untried.
+  A1 in particular is low-risk: if AUC holds, the head is leaner
+  and seed-variance should drop; fitness can only improve or stay
+  the same.
