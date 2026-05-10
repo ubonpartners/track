@@ -302,6 +302,11 @@ def pack_decoupled_batch(track_groups: List[np.ndarray],
     logrem_row   — per-row log1p(remaining_lifetime). For TP-flagged rows
                    this is log1p(rem_TP); for FP-flagged it's log1p(rem_FP).
     t_max        — max sequence length in the batch (random crop in train).
+
+    Returns (X_b, label_b, logrem_b, pad, row_index) where row_index[B, T]
+    is the row's index within the source track (random-crop-aware): 0 for
+    row at actual track-start, increasing thereafter. Padding rows have
+    row_index=-1 (filtered downstream by `pad`).
     """
     B = len(picks)
     starts: List[int] = []
@@ -316,22 +321,25 @@ def pack_decoupled_batch(track_groups: List[np.ndarray],
     T_b = max(lens) if lens else 1
 
     in_dim = X.shape[1]
-    X_b      = np.zeros((B, T_b, in_dim), dtype=np.float32)
-    pad      = np.zeros((B, T_b),         dtype=bool)
-    label_b  = np.zeros((B, T_b),         dtype=np.float32)
-    logrem_b = np.zeros((B, T_b),         dtype=np.float32)
+    X_b       = np.zeros((B, T_b, in_dim), dtype=np.float32)
+    pad       = np.zeros((B, T_b),         dtype=bool)
+    label_b   = np.zeros((B, T_b),         dtype=np.float32)
+    logrem_b  = np.zeros((B, T_b),         dtype=np.float32)
+    row_index = np.full((B, T_b), -1,      dtype=np.int32)
 
     for bi, (gi, s, L) in enumerate(zip(picks, starts, lens)):
         rows = track_groups[gi][s:s + L]
-        X_b[bi, :L]      = X[rows]
-        pad[bi, :L]      = True
-        label_b[bi, :L]  = label_row[rows]
-        logrem_b[bi, :L] = logrem_row[rows]
+        X_b[bi, :L]       = X[rows]
+        pad[bi, :L]       = True
+        label_b[bi, :L]   = label_row[rows]
+        logrem_b[bi, :L]  = logrem_row[rows]
+        row_index[bi, :L] = np.arange(s, s + L, dtype=np.int32)
 
     return (torch.from_numpy(X_b),
             torch.from_numpy(label_b),
             torch.from_numpy(logrem_b),
-            torch.from_numpy(pad))
+            torch.from_numpy(pad),
+            torch.from_numpy(row_index))
 
 
 # ---------- Trainer -------------------------------------------------------
@@ -355,6 +363,22 @@ def main():
                    help="Append the 6 Phase-29 scene-aggregate features "
                         "(in_dim 19 → 25). Shipping the head requires "
                         "matching plumbing in utrack_state.c.")
+    p.add_argument("--pos-weight", type=float, default=1.0,
+                   help="BCE pos_weight. <1 biases head toward conservatism "
+                        "(predicts low p_TP for ambiguous samples), reducing "
+                        "fp_track creation at runtime. Equivalent to telling "
+                        "the loss that false-positives are more costly than "
+                        "false-negatives.")
+    p.add_argument("--first-rows-weight", type=float, default=1.0,
+                   help="Multiplier on the BCE loss for the first N rows "
+                        "of each track (see --first-rows-n). Forces the "
+                        "head to make better predictions when the GRU "
+                        "has minimal accumulated context — addresses the "
+                        "row-0 systematic-underprediction issue diagnosed "
+                        "on the v18 corpus.")
+    p.add_argument("--first-rows-n",      type=int,   default=2,
+                   help="How many rows from each track's start get the "
+                        "--first-rows-weight multiplier on BCE.")
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -407,7 +431,7 @@ def main():
     # No class-balance rebalancing: the cost rule downstream uses p_TP as
     # an absolute probability. Rebalancing to 50/50 produces under-estimated
     # p_TP under the true π and the cost rule under-promotes everything.
-    pos_weight = torch.tensor([1.0], device=device)
+    pos_weight = torch.tensor([float(args.pos_weight)], device=device)
 
     best_score = -float("inf")
     best_state = None
@@ -422,20 +446,32 @@ def main():
         n_b = 0
         for i in range(0, len(perm), bs):
             picks = perm[i:i+bs].tolist()
-            X_b, label_b, logrem_b, pad = pack_decoupled_batch(
+            X_b, label_b, logrem_b, pad, row_index = pack_decoupled_batch(
                 groups_tr, picks, X_tr, label_tr, logrem_tr,
                 t_max=args.t_max, train=True, rng=rng)
-            X_b      = X_b.to(device, non_blocking=True)
-            label_b  = label_b.to(device, non_blocking=True)
-            logrem_b = logrem_b.to(device, non_blocking=True)
-            pad      = pad.to(device, non_blocking=True)
+            X_b       = X_b.to(device, non_blocking=True)
+            label_b   = label_b.to(device, non_blocking=True)
+            logrem_b  = logrem_b.to(device, non_blocking=True)
+            pad       = pad.to(device, non_blocking=True)
+            row_index = row_index.to(device, non_blocking=True)
 
             llr_l, mtp_l, mfp_l, _ = model(X_b)
 
             # BCE on llr_logit against the (broadcast) match-fraction label.
+            # Optionally up-weight the first N rows (track creation), where
+            # the GRU has minimal accumulated context and the diagnostic
+            # data shows systematic underprediction. row_index[bi, t] gives
+            # the row's actual index within the track (random-crop-aware,
+            # so a randomly-cropped sub-window doesn't get the bonus).
             bce_per = F.binary_cross_entropy_with_logits(
                 llr_l, label_b, pos_weight=pos_weight, reduction="none")
-            llr_loss = (bce_per * pad.float()).sum() / pad.float().sum().clamp(min=1.0)
+            row_w = pad.float()
+            if args.first_rows_weight != 1.0:
+                first_n_mask = (row_index >= 0) & (row_index < args.first_rows_n)
+                row_w = torch.where(first_n_mask,
+                                    row_w * args.first_rows_weight,
+                                    row_w)
+            llr_loss = (bce_per * row_w).sum() / row_w.sum().clamp(min=1.0)
 
             # Lifetime: gated MSE.
             tp_mask = pad & (label_b > 0.5)
@@ -467,7 +503,7 @@ def main():
             for i in range(0, len(order_va), eval_bs):
                 picks = order_va[i:i+eval_bs].tolist()
                 T_picks = max(len(groups_va[gi]) for gi in picks)
-                X_b, label_b, logrem_b, pad = pack_decoupled_batch(
+                X_b, label_b, logrem_b, pad, _ = pack_decoupled_batch(
                     groups_va, picks, X_va, label_va, logrem_va,
                     t_max=T_picks, train=False, rng=rng)
                 X_b = X_b.to(device, non_blocking=True)
