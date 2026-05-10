@@ -117,6 +117,21 @@ def main():
     pair_mean = np.array(ckpt["pair_mean"], dtype=np.float32)
     pair_std  = np.array(ckpt["pair_std"], dtype=np.float32)
 
+    from bench._artefact_meta import make_pt_meta, bin_trailer, write_meta_sidecar
+    pt_meta = ckpt.get("_meta")
+    bin_meta = make_pt_meta(
+        artefact_kind="match_cost_two_tower_bin",
+        args=args,
+        hparams={
+            "obs_in": obs_in, "det_in": det_in, "pair_in": pair_in,
+            "e_dim": e_dim, "tower_hidden": tower_hidden,
+            "head_h0": head_h0, "head_h1": head_h1,
+            "alpha": float(alpha), "lambda": float(lam), "no_skip": int(no_skip),
+            "magic": "UP3P", "version": VERSION,
+        },
+        dataset_info={"source_pt": args.inp, "source_pt_meta": pt_meta},
+    )
+
     with open(args.out, "wb") as out:
         out.write(struct.pack("<II", MAGIC, VERSION))
         out.write(struct.pack("<IIIIIII", obs_in, det_in, pair_in,
@@ -131,6 +146,8 @@ def main():
         out.write(det_mean.tobytes()); out.write(det_std.tobytes())
         out.write(struct.pack("<I", pair_in))
         out.write(pair_mean.tobytes()); out.write(pair_std.tobytes())
+        out.write(bin_trailer(bin_meta))
+    write_meta_sidecar(bin_meta, args.out)
 
     print(f"wrote {args.out}")
     print(f"  obs_in={obs_in} det_in={det_in} pair_in={pair_in} "

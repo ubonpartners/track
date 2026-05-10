@@ -1,48 +1,62 @@
-"""
-Phase 3 / Proposal B (UTRACK_NN.md): two-tower model with per-track
-accumulator. **Offline, frozen-accumulator** training — no BPTT, no C-side
-state. Goal is to *gate* whether the architecture is worth implementing in
-the C runtime.
+"""Match-cost NN trainer — TwoTower (f_obs + g_det + pair head h) with a
+per-track EMA accumulator. This is the canonical, deployed match-cost
+recipe: ``nn_match_v9_face.bin`` was produced by this trainer, the
+runtime loader (``ubon_cstuff/src/track/utrack/nn.c``) only accepts the
+``UP3P``/v1 format that ``bench.export_phase3`` writes.
 
-Setup (all in PyTorch, val-AUC compared against the Phase 2 residual MLP):
+End-to-end pipeline:
 
-  obs_features (per matched (track, det)):
-    [reid_cos_raw, reid_z, kf_d2, of_score, kf_score, sim_term,
-     ocm_cos, track_speed, log(observations+1), log(num_missed+1),
-     pose_kp_visible, det_conf, prev_det_conf]   → 13 dims
+    1. (C runtime) generate per-pair NPZs under
+       ``runs/track_analysis/<run>/pair_log/`` via the pair_logger
+       analysis module on a held-out tracking dataset.
+    2. ``python -m bench.build_pair_dataset`` aggregates those into
+       ``bench/data/pairs_{train,val}.npz`` + ``feature_norm.json``.
+    3. ``python -m bench.train_phase3 --save bench/data/match_phase3.pt``
+       (this file).
+    4. ``python -m bench.export_phase3 --in match_phase3.pt --out match.bin``
+       writes the binary the C runtime loads via ``utrack.nn_path``.
 
-  det_features (per detection):
-    [det_conf, det_w, det_h, det_aspect, pose_kp_visible]
-    → 5 dims
+Architecture:
 
-  pair_features (per (track, det) pair, fed into head alongside the
-  embeddings):
-    [iou, kf_d2, ocm_cos, conf_delta, size_ratio, h_ratio, a_ratio,
-     reid_z·valid, pre_thr_score, of_score, kf_score, sim_term,
-     pass_0, pass_1, pass_2]   → 15 dims
+    obs (per matched (track, det), 13 + 3 face cols when present):
+        [reid_cos_raw, reid_z, kf_d2, of_score, kf_score, sim_term,
+         ocm_cos, track_speed, log(obs+1), log(num_missed+1),
+         pose_kp_visible, det_conf, prev_det_conf]
+         (+ det_subbox_conf, track_subbox_conf, det_fiqa_score)
 
-  Architecture:
-    f_obs : 13 → 24 → 16        (per matched obs; emits update vector)
-    g_det : 5 → 16 → 16         (per detection; emits e_det)
-    h     : 16+16+15 = 47 → 32 → 16 → 1   (per pair; emits logit residual)
+    det (per detection, 5 cols):
+        [det_conf, det_w, det_h, det_aspect, pose_kp_visible]
 
-  Per-track accumulator: e_track[16], EMA over f_obs(matched obs).
-    e_track_t = (1-α) e_track_{t-1} + α · f_obs(obs_t)        for matched obs
-    e_track_0 = f_obs(first matched obs)                      (no prior)
+    pair (per (track, det), 15 cols):
+        [iou, kf_d2, ocm_cos, conf_delta, size_ratio, h_ratio, a_ratio,
+         reid_z·valid, pre_thr_score, of_score, kf_score, sim_term,
+         pass_0, pass_1, pass_2]
 
-  At training time, e_track is computed one epoch *behind* (computed at
-  start of each epoch using the f_obs from the end of the prior epoch,
-  detached) — this is the "frozen-accumulator pretrain" stage. No BPTT.
+    f_obs : obs_in → tower_hidden → e_dim
+    g_det : det_in → tower_hidden → e_dim
+    h     : (2·e_dim + pair_in) → 32 → 16 → 1   (residual logit)
 
-Output is logit *residual* added to pre_thr_score with a learned λ:
-    score = pre_thr_score + λ · h(...)
+Per-track accumulator e_track[e_dim], EMA over f_obs(matched obs):
 
-This matches the Phase 2 framing so the two are comparable on val AUC.
+    e_track_t  = (1-α) · e_track_{t-1} + α · f_obs(obs_t)
+    e_track_0  = f_obs(first matched obs)
+
+Frozen-accumulator pretrain — at the start of each epoch, e_track is
+re-computed using the *previous* epoch's f_obs (detached). No BPTT.
+
+The output is added as a residual to the runtime's pre_thr_score with a
+learned scalar λ; the deployed runtime then applies a small fixed
+λ-multiplier (``utrack.nn_lambda``).
+
+Save format: ``ckpt = torch.save({state_dict, obs/det/pair mean+std,
+in/out dims, hyperparams, _meta})`` — ``_meta`` carries argv/git/host so
+the .pt is auditable.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import random
 from typing import List, Tuple
 
 import numpy as np
@@ -504,42 +518,76 @@ def train(args):
         nm = str(n_va.get(int(sid), "?"))[:38]
         print(f"    {nm:40s}  n={n_s:6d}  base={a_b:.5f}  +nn={a_n:.5f}  Δ={a_n-a_b:+.5f}")
 
-    if args.save:
-        torch.save({
-            "state_dict": model.state_dict(),
-            "obs_mean": obs_mean.tolist(), "obs_std": obs_std.tolist(),
-            "det_mean": det_mean.tolist(), "det_std": det_std.tolist(),
-            "pair_mean": pair_mean.tolist(), "pair_std": pair_std.tolist(),
-            "obs_in": obs_tr_n.shape[1], "det_in": det_tr_n.shape[1],
-            "pair_in": pair_tr_n.shape[1], "e_dim": args.e_dim,
-            "tower_hidden": args.tower_hidden,
-            "alpha": args.alpha, "lambda": lam,
-            "obs_feature_names": OBS_FEATURE_NAMES,
-            "det_feature_names": DET_FEATURE_NAMES,
-            "pair_feature_names": PAIR_FEATURE_NAMES,
-        }, args.save)
-        print(f"\nsaved → {args.save}")
+    from bench._artefact_meta import make_pt_meta
+    hparams = {
+        "obs_in": obs_tr_n.shape[1], "det_in": det_tr_n.shape[1],
+        "pair_in": pair_tr_n.shape[1], "e_dim": args.e_dim,
+        "tower_hidden": args.tower_hidden,
+        "alpha": args.alpha, "lambda": float(lam),
+        "epochs": args.epochs, "batch_size": args.batch_size,
+        "lr": args.lr, "wd": args.wd, "seed": args.seed,
+        "best_val_auc": float(best_va), "baseline_val_auc": float(base_va),
+    }
+    dataset_info = {
+        "data_dir": args.data_dir,
+        "n_train_pairs": int(r_tr.shape[0]),
+        "n_val_pairs": int(r_va.shape[0]),
+    }
+    torch.save({
+        "state_dict": model.state_dict(),
+        "obs_mean": obs_mean.tolist(), "obs_std": obs_std.tolist(),
+        "det_mean": det_mean.tolist(), "det_std": det_std.tolist(),
+        "pair_mean": pair_mean.tolist(), "pair_std": pair_std.tolist(),
+        "obs_in": obs_tr_n.shape[1], "det_in": det_tr_n.shape[1],
+        "pair_in": pair_tr_n.shape[1], "e_dim": args.e_dim,
+        "tower_hidden": args.tower_hidden,
+        "alpha": args.alpha, "lambda": lam,
+        "obs_feature_names": OBS_FEATURE_NAMES,
+        "det_feature_names": DET_FEATURE_NAMES,
+        "pair_feature_names": PAIR_FEATURE_NAMES,
+        "_meta": make_pt_meta(
+            artefact_kind="match_cost_two_tower",
+            args=args, hparams=hparams, dataset_info=dataset_info,
+        ),
+    }, args.save)
+    print(f"\nsaved → {args.save}")
 
 
 def main():
-    p = argparse.ArgumentParser()
+    p = argparse.ArgumentParser(
+        prog="bench.train_phase3",
+        description="Match-cost NN trainer (TwoTower + EMA accumulator).",
+    )
+    # Defaults below are the recipe that produced nn_match_v9_face.bin
+    # (the currently shipped match-cost NN). Don't change them lightly —
+    # see comparison_results.md for the bench history.
     p.add_argument("--epochs", type=int, default=25)
     p.add_argument("--batch_size", type=int, default=4096)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--wd", type=float, default=1e-4)
-    p.add_argument("--lam", type=float, default=1.0)
+    p.add_argument("--lam", type=float, default=1.0,
+                   help="initial λ multiplier on the residual logit")
     p.add_argument("--mot17_boost", type=float, default=1.5)
     p.add_argument("--mot20_weight", type=float, default=1.0)
-    p.add_argument("--alpha", type=float, default=0.2)
+    p.add_argument("--alpha", type=float, default=0.2,
+                   help="EMA coefficient for the per-track e_track accumulator")
     p.add_argument("--e_dim", type=int, default=16)
     p.add_argument("--tower_hidden", type=int, default=24)
     p.add_argument("--no_skip", action="store_true",
                    help="Disable the train-time skip path; head sees only "
                         "historical e_track (closer to NNUE/spec).")
-    p.add_argument("--save", default=None)
+    p.add_argument("--seed", type=int, default=0,
+                   help="seed numpy + torch RNGs for reproducibility")
+    p.add_argument("--save", required=True,
+                   help="output .pt path; metadata is embedded under ckpt['_meta']")
     p.add_argument("--data_dir", default="bench/data",
                    help="dir containing pairs_train.npz, pairs_val.npz, feature_norm.json")
     args = p.parse_args()
+
+    random.seed(args.seed); np.random.seed(args.seed); torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+
     train(args)
 
 

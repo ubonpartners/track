@@ -460,6 +460,11 @@ def main():
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
     print(f"\nbest score = {best_score:.4f}", flush=True)
+    from bench._artefact_meta import make_pt_meta
+    hparams = {
+        "in_dim": in_dim, "hidden": args.hidden, "n_outputs": 3,
+        "best_score": float(best_score),
+    }
     save = {
         "state_dict": best_state,
         "in_dim": in_dim, "hidden": args.hidden,
@@ -467,6 +472,11 @@ def main():
         "feature_layout": "decoupled-19dim (matched, log_obs..pose, hist[5], log_t_creation)",
         "n_outputs": 3,
         "output_names": ["llr_logit", "mu_tp_log", "mu_fp_log"],
+        "_meta": make_pt_meta(
+            artefact_kind="state_head_decoupled",
+            args=args, hparams=hparams,
+            dataset_info={"corpus": getattr(args, "corpus", None)},
+        ),
     }
     torch.save(save, args.save)
     print(f"saved {args.save}", flush=True)

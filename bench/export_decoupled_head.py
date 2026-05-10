@@ -41,9 +41,11 @@ def main():
     in_dim = int(ckpt["in_dim"])
     hidden = int(ckpt["hidden"])
     print(f"  in_dim={in_dim} hidden={hidden} model_kind={ckpt.get('model_kind')}")
-    if in_dim not in (19, 20, 25):
-        print(f"  WARNING: decoupled GRU expects in_dim ∈ {{19,20,25}}, got {in_dim}; "
-              f"runtime will reject")
+    # Runtime accepts in_dim==19 only (UTRACK_NN_STATE_GRU_IN_DIM in nn_state.h).
+    if in_dim != 19:
+        raise SystemExit(
+            f"in_dim={in_dim} but C runtime requires 19; refusing to export."
+        )
 
     def f32(t):
         return t.detach().cpu().numpy().astype(np.float32, copy=False).reshape(-1)
@@ -67,6 +69,19 @@ def main():
         assert b.size == 1,      f"{k}.bias size {b.size}"
         head_bytes.append((W, b))
 
+    from bench._artefact_meta import make_pt_meta, bin_trailer, write_meta_sidecar
+    pt_meta = ckpt.get("_meta")
+    bin_meta = make_pt_meta(
+        artefact_kind="state_head_decoupled_bin",
+        args=args,
+        hparams={
+            "in_dim": in_dim, "hidden": hidden, "n_outputs": 3,
+            "magic": "USHT", "version": VERSION,
+            "head_order": head_keys,
+        },
+        dataset_info={"source_pt": args.src, "source_pt_meta": pt_meta},
+    )
+
     with open(args.dst, "wb") as f:
         f.write(struct.pack("<II",  MAGIC, VERSION))
         f.write(struct.pack("<III", in_dim, hidden, 3))
@@ -77,6 +92,8 @@ def main():
         for k, (W, b) in zip(head_keys, head_bytes):
             f.write(W.tobytes())
             f.write(b.tobytes())
+        f.write(bin_trailer(bin_meta))
+    write_meta_sidecar(bin_meta, args.dst)
 
     print(f"wrote {args.dst}")
     print(f"  GRU(in={in_dim}, hidden={hidden}) + 3 heads (llr, mu_tp, mu_fp)")
