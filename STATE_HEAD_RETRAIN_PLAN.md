@@ -4609,3 +4609,25 @@ Closing the v8/v10 → v41 gap likely needs:
 **Files**: see `bench/trace_library/`, `bench/eval_decoupled_offline.py`,
 `utrack.c` (`param_bayes_disable_demote`), `utrack_internal.h`.
 
+---
+
+## 2026-05-10 — Shipped: defaults flipped to v10 + bayes_disable_demote
+
+`/mldata/config/track/trackers/uc_v11.yaml` (commit `01204fa`):
+  - `state_head_bayesian: true` (was implicit false → legacy mode)
+  - `bayes_disable_demote: true` (new field)
+  - `nn_state_path: nn_state_v10_dc.bin` (was `nn_state_v41.bin`)
+  - Backup: `uc_v11.yaml.bak.pre_v10_dc_switch_2026-05-10`
+
+`ubon_cstuff/src/track/utrack/utrack.c` (commit `86103a3`):
+  - `param_bayes_disable_demote` default: false → true
+  - Only meaningful when `state_head_bayesian` is also true; legacy
+    callers (4-output MLP heads in legacy mode) unaffected.
+
+Verified prod yaml as-is reproduces the win (3 runs):
+  fitness 0.4685 ± 0.0013, fp_tracks 113, MOTA 0.527
+  vs v41 baseline 0.4597 ± 0.0002 → +0.0088, ~5σ.
+
+Anyone running the prod tracker now gets v10 + disable_demote behavior
+out of the box without CLI overrides. Iteration loop closed.
+
