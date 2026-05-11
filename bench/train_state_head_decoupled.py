@@ -126,23 +126,38 @@ def build_input_matrix_no_state(rec: np.ndarray, *,
         np.log1p(_f("time_since_creation")),
     ]
     if with_scene:
-        def _scene(name, default):
-            if name in rec.dtype.names:
-                return rec[name].astype(np.float32).reshape(-1, 1)
-            return np.full((n, 1), default, dtype=np.float32)
+        # The corpus must carry per-row scene aggregates that match the C
+        # runtime's EMA semantics. Silently falling back to constants here
+        # produces a head trained on constant cols 19..24 and deployed on
+        # dynamic EMAs — a catastrophic OOD shift (measured 2026-05-11:
+        # V2 retrain fitness 0.347 vs V1 shipped 0.639, same corpus). The
+        # SceneStats replay class was deleted in commit e288eea
+        # (2026-05-10) without disabling this training path; rebuild the
+        # corpus with scene fields populated before re-enabling.
+        missing = [name for name in (
+            "scene_promote_rate",
+            "scene_mean_det_conf_TRACKED",
+            "scene_mean_det_conf_unmatched",
+            "scene_track_density_smooth",
+            "scene_mean_alive_track_age",
+            "det_conf_minus_scene_TP_avg",
+        ) if name not in rec.dtype.names]
+        if missing:
+            raise ValueError(
+                "--with-scene requires scene-aggregate columns in the "
+                "corpus dtype but these are missing: "
+                f"{missing}. Rebuild the corpus with bench/build_state_corpus.py "
+                "after restoring the SceneStats replay (see commit e288eea "
+                "for what was removed). Constant fallback was producing "
+                "OOD-trained V2 heads; refusing to silently train on them."
+            )
         cols += [
-            _scene("scene_promote_rate",
-                   SCENE_COL_DEFAULTS["scene_promote_rate"]),
-            _scene("scene_mean_det_conf_TRACKED",
-                   SCENE_COL_DEFAULTS["scene_mean_det_conf_TRACKED"]),
-            _scene("scene_mean_det_conf_unmatched",
-                   SCENE_COL_DEFAULTS["scene_mean_det_conf_unmatched"]),
-            np.log1p(_scene("scene_track_density_smooth",
-                            SCENE_COL_DEFAULTS["scene_track_density_smooth"])),
-            np.log1p(_scene("scene_mean_alive_track_age",
-                            SCENE_COL_DEFAULTS["scene_mean_alive_track_age"])),
-            _scene("det_conf_minus_scene_TP_avg",
-                   SCENE_COL_DEFAULTS["det_conf_minus_scene_TP_avg"]),
+            rec["scene_promote_rate"].astype(np.float32).reshape(-1, 1),
+            rec["scene_mean_det_conf_TRACKED"].astype(np.float32).reshape(-1, 1),
+            rec["scene_mean_det_conf_unmatched"].astype(np.float32).reshape(-1, 1),
+            np.log1p(rec["scene_track_density_smooth"].astype(np.float32).reshape(-1, 1)),
+            np.log1p(rec["scene_mean_alive_track_age"].astype(np.float32).reshape(-1, 1)),
+            rec["det_conf_minus_scene_TP_avg"].astype(np.float32).reshape(-1, 1),
         ]
     if with_face:
         if not with_scene:
