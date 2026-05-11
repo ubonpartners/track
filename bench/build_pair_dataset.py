@@ -85,6 +85,10 @@ def main() -> None:
     )
     ap.add_argument("--allow-missing-scenes", action="store_true",
                     help="Don't error if some split scenes lack pair-log NPZs")
+    ap.add_argument("--comment", required=True,
+                    help="Free-form note recorded in the output .npz's "
+                         "_meta. Required so future readers can recover "
+                         "what this dataset is.")
     args = ap.parse_args()
 
     scenes = _scenes_for_split(args.analysis_yaml, args.split)
@@ -157,8 +161,26 @@ def main() -> None:
     out_dir = os.path.dirname(os.path.abspath(args.out))
     os.makedirs(out_dir, exist_ok=True)
     tmp = args.out + ".building.npz"
-    np.savez(
-        tmp,
+    from bench._artefact_meta import make_pt_meta, save_npz_with_meta
+    meta = make_pt_meta(
+        artefact_kind="pair_dataset",
+        args=args,
+        hparams={
+            "split": args.split,
+            "n_pairs": int(records.shape[0]),
+            "n_pos": int(labels.sum()),
+            "n_scenes": int(found),
+            "schema_version": int(PAIR_LOG_VERSION),
+            "feature_names": list(PAIR_LOG_FEATURE_NAMES),
+        },
+        dataset_info={
+            "pair_log_dir": args.pair_log_dir,
+            "analysis_yaml": args.analysis_yaml,
+        },
+        comment=args.comment,
+    )
+    save_npz_with_meta(
+        tmp, meta,
         records=records,
         features=features,
         labels=labels,

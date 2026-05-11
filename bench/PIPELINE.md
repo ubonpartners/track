@@ -64,12 +64,25 @@ grep-friendliness.
 
 1. Build the state corpus by running the C runtime in label-driven mode
    over a labelled tracking corpus and capturing the per-row state
-   features:
+   features. The shipped `state_corpus_v18` was built from the
+   *permissive* pair-log dir (`new_track_thr=0.05`,
+   `immediate_confirm_thr=2.0`), which creates 3-4x more candidate
+   tracks than the standard recipe — both are valid corpora but they
+   train into substantially different fitness; mixing them is the most
+   common reproducibility pitfall. **Always pass `--comment` and pin
+   `--pair-log-dir` explicitly.**
 
        python -m bench.build_state_corpus \
-           --out bench/data/state_corpus_v18
+           --pair-log-dir runs/track_analysis/pair_log_v15_permissive \
+           --gt-config bench/pair_log_config_v15_permissive.yaml \
+           --label-driven \
+           --phase3-model bench/data/phase3_v10_face.pt \
+           --out bench/data/state_corpus_v18 \
+           --comment "v18 — pair_log_v15_permissive, label-driven, phase3_v10_face"
 
-   That writes `state_corpus_v18_{train,val,test}.npz`.
+   The resulting `state_corpus_v18_{train,val,test}.npz` carry full
+   provenance in their `_meta` entry; inspect with
+   `python -m bench._artefact_meta --read bench/data/state_corpus_v18_train.npz`.
 
 2. Train the decoupled GRU head:
 
