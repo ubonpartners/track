@@ -394,8 +394,13 @@ def train(args):
         assert "scene_density" in r_tr.dtype.names, \
             "corpus lacks scene_density column"
     drop_set = {f.strip() for f in (args.drop_features or "").split(",") if f.strip()}
+    with_subdiou = bool(getattr(args, "with_subdiou_warped", False))
+    if with_subdiou:
+        assert "subbox_diou_warped" in r_tr.dtype.names, \
+            "corpus lacks subbox_diou_warped column; regenerate with v3 schema"
     print(f"building features... with_face={has_face} with_time={with_time} "
-          f"with_density={with_density} drop={sorted(drop_set) or '∅'}")
+          f"with_density={with_density} with_subdiou={with_subdiou} "
+          f"drop={sorted(drop_set) or '∅'}")
 
     obs_tr = build_obs_matrix(r_tr, with_face=has_face, with_time=with_time)
     obs_va = build_obs_matrix(r_va, with_face=has_face, with_time=with_time)
@@ -418,6 +423,19 @@ def train(args):
         pair_tr = np.concatenate([pair_tr, sd_tr[:, None]], axis=1)
         pair_va = np.concatenate([pair_va, sd_va[:, None]], axis=1)
         pair_names_full = list(pair_names_full) + ["log_scene_density"]
+
+    # v14_subdiou: replace the slot-15 plain `subbox_iou` value with the
+    # OF-warped subbox DIoU. The corpus must carry the v3 field (regen
+    # under the new C runtime). The pair-vector schema dim is unchanged
+    # (slot 15 stays); only the *value* swaps. Deployment needs the C-
+    # runtime yaml flag `subdiou_warped: true` to feed the warped DIoU
+    # at runtime.
+    if with_subdiou:
+        sub_idx = pair_names_full.index("subbox_iou")
+        pair_tr[:, sub_idx] = r_tr["subbox_diou_warped"].astype(np.float32)
+        pair_va[:, sub_idx] = r_va["subbox_diou_warped"].astype(np.float32)
+        pair_names_full = list(pair_names_full)
+        pair_names_full[sub_idx] = "subbox_diou_warped"
 
     # A1: drop named features by removing their columns from each view.
     # Names that don't appear in any view are an error (catches typos).
@@ -669,6 +687,11 @@ def main():
     p.add_argument("--with-density", action="store_true",
                    help="Append log1p(scene_density) to the pair vector "
                         "(+1 column). Stacks with --with-time.")
+    p.add_argument("--with-subdiou-warped", action="store_true",
+                   help="Replace the slot-15 plain `subbox_iou` value with "
+                        "the OF-warped `subbox_diou_warped` value (same dim, "
+                        "different semantics). Requires v3 corpus. Trained "
+                        "head needs runtime flag `subdiou_warped: true`.")
     p.add_argument("--drop-features", default="",
                    help="Comma-separated feature names to drop from any view "
                         "they appear in. Errors on unknown names. Use the "
