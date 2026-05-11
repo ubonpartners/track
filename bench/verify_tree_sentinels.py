@@ -56,13 +56,26 @@ PY_SENTINELS = [
     (
         "bench/build_state_corpus.py",
         ['"det_subbox_conf"', '"track_subbox_conf"', '"det_fiqa_score"',
-         "--comment", "save_npz_with_meta"],
-        "V3 corpus face-conf fields + mandatory --comment + provenance API",
+         "--comment", "save_npz_with_meta",
+         # Phase 29 scene-aggregate replay — silent removal of this in
+         # commit e288eea (2026-05-10) caused the 0.29-fitness V2/V3
+         # catastrophe diagnosed 2026-05-11. Never again without
+         # disabling --with-scene at the same commit.
+         "class SceneStats", "apply_scene_stats_to_examples",
+         '"scene_promote_rate"', '"scene_mean_det_conf_TRACKED"'],
+        "V3 corpus face-conf fields + Phase 29 SceneStats replay + "
+        "mandatory --comment + provenance API",
     ),
     (
         "bench/train_state_head_decoupled.py",
-        ["INPUT_DIM_FACE = 28", "--with-face", "require_npz_meta"],
-        "V3 trainer face flag + corpus-meta enforcement at load",
+        ["INPUT_DIM_FACE = 28", "--with-face", "require_npz_meta",
+         # The fail-loud guard added in commit 877a2da. If this line
+         # disappears, --with-scene will silently train on constants
+         # again. The corpus-side SceneStats sentinel above is the
+         # mirror; together they prevent both halves of the bug.
+         "--with-scene requires scene-aggregate columns"],
+        "V3 trainer face flag + corpus-meta enforcement + "
+        "--with-scene fail-loud guard",
     ),
     (
         "bench/train_phase3.py",

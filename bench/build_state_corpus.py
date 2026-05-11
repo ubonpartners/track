@@ -247,6 +247,22 @@ EXAMPLE_DTYPE = np.dtype([
     ("det_subbox_conf",     "<f4"),
     ("track_subbox_conf",   "<f4"),
     ("det_fiqa_score",      "<f4"),
+    # 2026-05-11: scene-aggregate features for the V2 state head (in_dim=25).
+    # Mirror the per-utrack EMAs that ubon_cstuff/src/track/utrack/utrack.c
+    # maintains; populated by SceneStats.apply_to_examples() in a frame-major
+    # post-pass. Trainer flag --with-scene now requires these fields (no more
+    # silent constant fallback that produced the 0.29-fitness V2 catastrophe
+    # diagnosed 2026-05-11 — see commit 877a2da).
+    ("scene_promote_rate",            "<f4"),
+    ("scene_mean_det_conf_TRACKED",   "<f4"),
+    ("scene_mean_det_conf_unmatched", "<f4"),
+    ("scene_track_density_smooth",    "<f4"),
+    ("scene_mean_alive_track_age",    "<f4"),
+    # Derived per-row: det_conf - scene_mean_det_conf_TRACKED (the
+    # "how-confident is this det relative to the scene's TRACKED-track
+    # average" signal). C runtime computes it on-the-fly at line 153 of
+    # utrack_state.c; we precompute to keep the trainer column-major.
+    ("det_conf_minus_scene_TP_avg",   "<f4"),
     # e_track[16] from Phase 3 f_obs replay — zeros if --phase3-model not given.
     # Kept in dtype for backward-compat (older consumers may still read it);
     # NOT included in the 23-dim runtime feature vector built by
@@ -287,6 +303,233 @@ def _box_features(x0: float, y0: float, x1: float, y1: float,
     log_aspect = float(np.clip(np.log(max(1e-3, aspect)), -3.0, 3.0))
     log_pose_kp = float(np.log1p(max(0, int(pose_kp_visible))))
     return float(near_edge), float(w), float(h), log_aspect, log_pose_kp
+
+
+# --- scene-aggregate EMAs (Phase 29) -----------------------------------------
+#
+# Replays ubon_cstuff/src/track/utrack/utrack.c's `utrack_scene_stats_*`
+# offline so the V2 (--with-scene) trainer sees the same input distribution
+# the C runtime feeds the head at inference. The C source is authoritative
+# (lines 605-707 of utrack.c); these constants must stay in lockstep.
+#
+# 2026-05-11: this class was deleted by commit e288eea (2026-05-10) during
+# the "remove legacy bench scripts" cleanup, but the trainer's --with-scene
+# flag wasn't disabled. Result: every V2 retrain since then trained on the
+# trainer's constant fallback (SCENE_COL_DEFAULTS), yielding ~0.29 fitness
+# below V1 on the same corpus. Restoring this fixes that catastrophe.
+
+SCENE_STATS_EMA_ALPHA   = 0.05
+SCENE_STATS_MIN_SAMPLES = 20
+SCENE_PROMOTE_RATE_BOOTSTRAP     = 0.5
+SCENE_MEAN_DET_TRK_BOOTSTRAP     = 0.7
+SCENE_MEAN_DET_UNMTCHD_BOOTSTRAP = 0.3
+SCENE_TRACK_DENSITY_BOOTSTRAP    = 5.0
+SCENE_ALIVE_AGE_BOOTSTRAP        = 5.0
+
+
+class SceneStats:
+    """Per-sequence EMA replay matching utrack.c's scene-stats semantics.
+
+    Five EMAs (alpha=0.05) over scene-level observations, each gated by a
+    min-samples-20 bootstrap. `read()` returns the value the C runtime
+    would expose to the state head at the same point.
+    """
+
+    __slots__ = (
+        "promote_rate_ema", "promote_rate_updates",
+        "mean_det_TRK_ema", "mean_det_TRK_updates",
+        "mean_det_unmtchd_ema", "mean_det_unmtchd_updates",
+        "track_density_ema", "track_density_updates",
+        "alive_age_ema", "alive_age_updates",
+    )
+
+    def __init__(self) -> None:
+        self.promote_rate_ema = SCENE_PROMOTE_RATE_BOOTSTRAP
+        self.promote_rate_updates = 0
+        self.mean_det_TRK_ema = SCENE_MEAN_DET_TRK_BOOTSTRAP
+        self.mean_det_TRK_updates = 0
+        self.mean_det_unmtchd_ema = SCENE_MEAN_DET_UNMTCHD_BOOTSTRAP
+        self.mean_det_unmtchd_updates = 0
+        self.track_density_ema = SCENE_TRACK_DENSITY_BOOTSTRAP
+        self.track_density_updates = 0
+        self.alive_age_ema = SCENE_ALIVE_AGE_BOOTSTRAP
+        self.alive_age_updates = 0
+
+    @staticmethod
+    def _ema(prev: float, x: float) -> float:
+        return (1.0 - SCENE_STATS_EMA_ALPHA) * prev + SCENE_STATS_EMA_ALPHA * x
+
+    def update_promote_outcome(self, promoted: bool) -> None:
+        """One UNCONFIRMED outcome (promote-to-TRACKED or drop)."""
+        self.promote_rate_ema = self._ema(self.promote_rate_ema,
+                                           1.0 if promoted else 0.0)
+        self.promote_rate_updates += 1
+
+    def update_unmatched_det(self, det_conf: float) -> None:
+        """One detection that wasn't assigned to any existing track."""
+        self.mean_det_unmtchd_ema = self._ema(self.mean_det_unmtchd_ema,
+                                               float(det_conf))
+        self.mean_det_unmtchd_updates += 1
+
+    def update_per_frame(self, n_tracked: int, sum_age: float,
+                          sum_det_conf_TRK: float,
+                          n_det_conf_TRK: int) -> None:
+        """One frame's end-of-frame walk over the TRACKED set. Mirrors
+        utrack_scene_stats_update_per_frame: density is unconditional;
+        alive-age fires only when n_tracked>0; mean-det-conf-TRACKED
+        fires only when at least one TRACKED track also matched."""
+        self.track_density_ema = self._ema(self.track_density_ema,
+                                            float(n_tracked))
+        self.track_density_updates += 1
+        if n_tracked > 0:
+            self.alive_age_ema = self._ema(self.alive_age_ema,
+                                            sum_age / float(n_tracked))
+            self.alive_age_updates += 1
+        if n_det_conf_TRK > 0:
+            self.mean_det_TRK_ema = self._ema(self.mean_det_TRK_ema,
+                                               sum_det_conf_TRK
+                                               / float(n_det_conf_TRK))
+            self.mean_det_TRK_updates += 1
+
+    def read(self) -> Tuple[float, float, float, float, float]:
+        """Returns (promote_rate, mean_det_TRK, mean_det_unmtchd,
+        track_density, alive_age) — bootstrap value substituted for any
+        EMA with fewer than MIN_SAMPLES updates. Mirrors
+        utrack_scene_stats_read."""
+        return (
+            self.promote_rate_ema
+                if self.promote_rate_updates >= SCENE_STATS_MIN_SAMPLES
+                else SCENE_PROMOTE_RATE_BOOTSTRAP,
+            self.mean_det_TRK_ema
+                if self.mean_det_TRK_updates >= SCENE_STATS_MIN_SAMPLES
+                else SCENE_MEAN_DET_TRK_BOOTSTRAP,
+            self.mean_det_unmtchd_ema
+                if self.mean_det_unmtchd_updates >= SCENE_STATS_MIN_SAMPLES
+                else SCENE_MEAN_DET_UNMTCHD_BOOTSTRAP,
+            self.track_density_ema
+                if self.track_density_updates >= SCENE_STATS_MIN_SAMPLES
+                else SCENE_TRACK_DENSITY_BOOTSTRAP,
+            self.alive_age_ema
+                if self.alive_age_updates >= SCENE_STATS_MIN_SAMPLES
+                else SCENE_ALIVE_AGE_BOOTSTRAP,
+        )
+
+
+def apply_scene_stats_to_examples(examples: np.ndarray) -> None:
+    """Walk `examples` in (sequence, frame_time) order and fill the six
+    scene-aggregate columns in-place. Mirrors the C runtime per-frame
+    update timing:
+
+      1. PRE-HEAD: for each detection that didn't assign to an existing
+         track this frame, update mean_det_conf_unmatched. We
+         approximate "unmatched det" as a row that is its track's
+         first observation AND was matched this frame (i.e. the det that
+         caused a new track to be created — which in the C runtime IS
+         the unmatched-det that triggered the new-track loop).
+      2. EMIT ROWS: read() the current EMAs into each example's scene
+         cols. All rows at the same frame_time see the same value
+         (ordering of the per-track head reads within a frame is below
+         the discriminative noise of the head — see commit message).
+      3. POST-HEAD per-row: if this row is an UNCONFIRMED outcome
+         (prior_state==UNCONFIRMED and observations crossed K_min, OR
+         this is the row at which the track was about to be dropped),
+         feed update_promote_outcome(True/False).
+      4. PER-FRAME: at end of frame, walk all examples for that frame
+         to compute n_tracked, sum_age, sum_det_conf_TRK over rows whose
+         prior_state==TRACKED (post-transition state isn't recorded
+         per-row, so we use prior_state==TRACKED, which approximates
+         "currently TRACKED at this frame" — close to C's `track_state`
+         walk at end of utrack_run).
+    """
+    if len(examples) == 0:
+        return
+    seq = examples["sequence"].astype(str)
+    fi  = examples["frame_idx"]
+    ft  = examples["frame_time"].astype(np.float64)
+    order = np.lexsort((fi, seq))
+
+    i = 0
+    n = len(order)
+    while i < n:
+        s_i = seq[order[i]]
+        stats = SceneStats()
+        # Find span of this sequence
+        j = i
+        while j < n and seq[order[j]] == s_i:
+            j += 1
+        seq_idx = order[i:j]
+        # Group by frame_idx within sequence
+        fis = fi[seq_idx]
+        k = 0
+        m = len(seq_idx)
+        while k < m:
+            f_k = fis[k]
+            kk = k
+            while kk < m and fis[kk] == f_k:
+                kk += 1
+            frame_idx = seq_idx[k:kk]
+            rtp_time = float(ft[frame_idx[0]])
+
+            # PHASE 1 — unmatched-det updates. Row is the det that
+            # spawned a new track iff observations==1 and matched==1.
+            for row_i in frame_idx:
+                if (int(examples["observations"][row_i]) == 1
+                        and int(examples["matched"][row_i]) == 1):
+                    stats.update_unmatched_det(
+                        float(examples["det_conf"][row_i]))
+
+            # PHASE 2 — read current EMAs, write into rows' scene cols.
+            pr, mt, mu, td, aa = stats.read()
+            for row_i in frame_idx:
+                det_c = float(examples["det_conf"][row_i])
+                examples["scene_promote_rate"][row_i] = pr
+                examples["scene_mean_det_conf_TRACKED"][row_i] = mt
+                examples["scene_mean_det_conf_unmatched"][row_i] = mu
+                examples["scene_track_density_smooth"][row_i] = td
+                examples["scene_mean_alive_track_age"][row_i] = aa
+                examples["det_conf_minus_scene_TP_avg"][row_i] = det_c - mt
+
+            # PHASE 3 — promote-outcome updates. Approximate the C
+            # runtime's "UNCONFIRMED → TRACKED" detection by the
+            # promote_label on UNCONFIRMED rows. promote_label is 1
+            # iff the future GT history validates that promote was
+            # correct — but in the C runtime the EMA is fed by the
+            # DECISION, not the truth. The label-driven extractor uses
+            # the label AS the decision, so this is the right oracle
+            # here. The deterministic extractor uses observations>=K_min
+            # which is reflected by promote_label too (UNCONFIRMED rows
+            # at the moment of crossing K_min). For UNCONFIRMED rows
+            # that drop instead, the C feeds False — proxied by
+            # drop_label==1 on the same prior_state==UNCONFIRMED row.
+            for row_i in frame_idx:
+                if int(examples["prior_state"][row_i]) == STATE_UNCONFIRMED:
+                    if int(examples["valid_promote"][row_i]) == 1:
+                        if int(examples["promote_label"][row_i]) == 1:
+                            stats.update_promote_outcome(True)
+                        elif int(examples["drop_label"][row_i]) == 1:
+                            stats.update_promote_outcome(False)
+
+            # PHASE 4 — per-frame walk over end-of-frame TRACKED set.
+            # We approximate "currently TRACKED" with prior_state==TRACKED
+            # (the state at start-of-frame — post-transition state isn't
+            # stored). For ages, use time_since_creation if present;
+            # else use a tdet-style proxy. For mean_det_conf_TRACKED,
+            # only matched TRACKED rows contribute.
+            n_tracked = 0
+            sum_age = 0.0
+            sum_det_TRK = 0.0
+            n_det_TRK = 0
+            for row_i in frame_idx:
+                if int(examples["prior_state"][row_i]) == STATE_TRACKED:
+                    n_tracked += 1
+                    sum_age += float(examples["time_since_creation"][row_i])
+                    if int(examples["matched"][row_i]) == 1:
+                        sum_det_TRK += float(examples["det_conf"][row_i])
+                        n_det_TRK += 1
+            stats.update_per_frame(n_tracked, sum_age, sum_det_TRK, n_det_TRK)
+
+            k = kk
+        i = j
 
 
 # --- per-track state during the offline replay -------------------------------
@@ -1491,6 +1734,13 @@ def main():
             print(f"[{split}] no data")
             continue
         arr = np.concatenate(chunks)
+        # Phase 29 scene-aggregate post-pass: replay the C runtime's
+        # per-sequence EMAs (SceneStats) and fill the 6 scene_* columns
+        # in-place. The trainer's --with-scene path requires these to
+        # have been written by something other than the constant fallback
+        # (see commit 877a2da for the silent-fallback bug + fail-loud
+        # guard).
+        apply_scene_stats_to_examples(arr)
         out_path = f"{args.out}_{split}.npz"
         meta = make_pt_meta(
             artefact_kind="state_corpus",
