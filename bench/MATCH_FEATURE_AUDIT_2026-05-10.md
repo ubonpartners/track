@@ -276,3 +276,76 @@ don't overlap).
    new corpora).
 4. Regenerate the pair-log corpus (slow — 1-2 hr).
 5. Retrain v14_subdiou. Compare AUC + fitness against v10.
+
+## A4 outcome — warped DIoU is the right semantic but doesn't shift fitness
+
+Implemented per the plan above and ran the full bake-off:
+
+- C runtime: `compute_subbox_scores` produces both plain IoU (against
+  static track subbox, kept for legacy analysis) and `subbox_diou_warped`
+  (DIoU after applying the OF-predicted main-box translation to the
+  track subbox). nn_build_pair feeds slot 15 from a yaml-gated chooser:
+  `utrack.subdiou_warped: false` (default) → plain IoU; `true` → warped
+  DIoU. Pair-trace v3 schema (rec size 152→156) carries both.
+- Corpus regen: `bench/pair_log_config_v14_subdiou.yaml` (same scenes
+  as v6_with_pp22) → `runs/track_analysis/pair_log_v14_subdiou/pair_log/`
+  (176 of 178 scenes succeeded; 2 scenes failed in regen). Aggregated
+  to `bench/data/pairs_{train,val,test}_v14.npz` with
+  `--allow-missing-scenes`.
+- Standalone signal on the new corpus (subset where face is detected):
+  `subbox_iou` AUC 0.844 (val); `subbox_diou_warped` AUC 0.899 — the
+  warp + graded signal recovers ~3× more nonzero rows (310k vs 99k in
+  train) and improves discrimination by ~6 pp where it lights up.
+
+Trained two heads on the **same** new corpus:
+- `phase3_v10base_on_v14corpus.pt` — default trainer (slot 15 = plain
+  IoU): val AUC 0.99219.
+- `phase3_v14_subdiou.pt` — `--with-subdiou-warped` (slot 15 = warped
+  DIoU): val AUC 0.99197.
+
+Essentially tied (-0.0002), even though the standalone subbox signal
+is much stronger. v14's permutation importance puts `subbox_diou_warped`
+at #25 of 30 features (Σ Δ_deploy +0.00000) — the head doesn't use it.
+Main box IoU still dominates (Σ Δ_deploy +0.01182 — 50× larger).
+
+C-runtime fitness on diverse-29 (3 runs each):
+
+| Recipe                              | fitness | mota   | fp/fr | fp_tr |
+|-------------------------------------|---------|--------|-------|-------|
+| uc_v11 (shipped v10 .bin)           | 0.6393  | 0.6559 | 2.30  | 24.0  |
+| v10base_on_v14corpus (same trainer) | 0.6350  | 0.6548 | 2.50  | 29.7  |
+| v14_subdiou (warped DIoU)           | 0.6339  | 0.6543 | 2.47  | 31.0  |
+
+The fair within-corpus comparison (v10base vs v14_subdiou, both trained
+on the regenerated v14 corpus) shows -0.0011 fitness — within run
+noise (σ ≈ 0.0008). Warped DIoU doesn't help.
+
+The bigger story is the -0.0043 fitness drop from corpus regen alone
+(shipped v10 → v10base on v14 corpus, same architecture and recipe).
+Hypotheses for why the new corpus produces a worse head:
+- Smaller train set: 1.04M pairs vs old ~16M+ (some scenes failed regen,
+  some were filtered differently)
+- Distribution shift: the new C runtime had the dead-param cleanup
+  applied (commit `ubon_cstuff:81eae53`), which slightly changes
+  pre_thr_score values; trained heads pick up subtly different priors
+- 2 missing scenes from regen (PP22_00000 + 1 other failed)
+
+**Decision**: v14_subdiou does NOT ship. v10 stays default with
+`subdiou_warped: false`. Keep the C-runtime warped-DIoU code anyway:
+- The fix is correct (the bug was real)
+- The path is open if a future architectural change makes the head
+  capable of using the subbox signal (cross-attention, learned face
+  gating, or making the face channel an explicit auxiliary tower)
+- v10 behavior is unchanged with the default flag
+
+**Architectural takeaway**: with main-box IoU + the rest of the feature
+set, the trained two-tower head fully discriminates matches; subbox
+quality is a redundant signal it can ignore. To make face/subbox
+features earn their slot, a future variant should either:
+(a) Down-weight or mask main-box IoU during training so the head must
+    rely on appearance + face cues (forcing capacity allocation), OR
+(b) Architect a cross-attention path where face features explicitly
+    interact with the appearance channel before the head, OR
+(c) Explore using face confidence trajectory in the **state head**
+    (see task #76: face conf is currently absent from state-head
+    GRU input — easy first try).
