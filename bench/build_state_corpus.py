@@ -238,6 +238,15 @@ EXAMPLE_DTYPE = np.dtype([
     # num_missed≥2 floor implicitly used.
     ("time_since_creation", "<f4"),
     ("time_in_state",       "<f4"),
+    # 2026-05-11: face / subbox channel for the state head. The match head
+    # already sees these but the state head was blind to them. Hypothesis:
+    # consistent face detection on a track corroborates "real human" and
+    # raises promote conviction; face failing mid-track signals occlusion
+    # / possible FP. All three are 0 when no face was detected (subbox_conf
+    # at 0 also flags absence).
+    ("det_subbox_conf",     "<f4"),
+    ("track_subbox_conf",   "<f4"),
+    ("det_fiqa_score",      "<f4"),
     # e_track[16] from Phase 3 f_obs replay — zeros if --phase3-model not given.
     # Kept in dtype for backward-compat (older consumers may still read it);
     # NOT included in the 23-dim runtime feature vector built by
@@ -452,6 +461,9 @@ def extract_sequence(
             time_since_det = float(frame_time - last_detect_time)
             det_conf = float(match_rec["det_conf"]) if matched else 0.0
             phase3_pair_score = float(match_rec["match_cost_score"]) if matched else 0.0
+            det_subbox_conf   = float(match_rec["det_subbox_conf"])   if matched else 0.0
+            det_fiqa_score    = float(match_rec["det_fiqa_score"])    if matched else 0.0
+            track_subbox_conf = float(recs[0]["track_subbox_conf"])
 
             # Spatial / detection-quality features. When matched, use the
             # detection's own box and pose; when unmatched, fall back to
@@ -499,6 +511,9 @@ def extract_sequence(
                 phase3_pair_score=float(phase3_pair_score),
                 near_edge=near_edge, det_w=det_w, det_h=det_h,
                 log_aspect=log_aspect, log_pose_kp=log_pose_kp,
+                det_subbox_conf=det_subbox_conf,
+                track_subbox_conf=track_subbox_conf,
+                det_fiqa_score=det_fiqa_score,
                 e_track=e_track_cur.copy(),
                 # promote/demote/drop labels filled in pass 2
                 promote_label=0, demote_label=0, drop_label=0,
@@ -604,6 +619,9 @@ def extract_sequence(
                 phase3_pair_score=0.0,
                 near_edge=near_edge, det_w=det_w, det_h=det_h,
                 log_aspect=log_aspect, log_pose_kp=log_pose_kp,
+                det_subbox_conf=det_subbox_conf,
+                track_subbox_conf=track_subbox_conf,
+                det_fiqa_score=det_fiqa_score,
                 e_track=e_track_cur.copy(),
                 promote_label=0, demote_label=0, drop_label=0,
                 gt_id_now=-1,
@@ -841,8 +859,14 @@ def extract_sequence_label_driven(
         if int(trc.get("magic", 0)) != PAIR_LOG_MAGIC:
             per_track_recs_per_frame[fi] = {}
             continue
-        if int(trc.get("record_size", 0)) != record_size_bytes():
-            raise ValueError(f"{sequence_name}: pair-trace record_size mismatch")
+        # decode_records accepts both v2 (152) and v3 (156) byte layouts.
+        # Match either; raise on anything else.
+        from src.analysis.pair_log_schema import PAIR_LOG_DTYPE_V2 as _V2_DT
+        rs = int(trc.get("record_size", 0))
+        if rs not in (record_size_bytes(), _V2_DT.itemsize):
+            raise ValueError(
+                f"{sequence_name}: pair-trace record_size {rs} not in "
+                f"{{{record_size_bytes()}, {_V2_DT.itemsize}}}")
         n_records = int(trc.get("n_records", 0))
         if n_records == 0:
             per_track_recs_per_frame[fi] = {}
@@ -1022,6 +1046,9 @@ def extract_sequence_label_driven(
                 time_since_det = float(frame_time - last_detect_time)
                 det_conf = float(match_rec["det_conf"]) if matched else 0.0
                 phase3_pair_score = float(match_rec["match_cost_score"]) if matched else 0.0
+                det_subbox_conf   = float(match_rec["det_subbox_conf"])   if matched else 0.0
+                det_fiqa_score    = float(match_rec["det_fiqa_score"])    if matched else 0.0
+                track_subbox_conf = float(first_rec["track_subbox_conf"])
 
                 if matched:
                     bx0, by0 = float(match_rec["det_x0"]), float(match_rec["det_y0"])
@@ -1104,6 +1131,9 @@ def extract_sequence_label_driven(
                     phase3_pair_score=float(phase3_pair_score),
                     near_edge=near_edge, det_w=det_w, det_h=det_h,
                     log_aspect=log_aspect, log_pose_kp=log_pose_kp,
+                    det_subbox_conf=det_subbox_conf,
+                    track_subbox_conf=track_subbox_conf,
+                    det_fiqa_score=det_fiqa_score,
                     ema_match_x_conf=float(ema_mxc),
                     log_sum_det_conf=float(log_sum_dc),
                     min_match_score=float(min_match),
@@ -1236,6 +1266,9 @@ def extract_sequence_label_driven(
                     phase3_pair_score=0.0,
                     near_edge=near_edge, det_w=det_w, det_h=det_h,
                     log_aspect=log_aspect, log_pose_kp=log_pose_kp,
+                    det_subbox_conf=0.0,
+                    track_subbox_conf=0.0,
+                    det_fiqa_score=0.0,
                     time_since_creation=float(frame_time - th.creation_time),
                     time_in_state=float(frame_time - th.state_entered_time),
                     e_track=e_track_cur.copy(),

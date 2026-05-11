@@ -41,11 +41,12 @@ def main():
     in_dim = int(ckpt["in_dim"])
     hidden = int(ckpt["hidden"])
     print(f"  in_dim={in_dim} hidden={hidden} model_kind={ckpt.get('model_kind')}")
-    # Runtime accepts in_dim ∈ {19, 25} (UTRACK_NN_STATE_GRU_IN_DIM and
-    # UTRACK_NN_STATE_GRU_IN_DIM_V2 in nn_state.h).
-    if in_dim not in (19, 25):
+    # Runtime accepts in_dim ∈ {19, 25, 28}: V1 base / V2 scene-aggregate /
+    # V3 (V2 + 3 face-conf features). Names mirror nn_state.h.
+    if in_dim not in (19, 25, 28):
         raise SystemExit(
-            f"in_dim={in_dim} but C runtime requires 19 or 25; refusing to export."
+            f"in_dim={in_dim} but C runtime requires 19, 25, or 28; "
+            f"refusing to export."
         )
 
     def f32(t):

@@ -44,6 +44,7 @@ import torch.nn.functional as F
 # load time (UTRACK_NN_STATE_GRU_IN_DIM = 19).
 INPUT_DIM = 19
 INPUT_DIM_SCENE = 25     # 19 base + 6 scene-aggregate columns
+INPUT_DIM_FACE = 28      # 25 + 3 face-conf columns (V3, --with-face)
 
 # Scene-aggregate columns the corpus carries (Phase 29 feature engineering).
 # Each contributes meaningful row-0 signal vs is_TP (AUC ~0.59-0.65) which the
@@ -60,8 +61,11 @@ SCENE_COL_DEFAULTS = {
 
 
 def build_input_matrix_no_state(rec: np.ndarray, *,
-                                 with_scene: bool = False) -> np.ndarray:
-    """(N, 19) or (N, 25) float32 — state-agnostic per-frame feature vector.
+                                 with_scene: bool = False,
+                                 with_face: bool = False) -> np.ndarray:
+    """(N, 19), (N, 25) or (N, 28) float32 — state-agnostic per-frame feature
+    vector. `with_face` requires `with_scene` and appends 3 face-conf
+    columns at slots 25-27.
 
     Base layout (must mirror the C-side feature builder in utrack_state.c):
       [ 0]  matched
@@ -91,6 +95,11 @@ def build_input_matrix_no_state(rec: np.ndarray, *,
       [22]  log1p(scene_track_density_smooth)
       [23]  log1p(scene_mean_alive_track_age)
       [24]  det_conf_minus_scene_TP_avg
+
+    Face-conf (with_face=True; requires with_scene=True), 2026-05-11 layout:
+      [25]  det_subbox_conf       (face conf for the matched det, 0 if no face)
+      [26]  track_subbox_conf     (face conf carried by the existing track)
+      [27]  det_fiqa_score        (face image-quality score, 0 if FIQA off)
     """
     n = len(rec)
     def _f(name):
@@ -135,6 +144,15 @@ def build_input_matrix_no_state(rec: np.ndarray, *,
             _scene("det_conf_minus_scene_TP_avg",
                    SCENE_COL_DEFAULTS["det_conf_minus_scene_TP_avg"]),
         ]
+    if with_face:
+        if not with_scene:
+            raise ValueError("with_face=True requires with_scene=True (V3 layout)")
+        for fname in ("det_subbox_conf", "track_subbox_conf", "det_fiqa_score"):
+            if fname not in rec.dtype.names:
+                raise ValueError(
+                    f"with_face=True but corpus lacks {fname!r}; regenerate "
+                    f"the state corpus with the V3 dtype")
+            cols.append(rec[fname].astype(np.float32).reshape(-1, 1))
     return np.ascontiguousarray(np.concatenate(cols, axis=1))
 
 
@@ -363,6 +381,11 @@ def main():
                    help="Append the 6 Phase-29 scene-aggregate features "
                         "(in_dim 19 → 25). Shipping the head requires "
                         "matching plumbing in utrack_state.c.")
+    p.add_argument("--with-face", action="store_true",
+                   help="Append 3 face-conf features (in_dim 25 → 28). "
+                        "Implies --with-scene. Requires V3 state corpus "
+                        "(regen with the build_state_corpus.py changes "
+                        "from 2026-05-11). C runtime needs nn_state V3.")
     p.add_argument("--pos-weight", type=float, default=1.0,
                    help="BCE pos_weight. <1 biases head toward conservatism "
                         "(predicts low p_TP for ambiguous samples), reducing "
@@ -390,8 +413,8 @@ def main():
     print(f"loading {args.val}",   flush=True)
     rec_va = np.load(args.val,   allow_pickle=False)["records"]
 
-    X_tr = build_input_matrix_no_state(rec_tr, with_scene=args.with_scene)
-    X_va = build_input_matrix_no_state(rec_va, with_scene=args.with_scene)
+    X_tr = build_input_matrix_no_state(rec_tr, with_scene=args.with_scene or args.with_face, with_face=args.with_face)
+    X_va = build_input_matrix_no_state(rec_va, with_scene=args.with_scene or args.with_face, with_face=args.with_face)
     in_dim = X_tr.shape[1]
     print(f"train rows: {len(rec_tr)}  val rows: {len(rec_va)}  in_dim={in_dim}", flush=True)
 
