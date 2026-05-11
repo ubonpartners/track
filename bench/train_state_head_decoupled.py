@@ -367,6 +367,11 @@ def main():
     p.add_argument("--train", required=True)
     p.add_argument("--val",   required=True)
     p.add_argument("--save",  required=True)
+    p.add_argument("--comment", required=True,
+                   help="Free-form note recorded in the output .pt's "
+                        "_meta. Required so reading the .pt tells you what "
+                        "the run was for (e.g. 'v22_face on v15_perm "
+                        "corpus, 16ep, h64 pw0.5, seed 0').")
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--t-max", type=int, default=64,
@@ -408,10 +413,15 @@ def main():
     np.random.seed(args.seed)
     rng = np.random.default_rng(args.seed)
 
+    from bench._artefact_meta import require_npz_meta
     print(f"loading {args.train}", flush=True)
+    train_meta = require_npz_meta(args.train)
     rec_tr = np.load(args.train, allow_pickle=False)["records"]
+    print(f"  corpus comment: {train_meta.get('comment')!r}", flush=True)
     print(f"loading {args.val}",   flush=True)
+    val_meta = require_npz_meta(args.val)
     rec_va = np.load(args.val,   allow_pickle=False)["records"]
+    print(f"  corpus comment: {val_meta.get('comment')!r}", flush=True)
 
     X_tr = build_input_matrix_no_state(rec_tr, with_scene=args.with_scene or args.with_face, with_face=args.with_face)
     X_va = build_input_matrix_no_state(rec_va, with_scene=args.with_scene or args.with_face, with_face=args.with_face)
@@ -585,7 +595,14 @@ def main():
         "_meta": make_pt_meta(
             artefact_kind="state_head_decoupled",
             args=args, hparams=hparams,
-            dataset_info={"corpus": getattr(args, "corpus", None)},
+            dataset_info={
+                "corpus": getattr(args, "corpus", None),
+                "train_path": args.train,
+                "val_path": args.val,
+                "train_corpus_meta": train_meta,
+                "val_corpus_meta":   val_meta,
+            },
+            comment=args.comment,
         ),
     }
     torch.save(save, args.save)

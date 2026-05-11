@@ -354,8 +354,15 @@ def compute_etrack_for_pairs(model: TwoTower, obs_x: np.ndarray,
 
 def train(args):
     print(f"loading data from {args.data_dir}...")
-    tr = np.load(f"{args.data_dir}/pairs_train.npz", allow_pickle=True)
-    va = np.load(f"{args.data_dir}/pairs_val.npz", allow_pickle=True)
+    from bench._artefact_meta import require_npz_meta
+    train_path = f"{args.data_dir}/pairs_train.npz"
+    val_path   = f"{args.data_dir}/pairs_val.npz"
+    train_meta = require_npz_meta(train_path)
+    val_meta   = require_npz_meta(val_path)
+    print(f"  train corpus comment: {train_meta.get('comment')!r}")
+    print(f"  val   corpus comment: {val_meta.get('comment')!r}")
+    tr = np.load(train_path, allow_pickle=True)
+    va = np.load(val_path,   allow_pickle=True)
 
     r_tr = tr["records"]; y_tr = tr["labels"].astype(np.float32)
     r_va = va["records"]; y_va = va["labels"].astype(np.float32)
@@ -652,7 +659,13 @@ def train(args):
         "pair_feature_names": pair_names,
         "_meta": make_pt_meta(
             artefact_kind="match_cost_two_tower",
-            args=args, hparams=hparams, dataset_info=dataset_info,
+            args=args, hparams=hparams,
+            dataset_info={
+                **dataset_info,
+                "train_corpus_meta": train_meta,
+                "val_corpus_meta":   val_meta,
+            },
+            comment=args.comment,
         ),
     }, args.save)
     print(f"\nsaved → {args.save}")
@@ -696,6 +709,10 @@ def main():
                    help="Comma-separated feature names to drop from any view "
                         "they appear in. Errors on unknown names. Use the "
                         "names from {OBS,DET,PAIR}_FEATURE_NAMES.")
+    p.add_argument("--comment", required=True,
+                   help="Free-form note recorded in the output .pt's _meta. "
+                        "Required so reading the .pt explains what the run "
+                        "was for.")
     p.add_argument("--seed", type=int, default=0,
                    help="seed numpy + torch RNGs for reproducibility")
     p.add_argument("--save", required=True,
