@@ -386,16 +386,61 @@ def train(args):
     face_cols = {"det_subbox_conf", "track_subbox_conf", "det_fiqa_score"}
     has_face = face_cols.issubset(set(r_tr.dtype.names))
     with_time = bool(args.with_time)
+    with_density = bool(getattr(args, "with_density", False))
     if with_time:
         assert "time_since_det" in r_tr.dtype.names, \
             "corpus lacks time_since_det column"
-    print(f"building features... with_face={has_face} with_time={with_time}")
+    if with_density:
+        assert "scene_density" in r_tr.dtype.names, \
+            "corpus lacks scene_density column"
+    drop_set = {f.strip() for f in (args.drop_features or "").split(",") if f.strip()}
+    print(f"building features... with_face={has_face} with_time={with_time} "
+          f"with_density={with_density} drop={sorted(drop_set) or '∅'}")
 
     obs_tr = build_obs_matrix(r_tr, with_face=has_face, with_time=with_time)
     obs_va = build_obs_matrix(r_va, with_face=has_face, with_time=with_time)
     det_tr = build_det_matrix(r_tr); det_va = build_det_matrix(r_va)
     pair_tr = build_pair_matrix(r_tr, with_face=has_face, with_time=with_time)
     pair_va = build_pair_matrix(r_va, with_face=has_face, with_time=with_time)
+
+    # Resolve the feature-name lists for each view (used both to apply
+    # --drop-features and to embed the schema in the saved ckpt).
+    obs_names_full = (OBS_FEATURE_NAMES_V3 if with_time else
+                      (OBS_FEATURE_NAMES_V2 if has_face else OBS_FEATURE_NAMES))
+    det_names_full = list(DET_FEATURE_NAMES)
+    pair_names_full = (PAIR_FEATURE_NAMES_V3 if with_time else
+                       (PAIR_FEATURE_NAMES_V2 if has_face else PAIR_FEATURE_NAMES))
+
+    # A3: append log1p(scene_density) to pair (and to its name list).
+    if with_density:
+        sd_tr = np.log1p(np.maximum(0.0, r_tr["scene_density"].astype(np.float32)))
+        sd_va = np.log1p(np.maximum(0.0, r_va["scene_density"].astype(np.float32)))
+        pair_tr = np.concatenate([pair_tr, sd_tr[:, None]], axis=1)
+        pair_va = np.concatenate([pair_va, sd_va[:, None]], axis=1)
+        pair_names_full = list(pair_names_full) + ["log_scene_density"]
+
+    # A1: drop named features by removing their columns from each view.
+    # Names that don't appear in any view are an error (catches typos).
+    def drop_cols(mat_tr, mat_va, names, drop):
+        if not drop:
+            return mat_tr, mat_va, list(names), []
+        keep_idx = [i for i, n in enumerate(names) if n not in drop]
+        dropped  = [n for n in names if n in drop]
+        return (mat_tr[:, keep_idx], mat_va[:, keep_idx],
+                [names[i] for i in keep_idx], dropped)
+
+    obs_tr, obs_va, obs_names, dropped_obs   = drop_cols(obs_tr, obs_va, obs_names_full,  drop_set)
+    det_tr, det_va, det_names, dropped_det   = drop_cols(det_tr, det_va, det_names_full,  drop_set)
+    pair_tr, pair_va, pair_names, dropped_pair = drop_cols(pair_tr, pair_va, pair_names_full, drop_set)
+    if drop_set:
+        seen = set(dropped_obs) | set(dropped_det) | set(dropped_pair)
+        unknown = drop_set - seen
+        if unknown:
+            raise SystemExit(f"--drop-features: unknown feature(s): {sorted(unknown)}. "
+                             f"Available: obs={obs_names_full}, det={det_names_full}, "
+                             f"pair={pair_names_full}")
+        print(f"  dropped → obs:{dropped_obs}  det:{dropped_det}  pair:{dropped_pair}")
+        print(f"  schema → obs_in={obs_tr.shape[1]} det_in={det_tr.shape[1]} pair_in={pair_tr.shape[1]}")
 
     # Z-score using train stats
     obs_tr_n, obs_mean, obs_std = standardise(obs_tr)
@@ -584,11 +629,9 @@ def train(args):
         "pair_in": pair_tr_n.shape[1], "e_dim": args.e_dim,
         "tower_hidden": args.tower_hidden,
         "alpha": args.alpha, "lambda": lam,
-        "obs_feature_names":  (OBS_FEATURE_NAMES_V3 if with_time else
-                               (OBS_FEATURE_NAMES_V2 if has_face else OBS_FEATURE_NAMES)),
-        "det_feature_names":  DET_FEATURE_NAMES,
-        "pair_feature_names": (PAIR_FEATURE_NAMES_V3 if with_time else
-                               (PAIR_FEATURE_NAMES_V2 if has_face else PAIR_FEATURE_NAMES)),
+        "obs_feature_names":  obs_names,
+        "det_feature_names":  det_names,
+        "pair_feature_names": pair_names,
         "_meta": make_pt_meta(
             artefact_kind="match_cost_two_tower",
             args=args, hparams=hparams, dataset_info=dataset_info,
@@ -623,6 +666,13 @@ def main():
     p.add_argument("--with-time", action="store_true",
                    help="v3 schema: feed log1p(time_since_det) to both obs "
                         "and pair vectors. obs_in=17, pair_in=20.")
+    p.add_argument("--with-density", action="store_true",
+                   help="Append log1p(scene_density) to the pair vector "
+                        "(+1 column). Stacks with --with-time.")
+    p.add_argument("--drop-features", default="",
+                   help="Comma-separated feature names to drop from any view "
+                        "they appear in. Errors on unknown names. Use the "
+                        "names from {OBS,DET,PAIR}_FEATURE_NAMES.")
     p.add_argument("--seed", type=int, default=0,
                    help="seed numpy + torch RNGs for reproducibility")
     p.add_argument("--save", required=True,

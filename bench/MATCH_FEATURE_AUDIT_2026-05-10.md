@@ -202,7 +202,77 @@ Open follow-ups for A2:
   (analogous to state-head v20's pos_weight<1) — the goal is to make
   the head reluctant to use time_since_det for re-attachment of stale
   tracks. Until that's tried, A2 is not fully closed.
-- A1 (drop dead features) and A3 (scene_density) are still untried.
-  A1 in particular is low-risk: if AUC holds, the head is leaner
-  and seed-variance should drop; fitness can only improve or stay
-  the same.
+
+## A1 outcome — leaner head matches AUC, no shipping motivation
+
+Trained `phase3_v12_lean.pt` with 8 features dropped (the bottom of
+the v10 audit ranking): `reid_z` (obs), `det_subbox_conf`,
+`det_fiqa_score`, `subbox_iou`, `ocm_cos`, `kf_d2`, `size_ratio`,
+`det_conf` (only the det-view copy survives via obs's prev_det_conf
+and pair's conf_delta). Result: 10/4/13-dim head (vs v10's 16/5/19),
+~38% leaner.
+
+| Head        | dims      | λ=0.05 AUC | λ=0.10  | λ=0.20  |
+|-------------|-----------|------------|---------|---------|
+| v10 (ship)  | 16/5/19   | 0.97045    | 0.97150 | 0.97145 |
+| v12_lean    | 10/4/13   | 0.97010    | 0.97097 | 0.97024 |
+
+Lean head loses ~0.0004 AUC at every deployment-λ — within noise on
+pairs_val. The drop happens because the head loses access to weak
+signals that were small individually but additive across views (e.g.
+`det_conf` lives in three views — keeping just two costs a thread).
+
+Decision: **don't ship v12_lean**. There's no fitness motivation, only
+a parameter-count argument, and a v_lean schema would need its own C
+dim variant. Keep the trainer's `--drop-features` flag for future
+ablation work.
+
+## A3 outcome — scene_density is real but small; not enough to ship alone
+
+Trained `phase3_v13_density.pt` with `log1p(scene_density)` appended to
+the pair vector (16/5/20 dim head, sharing the v3 dim accepted by the
+C runtime but with col 19 = log_scene_density instead of v3's
+log_time_since_det).
+
+| Head         | dims    | λ=0.05  | λ=0.10  | λ=0.20  |
+|--------------|---------|---------|---------|---------|
+| v10 (ship)   | 16/5/19 | 0.97045 | 0.97150 | 0.97145 |
+| v13_density  | 16/5/20 | 0.97057 | 0.97167 | 0.97171 |
+
++0.0001 to +0.0026 AUC, monotone in λ. The density slot is the
+#5-#6 most-important feature in v13 (per-pair shuffle Δ_deploy
++0.00035 / +0.00054 / +0.00089 at λ = 0.05 / 0.10 / 0.20).
+
+Decision: **don't ship v13_density alone**. The AUC gain is too
+small for a C-side schema bump on its own — and the v3 (16/5/20)
+dim slot is currently aliased to log_time_since_det, so shipping
+v13 would require disambiguation (a true v4 schema). Park unless
+combined with another feature that makes the schema bump worth it.
+
+## Subbox-IoU bug — face-box motion is not compensated
+
+Audit follow-up triggered by the user pointing out that `subbox_iou`
+lands at near-zero importance. Reading `utrack_match.c:111-140` and
+the pair-trace emission lower in the same file: `subbox_iou` is
+`IoU(track.det.subbox, det.subbox)` where `track.det.subbox` is the
+*last-observed* face box — no motion warp. The main box's score
+goes through `of_predicted_box` / `kf_predicted_box`; the subbox
+path doesn't. When the person moves more than a face-box width
+between frames, the IoU drops to 0 mechanically even on a correct
+match — explaining the audit's near-zero importance. Plain IoU
+(not DIoU) compounds the same problem (zero gradient when boxes
+don't overlap).
+
+**Plan v14_subdiou** (kicked off after this audit):
+
+1. Compute warped track subbox in C as
+   `track.subbox + (of_predicted_box.center − track.center)`
+   (same translation as the OF-predicted main box).
+2. Replace plain `subbox_iou` with `subbox_diou_warped` (DIoU mapped
+   to [0,1], same convention as `box_motion_score`). Both the NN
+   feature builder and the pair-trace emission must agree.
+3. Bump the pair-trace record schema to add the new field (keep the
+   old `subbox_iou` slot for backward analysis, write 0 there for
+   new corpora).
+4. Regenerate the pair-log corpus (slow — 1-2 hr).
+5. Retrain v14_subdiou. Compare AUC + fitness against v10.
