@@ -24,7 +24,7 @@ from typing import List, Tuple
 import numpy as np
 
 
-PAIR_LOG_VERSION = 2
+PAIR_LOG_VERSION = 3
 PAIR_LOG_MAGIC = 0x55545054  # 'UTPT' big-endian, matches C #define
 
 
@@ -60,10 +60,12 @@ _FIELDS: List[Tuple[str, np.dtype]] = [
     ("det_conf",         np.dtype("<f4")),
     ("prev_det_conf",    np.dtype("<f4")),
     ("pose_kp_visible",  np.dtype("<u4")),
-    # v2 face/subbox features. Order matches utrack_pair_trace.h.
+    # v2 face/subbox features + v3 OF-warped subbox DIoU. Order matches
+    # utrack_pair_trace.h.
     ("det_subbox_conf",  np.dtype("<f4")),
     ("track_subbox_conf",np.dtype("<f4")),
     ("subbox_iou",       np.dtype("<f4")),
+    ("subbox_diou_warped", np.dtype("<f4")),
     ("det_fiqa_score",   np.dtype("<f4")),
     ("pre_thr_score",    np.dtype("<f4")),
     ("match_cost_score", np.dtype("<f4")),
@@ -101,6 +103,7 @@ PAIR_LOG_FEATURE_NAMES: List[str] = [
     "det_subbox_conf",
     "track_subbox_conf",
     "subbox_iou",
+    "subbox_diou_warped",
     "det_fiqa_score",
     # Integer-typed inputs come through as float32 after a log transform
     # in the trainer; we keep the raw integer in the record and let the
