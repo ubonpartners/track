@@ -4746,3 +4746,104 @@ pre-c8b8892 trainer recipe is the obvious next step — one of the seeds
 might land in a basin that's both higher-fitness AND trace-pass. Phase
 29 scene-adaptive features remain in-tree but unused.
 
+---
+
+## 2026-05-11 — V2/V3 silent-training-bug fixed; closed-loop says V1 still wins
+
+User asked: "queue up trying adding face confidence to the state-head
+network after current exp is all done" + "investigate the 'corpus drift'
+- have you lost the 'v18 recipe'?"
+
+**Diagnosis (commits 877a2da, 055c52e):**
+The V2 (--with-scene) and V3 (--with-face) state heads were silently
+training on constants. Commit e288eea (2026-05-10, legacy-bench cleanup)
+deleted the `SceneStats` replay class from `bench/build_state_corpus.py`
+without disabling the trainer's `--with-scene` flag. The trainer's
+`build_input_matrix_no_state` happily fell back to `SCENE_COL_DEFAULTS`
+constants (lines 53-60) for every row. Every V2/V3 retrain after
+2026-05-10 trained on constants but was evaluated against the C
+runtime's dynamic EMAs — a catastrophic out-of-distribution shift.
+
+Measured impact: V2 retrain on state_corpus_v23 hit fitness 0.347 vs
+V1 shipped 0.639 (Δ = -0.29) — the "regression" that gated face-feature
+work for ~2 days.
+
+**Fix (3 commits, in order):**
+1. `547aad1` — schema-sentinel guard `bench/verify_tree_sentinels.py`
+   + pre-commit hook at `bench/githooks/pre-commit`. Activate per-clone
+   with `git config --local core.hooksPath bench/githooks`. Asserts the
+   v3 face/diou schema AND the SceneStats class AND the trainer
+   fail-loud guard are present on every commit touching schema-relevant
+   files. Catches the silent-revert failure mode.
+2. `877a2da` — trainer `--with-scene` raises `ValueError` on missing
+   corpus scene columns instead of silently falling back to constants.
+3. `055c52e` — restored `SceneStats` replay class in
+   `bench/build_state_corpus.py` (Python port of `utrack.c` lines
+   605-707, alpha=0.05, MIN_SAMPLES=20). Added 6 scene columns to
+   `EXAMPLE_DTYPE`. `apply_scene_stats_to_examples()` is a frame-major
+   post-pass that fills them in-place mirroring the C runtime call
+   ordering.
+
+**Rebuilt state_corpus_v24** from canonical pair_log_v15_permissive
+recipe. Got 1,625,197 train rows — bit-exact match to shipped v18
+(commits in feedback_track_v18_recipe.md memory).
+
+**K-seed sweep on v24** (seeds 0-4, --pos-weight 0.5, h=64, 16 epochs):
+
+| Variant       | offline best_score | diverse-29 fitness mean ± std | MOTA  | fp_tracks |
+|---------------|-------------------:|------------------------------:|------:|----------:|
+| V1 shipped    |             0.7282 |                 0.6391±0.0001 | 0.656 |    24.0   |
+| V1 retrain    |             0.7282 |                 0.6392±0.0001 | 0.656 |    24.0   |
+| V2 s=0        |             0.7299 |                 0.6382±0.0004 | 0.661 |    35.7   |
+| V2 s=1        |             0.7301 |                 0.6369±0.0004 | 0.661 |    38.7   |
+| V2 s=2 ★best  |             0.7318 |                 0.6266±0.0007 | 0.647 |    32.3   |
+| V3 s=0        |             0.7311 |                 0.6380±0.0003 | 0.660 |    35.3   |
+| V3 s=2 ★best  |             0.7313 |                 0.6362±0.0001 | 0.659 |    35.0   |
+
+★ = best offline-score seed in its variant. Note: the best-offline-score
+seed for both V2 and V3 produced the worst (or near-worst) fitness —
+val-score and fitness are not just decoupled, they're anti-correlated
+at this operating point. Selecting V2/V3 candidates by offline metric
+would pick a head 0.013 fitness *worse* than the seed-0 candidate.
+
+**Threshold sweep** on V2_s0 (cFP_track ∈ {7.5e-4, 1e-3, 1.5e-3, 2e-3,
+3e-3}) found a peak at cFP=1e-3 → diverse-29 fitness 0.6404 (+0.0013
+over V1 shipped). V3 best (cFP=2e-3) only reached 0.6395.
+
+**Full-178 verdict:**
+
+| Variant              | fitness mean ± std | MOTA   | fp_tracks |
+|----------------------|-------------------:|-------:|----------:|
+| V1 retrain (=ship)   |     0.4794±0.0008  | 0.5116 |    60.3   |
+| V2_s0 + cFP=1e-3     |     0.4749±0.0035  | 0.5128 |    71.7   |
+
+V2 LOSES full-178 by **−0.0045** (5σ on V1's std). The diverse-29 +0.0013
+advantage was subset-specific noise. Scene features add MOTA but produce
++11 FP tracks net of threshold tuning; the fp_track penalty
+(0.0005×11 = 0.0055) buries the +0.0012 MOTA gain.
+
+**Decision: V1 (shipped v20) stays.** No ship of V2 or V3. Scene/face
+features as plumbed today are net-neutral-to-negative at the v20
+operating point. Closing task #78 (regression diagnosed and fixed) and
+#82 (closed-loop eval done).
+
+**What was actually gained:**
+- The V2/V3 plumbing is now CORRECT — future face-feature work
+  resumes from a working baseline instead of starting from a 0.29
+  catastrophe.
+- Schema-sentinel guard prevents the silent-deletion failure mode
+  recurring.
+- Confirmed the offline-online gap is severe enough that **K-seed by
+  offline best_score is actively misleading** for V2/V3. Future work
+  needs closed-loop screening as the primary selection criterion.
+
+**Open avenues for future V2/V3 work** (none started):
+- Train with `--pos-weight < 0.5` to bias the head conservative
+  (V2/V3 over-promote at pw=0.5).
+- Try a different head architecture — attention over the track
+  sequence, more capacity, learnable c_FP threshold.
+- Re-tune the WHOLE cost-rule operating point (c_MOTA, c_FP_track,
+  c_FP_frame) jointly with V2/V3 retrain — not just c_FP_track.
+- Use fitness-shaped sample weighting (Phase 7 feedback memory) so
+  the trainer optimises the deployment metric directly.
+
