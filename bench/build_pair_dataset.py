@@ -89,6 +89,21 @@ def main() -> None:
                     help="Free-form note recorded in the output .npz's "
                          "_meta. Required so future readers can recover "
                          "what this dataset is.")
+    ap.add_argument("--delta-filter", type=float, default=None,
+                    help="Cheap delta filter — mirrors the C-side runtime "
+                         "filter (utrack.match_cheap_filter_delta). Two "
+                         "gates applied together per row:\n"
+                         "  (a) per-event: drop rows whose pre_thr_score is "
+                         "more than this much below the (frame_time, "
+                         "det_index) group's top score.\n"
+                         "  (b) per-row threshold-aware: drop rows whose "
+                         "pre_thr_score is more than this much below the "
+                         "pass's match_thr (looked up from pass_id + "
+                         "tracker yaml referenced by --analysis-yaml).\n"
+                         "Focuses training on pairs the matcher could "
+                         "plausibly accept and/or pick. None (default) = "
+                         "no filter; e.g. 0.5 = keep top + within 0.5 of "
+                         "it AND within 0.5 of match_thr.")
     args = ap.parse_args()
 
     from bench._pipeline_checks import (
@@ -106,6 +121,37 @@ def main() -> None:
         raise SystemExit(
             f"No scenes labeled split={args.split!r} in {args.analysis_yaml}"
         )
+
+    # Per-pass match_thr lookup (mirrors utrack.c defaults; pair-log pass_id
+    # values map to these). Used by the threshold-aware delta filter so the
+    # training distribution matches the C runtime when
+    # utrack.match_cheap_filter_delta > 0.
+    match_thr_by_pass = (0.66, 0.225, 0.022)
+    if args.delta_filter is not None:
+        # Honour overrides from the analysis YAML + (transitively) its
+        # referenced tracker_config, so this filter sees the same
+        # thresholds the C runtime actually used during pair-log gen.
+        try:
+            ana = stuff.load_dictionary(args.analysis_yaml)
+            tcfg_path = ana.get("tracker_config")
+            ovr = (ana.get("tracker_config_overrides") or {}).get("utrack") or {}
+            ut_yaml = {}
+            if tcfg_path and os.path.isfile(tcfg_path):
+                base = stuff.load_dictionary(tcfg_path) or {}
+                ut_yaml = base.get("utrack") or {}
+            for k in ("match_thr_initial", "match_thr_high", "match_thr_low"):
+                if k in ovr:
+                    ut_yaml[k] = ovr[k]
+            if all(k in ut_yaml for k in ("match_thr_initial", "match_thr_high", "match_thr_low")):
+                match_thr_by_pass = (
+                    float(ut_yaml["match_thr_initial"]),
+                    float(ut_yaml["match_thr_high"]),
+                    float(ut_yaml["match_thr_low"]),
+                )
+        except Exception as e:
+            print(f"  [warn] match_thr lookup from analysis yaml failed: {e};"
+                  f" using defaults {match_thr_by_pass}")
+        print(f"  delta-filter: per-pass match_thr = {match_thr_by_pass}")
 
     record_chunks: List[np.ndarray] = []
     label_chunks: List[np.ndarray] = []
@@ -140,13 +186,79 @@ def main() -> None:
                 recs = recs.astype(PAIR_LOG_DTYPE, copy=False)
             except Exception as e:
                 raise SystemExit(f"Dtype mismatch in {path}: {e}")
+
+        # Cheap delta filter — mirrors the C-side
+        # utrack.match_cheap_filter_delta runtime gate. Two filters
+        # applied jointly per row:
+        #   (a) per-event: drop rows >delta below the (frame_time,
+        #       det_index) group's top pre_thr_score (out-of-contention
+        #       for the matcher's ranking)
+        #   (b) per-row: drop rows >delta below the pass's match_thr
+        #       (so far below the threshold that no plausible NN
+        #       residual could rescue them)
+        # Order matches the C runtime: (b) is the early-reject, applied
+        # first; (a) operates on the remaining rows so the per-event
+        # top reflects only "potentially acceptable" candidates.
+        n_pre_filter = int(recs.shape[0])
+        pos_pre_filter = int(labs.sum())
+        if args.delta_filter is not None and n_pre_filter > 0:
+            d = float(args.delta_filter)
+            pass_id = recs["pass_id"]
+            # Vectorised per-pass match_thr lookup (pass_id is uint8 in
+            # the schema, clipped to range).
+            thr_arr = np.asarray(match_thr_by_pass, dtype=np.float64)
+            pid_idx = np.clip(pass_id.astype(np.int32), 0, len(thr_arr) - 1)
+            row_thr = thr_arr[pid_idx]
+            pre = recs["pre_thr_score"].astype(np.float64)
+
+            keep_thr = pre >= (row_thr - d)   # gate (b)
+
+            recs_b = recs[keep_thr]; labs_b = labs[keep_thr]
+
+            if recs_b.shape[0] > 0:
+                ft = recs_b["frame_time"]; di = recs_b["det_index"]
+                order = np.lexsort((di, ft))
+                recs_s = recs_b[order]; labs_s = labs_b[order]
+                # Per-row row_thr after sorting (needed for near-thr rescue)
+                pid_s = np.clip(recs_s["pass_id"].astype(np.int32), 0, len(thr_arr) - 1)
+                row_thr_s = thr_arr[pid_s]
+                pre_s_all = recs_s["pre_thr_score"].astype(np.float64)
+                near_thr  = np.abs(pre_s_all - row_thr_s) < d
+                ft_s = recs_s["frame_time"]; di_s = recs_s["det_index"]
+                same = (ft_s[1:] == ft_s[:-1]) & (di_s[1:] == di_s[:-1])
+                starts = np.concatenate(([0], np.where(~same)[0] + 1, [len(recs_s)]))
+                keep_top = np.zeros(len(recs_s), dtype=bool)
+                for k in range(len(starts) - 1):
+                    s, e = starts[k], starts[k+1]
+                    pre_se = pre_s_all[s:e]
+                    top = pre_se.max()
+                    # Gate (a) per-event: keep if within delta of top.
+                    # Gate (a-bypass): also keep if near match_thr — NN
+                    # can flip accept/reject for those (mirrors the C
+                    # runtime near_thr exception in utrack_match.c).
+                    keep_top[s:e] = (pre_se >= (top - d)) | near_thr[s:e]
+                recs = recs_s[keep_top]
+                labs = labs_s[keep_top]
+            else:
+                recs = recs_b
+                labs = labs_b
+
         scene_id = hash(seq_name) & 0xFFFFFFFF
         scene_id_to_name[scene_id] = seq_name
         record_chunks.append(recs)
         label_chunks.append(labs)
         scene_id_chunks.append(np.full(int(recs.shape[0]), scene_id, dtype=np.uint32))
         found += 1
-        print(f"  [keep] {seq_name:50s} n={int(recs.shape[0]):8d} pos={int(labs.sum()):6d}")
+        if args.delta_filter is not None:
+            n_post = int(recs.shape[0])
+            pos_post = int(labs.sum())
+            kept_pct = 100.0 * n_post / max(n_pre_filter, 1)
+            pos_rate_pre = 100.0 * pos_pre_filter / max(n_pre_filter, 1)
+            pos_rate_post = 100.0 * pos_post / max(n_post, 1)
+            print(f"  [keep] {seq_name:50s} n={n_post:8d}/{n_pre_filter:<8d} "
+                  f"({kept_pct:5.1f}%)  pos%: {pos_rate_pre:4.1f}→{pos_rate_post:4.1f}")
+        else:
+            print(f"  [keep] {seq_name:50s} n={int(recs.shape[0]):8d} pos={int(labs.sum()):6d}")
 
     if found == 0:
         raise SystemExit("No pair-log NPZs found; nothing to build.")
