@@ -172,6 +172,7 @@ if __name__ == '__main__':
     parser.add_argument('--mot', action='store_true', help='make MOT sequences')
     parser.add_argument('--personpath22', action='store_true', help='make PersonPath22 sequences')
     parser.add_argument('--personpath22-amodal', action='store_true', help='use amodal (occluded) boxes for PersonPath22 instead of visible')
+    parser.add_argument('--jaad', action='store_true', help='make JAAD sequences')
     parser.add_argument('--cevo', action='store_true', help='make new CEVO videos')
     parser.add_argument('--test', type=str, default=None, help='test yaml file')
     parser.add_argument('--search', type=str, default=None, help='search config yaml file')
@@ -198,6 +199,9 @@ if __name__ == '__main__':
     if opt.personpath22:
         variant = "amodal" if opt.personpath22_amodal else "visible"
         ts.convert_personpath22(anno_variant=variant)
+        exit()
+    if opt.jaad:
+        ts.convert_jaad()
         exit()
     if opt.cevo:
         ts.convert_cevo()
