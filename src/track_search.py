@@ -108,6 +108,44 @@ def search_test(
     return val, full_result
 
 
+def eval_track(yaml_file):
+    """Single-pass parallel evaluation via the existing multi-process
+    work queue. The yaml mirrors the search yaml minus search_params:
+
+      tests:          one or more {test_key: {config: ..., min_interval: ...}}
+      datasets:       {clip_name: {path: ..., split: ...}}   (split optional)
+      num_workers:    int (1–8 typical; 4 is the recommended default)
+      columns:        list of "key,header,fmt" strings
+      sort_key:       column to sort the report by (e.g. fitness or mota)
+      results_location: optional dir for the persisted .txt report
+
+    Compared to bench/eval_head_fitness this:
+      - shares loaded detector engines across the work queue
+        (no per-clip process spinup);
+      - evaluates multiple tracker variants in a single run (cartesian
+        product of tests × datasets);
+      - surfaces dead workers fast via mp_workqueue's liveness check
+        instead of hanging on result_queue.get(timeout=300).
+
+    Returns the aggregated results list (_overall + per-clip).
+    """
+    config = stuff.load_dictionary(yaml_file)
+    if "num_workers" not in config:
+        config["num_workers"] = 4
+    if "sort_key" not in config:
+        config["sort_key"] = "fitness"
+    if "columns" not in config:
+        config["columns"] = [
+            "num_frames,FR,{:5.0f}",
+            "fp_tracks,FPTr,{:5.0f}",
+            "fp_per_frame,FPpf,{:5.2f}",
+            "mota,MOTA,{:6.3f}",
+            "fitness,FIT,{:6.3f}",
+        ]
+    return track_test.track_test(config, split=None,
+                                  desc=f"eval {yaml_file}")
+
+
 def search_track(yaml_file):
     config = stuff.load_dictionary(yaml_file)
     result_log_file = config["result_log_file_path"]
