@@ -569,7 +569,7 @@ def train(args):
                 e_obs_now = model.encode_obs(ob)
                 e_combined = (1.0 - args.alpha) * et + args.alpha * e_obs_now
             logit_res = model.head(e_combined, e_det, pf)
-            logit = pb + lam * logit_res
+            logit = (lam * logit_res) if args.no_prethr_fusion else (pb + lam * logit_res)
             losses = bce(logit, yb)
             loss = (losses * wb).sum() / wb.sum().clamp(min=1.0)
             opt.zero_grad(set_to_none=True)
@@ -587,7 +587,7 @@ def train(args):
                 e_obs_va = model.encode_obs(obs_va_g)
                 e_combined_va = (1.0 - args.alpha) * e_track_va_g + args.alpha * e_obs_va
             logit_res_va = model.head(e_combined_va, e_det_va, pair_va_g)
-            logit_va = (pre_va_g + lam * logit_res_va).cpu().numpy()
+            logit_va = ((lam * logit_res_va) if args.no_prethr_fusion else (pre_va_g + lam * logit_res_va)).cpu().numpy()
         va_auc = auc(logit_va, y_va.astype(bool))
         a_mot17_02 = auc(logit_va[m_mot17_02], y_va[m_mot17_02].astype(bool)) if m_mot17_02.sum() > 50 else 0.0
         a_oh008 = auc(logit_va[m_oh008], y_va[m_oh008].astype(bool)) if m_oh008.sum() > 50 else 0.0
@@ -617,7 +617,7 @@ def train(args):
             e_obs_va = model.encode_obs(obs_va_g)
             e_combined_va = (1.0 - args.alpha) * e_track_va_g + args.alpha * e_obs_va
         logit_res_va = model.head(e_combined_va, e_det_va, pair_va_g)
-        logit_va = (pre_va_g + lam * logit_res_va).cpu().numpy()
+        logit_va = ((lam * logit_res_va) if args.no_prethr_fusion else (pre_va_g + lam * logit_res_va)).cpu().numpy()
 
     print(f"\n=== Final (best epoch) val AUC = {best_va:.5f}  Δ={best_va-base_va:+.5f} ===")
     print(f"  Per-scene AUC:")
@@ -705,6 +705,11 @@ def main():
                         "the OF-warped `subbox_diou_warped` value (same dim, "
                         "different semantics). Requires v3 corpus. Trained "
                         "head needs runtime flag `subdiou_warped: true`.")
+    p.add_argument("--no-prethr-fusion", action="store_true",
+                   help="Train NN as a standalone classifier — logit = "
+                        "lam·residual instead of pre_thr_score + lam·residual. "
+                        "Tests whether the NN can replace the heuristic blend "
+                        "entirely. Not deployable in C as-is.")
     p.add_argument("--drop-features", default="",
                    help="Comma-separated feature names to drop from any view "
                         "they appear in. Errors on unknown names. Use the "

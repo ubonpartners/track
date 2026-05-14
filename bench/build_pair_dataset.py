@@ -91,6 +91,16 @@ def main() -> None:
                          "what this dataset is.")
     args = ap.parse_args()
 
+    from bench._pipeline_checks import (
+        assert_file_exists, assert_dir_has_files,
+    )
+    assert_file_exists(args.analysis_yaml, "--analysis-yaml")
+    # Pair-log dir must hold at least 30 npz — anything lower means
+    # the previous stage failed silently. The full pair-log dataset
+    # is ~178 clips so 30 is a very generous floor.
+    assert_dir_has_files(args.pair_log_dir, ext=".npz", min_count=30,
+                         label="--pair-log-dir")
+
     scenes = _scenes_for_split(args.analysis_yaml, args.split)
     if not scenes:
         raise SystemExit(

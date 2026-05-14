@@ -62,7 +62,8 @@ SCENE_COL_DEFAULTS = {
 
 def build_input_matrix_no_state(rec: np.ndarray, *,
                                  with_scene: bool = False,
-                                 with_face: bool = False) -> np.ndarray:
+                                 with_face: bool = False,
+                                 no_phase3_feature: bool = False) -> np.ndarray:
     """(N, 19), (N, 25) or (N, 28) float32 — state-agnostic per-frame feature
     vector. `with_face` requires `with_scene` and appends 3 face-conf
     columns at slots 25-27.
@@ -104,6 +105,13 @@ def build_input_matrix_no_state(rec: np.ndarray, *,
     n = len(rec)
     def _f(name):
         return rec[name].astype(np.float32).reshape(-1, 1)
+    # `no_phase3_feature` zeros column 7 (phase3_pair_score). Combined
+    # with zeroing weight_ih_l0[:, 7] at export time, this severs the
+    # state head's dependence on the match-cost NN — the dominant
+    # circular dependency in the train→deploy loop. See feedback note
+    # feedback_track_phase3_decouple.md.
+    phase3_col = (np.zeros((n, 1), dtype=np.float32) if no_phase3_feature
+                  else _f("phase3_pair_score"))
     cols = [
         _f("matched"),
         np.log1p(_f("observations")),
@@ -112,7 +120,7 @@ def build_input_matrix_no_state(rec: np.ndarray, *,
         np.log1p(_f("scene_density")),
         _f("det_conf"),
         _f("prev_det_conf"),
-        _f("phase3_pair_score"),
+        phase3_col,
         _f("near_edge"),
         _f("det_w"),
         _f("det_h"),
@@ -326,6 +334,7 @@ def pack_decoupled_batch(track_groups: List[np.ndarray],
                          X: np.ndarray,
                          label_row: np.ndarray,
                          logrem_row: np.ndarray,
+                         weight_row: np.ndarray,
                          t_max: int,
                          train: bool,
                          rng: np.random.Generator):
@@ -334,12 +343,15 @@ def pack_decoupled_batch(track_groups: List[np.ndarray],
     label_row    — per-row training label (match-fraction, broadcast).
     logrem_row   — per-row log1p(remaining_lifetime). For TP-flagged rows
                    this is log1p(rem_TP); for FP-flagged it's log1p(rem_FP).
+    weight_row   — per-row corpus weight (e.g. fitness_fp_boost amplifies
+                   FP-track rows so BCE loss reflects deployment cost).
     t_max        — max sequence length in the batch (random crop in train).
 
-    Returns (X_b, label_b, logrem_b, pad, row_index) where row_index[B, T]
-    is the row's index within the source track (random-crop-aware): 0 for
-    row at actual track-start, increasing thereafter. Padding rows have
-    row_index=-1 (filtered downstream by `pad`).
+    Returns (X_b, label_b, logrem_b, weight_b, pad, row_index) where
+    row_index[B, T] is the row's index within the source track
+    (random-crop-aware): 0 for row at actual track-start, increasing
+    thereafter. Padding rows have row_index=-1 (filtered downstream by
+    `pad`).
     """
     B = len(picks)
     starts: List[int] = []
@@ -358,6 +370,7 @@ def pack_decoupled_batch(track_groups: List[np.ndarray],
     pad       = np.zeros((B, T_b),         dtype=bool)
     label_b   = np.zeros((B, T_b),         dtype=np.float32)
     logrem_b  = np.zeros((B, T_b),         dtype=np.float32)
+    weight_b  = np.zeros((B, T_b),         dtype=np.float32)
     row_index = np.full((B, T_b), -1,      dtype=np.int32)
 
     for bi, (gi, s, L) in enumerate(zip(picks, starts, lens)):
@@ -366,11 +379,13 @@ def pack_decoupled_batch(track_groups: List[np.ndarray],
         pad[bi, :L]       = True
         label_b[bi, :L]   = label_row[rows]
         logrem_b[bi, :L]  = logrem_row[rows]
+        weight_b[bi, :L]  = weight_row[rows]
         row_index[bi, :L] = np.arange(s, s + L, dtype=np.int32)
 
     return (torch.from_numpy(X_b),
             torch.from_numpy(label_b),
             torch.from_numpy(logrem_b),
+            torch.from_numpy(weight_b),
             torch.from_numpy(pad),
             torch.from_numpy(row_index))
 
@@ -422,7 +437,30 @@ def main():
     p.add_argument("--first-rows-n",      type=int,   default=2,
                    help="How many rows from each track's start get the "
                         "--first-rows-weight multiplier on BCE.")
+    p.add_argument("--no-phase3-feature", action="store_true",
+                   help="Zero column 7 (phase3_pair_score) at training, AND "
+                        "zero the input-to-hidden GRU weights on column 7 "
+                        "before save. Severs the only state-head input that "
+                        "depends on the match-cost NN — eliminates the "
+                        "circular pair-log/match/state dependency that has "
+                        "regressed every clean-recipe retrain. The exported "
+                        ".bin will ignore whatever C feeds at index 7.")
     args = p.parse_args()
+
+    from bench._pipeline_checks import (
+        assert_file_exists, assert_row_count, PipelineCheckError,
+    )
+    assert_file_exists(args.train, "--train")
+    assert_file_exists(args.val,   "--val")
+    if args.pos_weight <= 0:
+        raise PipelineCheckError(
+            f"--pos-weight must be > 0 (got {args.pos_weight}). "
+            f"Zero/negative pos_weight collapses the BCE loss silently."
+        )
+    if args.first_rows_weight <= 0:
+        raise PipelineCheckError(
+            f"--first-rows-weight must be > 0 (got {args.first_rows_weight})."
+        )
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -433,15 +471,42 @@ def main():
     train_meta = require_npz_meta(args.train)
     rec_tr = np.load(args.train, allow_pickle=False)["records"]
     print(f"  corpus comment: {train_meta.get('comment')!r}", flush=True)
+    # State corpus floor: any production-grade corpus has 100k+ rows.
+    # Falling below this floor means an upstream stage dropped data
+    # silently (missing pair-log npz, wrong split, etc.).
+    assert_row_count(len(rec_tr), min_rows=100_000,
+                     label=f"train corpus {args.train}")
     print(f"loading {args.val}",   flush=True)
     val_meta = require_npz_meta(args.val)
     rec_va = np.load(args.val,   allow_pickle=False)["records"]
     print(f"  corpus comment: {val_meta.get('comment')!r}", flush=True)
+    assert_row_count(len(rec_va), min_rows=10_000,
+                     label=f"val corpus {args.val}")
 
-    X_tr = build_input_matrix_no_state(rec_tr, with_scene=args.with_scene or args.with_face, with_face=args.with_face)
-    X_va = build_input_matrix_no_state(rec_va, with_scene=args.with_scene or args.with_face, with_face=args.with_face)
+    X_tr = build_input_matrix_no_state(
+        rec_tr, with_scene=args.with_scene or args.with_face,
+        with_face=args.with_face,
+        no_phase3_feature=args.no_phase3_feature,
+    )
+    X_va = build_input_matrix_no_state(
+        rec_va, with_scene=args.with_scene or args.with_face,
+        with_face=args.with_face,
+        no_phase3_feature=args.no_phase3_feature,
+    )
     in_dim = X_tr.shape[1]
     print(f"train rows: {len(rec_tr)}  val rows: {len(rec_va)}  in_dim={in_dim}", flush=True)
+    if args.no_phase3_feature:
+        # Sanity-check: column 7 should literally be zeros everywhere.
+        # Without this the experiment is silently invalid.
+        nz = float((X_tr[:, 7] != 0.0).any())
+        if nz:
+            raise RuntimeError(
+                "no_phase3_feature flag set but X_tr[:, 7] has non-zero "
+                f"entries (nonzero fraction={nz:.4f}). Bug in masking."
+            )
+        print("  no_phase3_feature ENABLED: column 7 is zeroed in inputs;"
+              " will also zero GRU weight_ih_l0[:, 7] before save.",
+              flush=True)
 
     print("computing labels (match-fraction) ...", flush=True)
     label_tr, rem_tp_tr, rem_fp_tr = compute_match_fraction_and_lifetimes(rec_tr)
@@ -458,6 +523,22 @@ def main():
           f"rem_TP mean={rem_tp_tr.mean():.2f}s rem_FP mean={rem_fp_tr.mean():.2f}s",
           flush=True)
     print(f"  val:   label mean={label_va.mean():.3f}", flush=True)
+
+    # Per-row corpus weight (e.g. fitness_fp_boost upweights FP-track rows
+    # so BCE loss tracks deployment fitness instead of uniform per-row AUC).
+    # Older corpora may lack the field — fall back to ones so legacy
+    # behaviour is unchanged.
+    if "weight" in rec_tr.dtype.names:
+        weight_tr = rec_tr["weight"].astype(np.float32)
+        weight_va = rec_va["weight"].astype(np.float32)
+        nontrivial = float((weight_tr != 1.0).mean())
+        print(f"  train weight: min={weight_tr.min():.3f} "
+              f"max={weight_tr.max():.3f} mean={weight_tr.mean():.3f} "
+              f"non-1.0 rows: {nontrivial:.1%}", flush=True)
+    else:
+        weight_tr = np.ones(len(rec_tr), dtype=np.float32)
+        weight_va = np.ones(len(rec_va), dtype=np.float32)
+        print("  train weight: not in corpus dtype — using uniform 1.0", flush=True)
 
     print("grouping by (sequence, track_id) ...", flush=True)
     groups_tr = group_rows_by_track(rec_tr)
@@ -494,26 +575,31 @@ def main():
         n_b = 0
         for i in range(0, len(perm), bs):
             picks = perm[i:i+bs].tolist()
-            X_b, label_b, logrem_b, pad, row_index = pack_decoupled_batch(
-                groups_tr, picks, X_tr, label_tr, logrem_tr,
+            X_b, label_b, logrem_b, weight_b, pad, row_index = pack_decoupled_batch(
+                groups_tr, picks, X_tr, label_tr, logrem_tr, weight_tr,
                 t_max=args.t_max, train=True, rng=rng)
             X_b       = X_b.to(device, non_blocking=True)
             label_b   = label_b.to(device, non_blocking=True)
             logrem_b  = logrem_b.to(device, non_blocking=True)
+            weight_b  = weight_b.to(device, non_blocking=True)
             pad       = pad.to(device, non_blocking=True)
             row_index = row_index.to(device, non_blocking=True)
 
             llr_l, mtp_l, mfp_l, _ = model(X_b)
 
             # BCE on llr_logit against the (broadcast) match-fraction label.
-            # Optionally up-weight the first N rows (track creation), where
-            # the GRU has minimal accumulated context and the diagnostic
-            # data shows systematic underprediction. row_index[bi, t] gives
-            # the row's actual index within the track (random-crop-aware,
-            # so a randomly-cropped sub-window doesn't get the bonus).
+            # row_w combines three multipliers:
+            #   * pad           — drops padded rows from the loss.
+            #   * first_rows_w  — up-weights the first N rows of each track
+            #                     (per --first-rows-weight) so the GRU's
+            #                     near-empty hidden state still gets pressure.
+            #   * weight_b      — per-row corpus weight. fitness_fp_boost
+            #                     upweights rows belonging to FP-final
+            #                     tracks so the BCE gradient pulls toward
+            #                     deployment-fitness avoidance of those.
             bce_per = F.binary_cross_entropy_with_logits(
                 llr_l, label_b, pos_weight=pos_weight, reduction="none")
-            row_w = pad.float()
+            row_w = pad.float() * weight_b
             if args.first_rows_weight != 1.0:
                 first_n_mask = (row_index >= 0) & (row_index < args.first_rows_n)
                 row_w = torch.where(first_n_mask,
@@ -551,8 +637,8 @@ def main():
             for i in range(0, len(order_va), eval_bs):
                 picks = order_va[i:i+eval_bs].tolist()
                 T_picks = max(len(groups_va[gi]) for gi in picks)
-                X_b, label_b, logrem_b, pad, _ = pack_decoupled_batch(
-                    groups_va, picks, X_va, label_va, logrem_va,
+                X_b, label_b, logrem_b, _wt_b, pad, _ = pack_decoupled_batch(
+                    groups_va, picks, X_va, label_va, logrem_va, weight_va,
                     t_max=T_picks, train=False, rng=rng)
                 X_b = X_b.to(device, non_blocking=True)
                 llr_l, mtp_l, mfp_l, _ = model(X_b)
@@ -590,10 +676,31 @@ def main():
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
     print(f"\nbest score = {best_score:.4f}", flush=True)
+
+    # If --no-phase3-feature, also zero the GRU weights that read input
+    # column 7. The PyTorch GRU's input-to-hidden weight is stored as
+    # weight_ih_l0 of shape (3*hidden, in_dim). Zeroing column 7 of that
+    # tensor makes the layer's output exactly identical regardless of
+    # whatever the C tracker feeds at index 7 — so the deployed head is
+    # truly independent of the match-cost NN's pair score.
+    if args.no_phase3_feature:
+        w = best_state["gru.weight_ih_l0"]   # shape (3*hidden, in_dim)
+        before_l1 = float(w[:, 7].abs().sum())
+        w[:, 7] = 0.0
+        after_l1  = float(w[:, 7].abs().sum())
+        # Defensive check: confirm the zeroing took.
+        if after_l1 != 0.0:
+            raise RuntimeError(
+                f"weight_ih_l0[:, 7] zeroing failed: L1 after={after_l1}"
+            )
+        print(f"  zeroed gru.weight_ih_l0[:, 7] "
+              f"(L1 before={before_l1:.4f} → after=0.0)", flush=True)
+
     from bench._artefact_meta import make_pt_meta
     hparams = {
         "in_dim": in_dim, "hidden": args.hidden, "n_outputs": 3,
         "best_score": float(best_score),
+        "no_phase3_feature": bool(args.no_phase3_feature),
     }
     save = {
         "state_dict": best_state,

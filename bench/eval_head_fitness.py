@@ -242,8 +242,19 @@ def make_yaml_with_state_bin(state_bin: str, base_yaml: str | None = None,
     other params from `base_yaml` (defaults to current /mldata prod).
     Extra `utrack_overrides` (e.g. {"new_track_thr": 0.05}) are
     merged into cfg["utrack"]."""
+    from bench._pipeline_checks import (
+        assert_file_exists, validate_utrack_overrides,
+    )
     if base_yaml is None:
         base_yaml = "/mldata/config/track/trackers/uc_v11.yaml"
+    assert_file_exists(base_yaml, "--base")
+    assert_file_exists(state_bin, "--state-bin")
+    if utrack_overrides:
+        # Validate user-supplied overrides against the C source's known
+        # keys; NN-state mode is always active here (we're plugging in
+        # state_bin), so dead-under-NN keys are rejected too.
+        validate_utrack_overrides(utrack_overrides, nn_state_active=True,
+                                  label="--utrack-override")
     cfg = yaml.safe_load(open(base_yaml))
     cfg["utrack"]["nn_state_path"] = state_bin
     if utrack_overrides:
@@ -310,6 +321,29 @@ def main():
     if args.config and args.state_bin:
         sys.exit("Specify either --config OR --state-bin, not both")
     if args.config:
+        from bench._pipeline_checks import (
+            assert_file_exists, validate_utrack_overrides,
+            assert_tracker_bins_present,
+        )
+        assert_file_exists(args.config, "--config")
+        # Surface dead/typo keys in the actual eval YAML, and verify NN
+        # bin / detector engine paths so the C tracker can't fail later
+        # with an opaque load error.
+        _eval_cfg_dict = yaml.safe_load(open(args.config))
+        _ut = (_eval_cfg_dict or {}).get("utrack") or {}
+        validate_utrack_overrides(
+            {k: v for k, v in _ut.items()
+             if k not in ("nn_path", "nn_state_path", "nn_lambda")},
+            nn_state_active=bool(_ut.get("nn_state_path")),
+            label=f"{args.config}#utrack",
+        )
+        assert_tracker_bins_present(
+            nn_path=_ut.get("nn_path"),
+            nn_state_path=_ut.get("nn_state_path"),
+            detector_engine=(((_eval_cfg_dict or {}).get("inference_config") or {})
+                             .get("detection") or {}).get("trt"),
+            label=args.config,
+        )
         cfg = args.config
     elif args.state_bin:
         cfg = make_yaml_with_state_bin(args.state_bin, args.base,
