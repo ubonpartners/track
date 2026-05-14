@@ -91,7 +91,7 @@ class upyc_tracker:
             track_shared=remote_cli.c_track_shared_state(yaml_string)
             self.md=track_shared.get_model_description()
             track_stream=remote_cli.c_track_stream(track_shared)
-            track_stream.set_frame_intervals(track_min_interval, 120.0)
+            track_stream.set_frame_intervals(track_min_interval, -1.0)  # -1 = leave at yaml default
             track_stream.run_on_video_file(h264_file, remote_cli.SIMPLE_DECODER_CODEC_H264, fps, False)
         else:
             logging.debug(f"upyc create")
@@ -99,7 +99,7 @@ class upyc_tracker:
             self.md=track_shared.get_model_description()
             track_stream=upyc.c_track_stream(track_shared)
             track_stream.set_name(name)
-            track_stream.set_frame_intervals(track_min_interval, 120.0)
+            track_stream.set_frame_intervals(track_min_interval, -1.0)  # -1 = leave at yaml default
             logging.debug(f"upyc run")
             track_stream.run_on_video_file(h264_file, upyc.SIMPLE_DECODER_CODEC_H264, fps, False)
 
