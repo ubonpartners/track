@@ -45,6 +45,7 @@ KNOWN_UTRACK_KEYS: Set[str] = {
     "kf_cmc_enabled",
     "kf_d2_enabled", "kf_d2_weight",
     "kf_fps_scale", "kf_warmup", "kf_weight",
+    "match_cheap_filter_delta",     # skips match NN on out-of-contention pairs
     "match_clip_to_roi",
     "match_thr_high", "match_thr_initial", "match_thr_low",
     "max_consecutive_misses",      # unified-deletion miss-count threshold
