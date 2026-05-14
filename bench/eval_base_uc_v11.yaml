@@ -1,0 +1,75 @@
+clip:
+  frame_embeddings_enabled: true
+  frame_embeddings_min_interval_seconds: 2.0
+  jpeg_max_height: 320
+  jpeg_max_width: 320
+  jpeg_min_height: 64
+  jpeg_min_width: 64
+  jpegs_enabled: true
+  object_embeddings_enabled: true
+conf_thr: 0.05
+faces:
+  embeddings_enabled: true
+  jpeg_max_height: 320
+  jpeg_max_width: 320
+  jpeg_min_height: 32
+  jpeg_min_width: 32
+  jpeg_quality: 90
+  jpegs_enabled: true
+  min_quality: 0.0005
+  min_quality_increment: 0.001
+  min_quality_multiple: 1.2
+  use_fiqa: true
+include_pending_tracks_in_roi: true
+inference_config:
+  clip:
+    trt: /mldata/models/clip/trt/mobileclip_s0_batch_fp16.trt
+  detection:
+    trt: /mldata/models/v11/engine/yolo26l-e2e-v11r-100526-qat-int8.engine
+    trt_fallback: /mldata/models/v11/engine/yolo26l-e2e-v11r-260426-fp16.engine
+  face:
+    trt: /mldata/models/facerec/trt/r18_glint360k-dyn.trt
+main_jpeg:
+  enabled: true
+  max_height: 512
+  max_width: 512
+  min_interval_seconds: 1.0
+  quality: 90
+max_height: 1280
+max_width: 1280
+motiontrack:
+  alpha: 0.9
+  beta: 0.9951
+  blur: true
+  mad_delta: 20
+  max_height: 320
+  max_width: 320
+  min_roi_after_nonskip: 0.05
+  min_roi_after_skip: 0.01
+nms_thr: 0.695
+num_worker_threads: 4
+num_worker_threads(platform:x86): 8
+tracker_type: upyc-utrack
+utrack:
+  delete_dup_iou: 0.9
+  fuse_scores: 0.99
+  kf_d2_weight: 1.92
+  kf_warmup: 0.7
+  kf_weight: 0.98
+  match_clip_to_roi: true
+  match_thr_high: 0.915
+  match_thr_initial: 0.67
+  match_thr_low: 0.022
+  new_track_thr: 0.77
+  nn_lambda: 0.05
+  nn_path: /home/mark/stuff/ubonpartners/track/bench/data/v16/nn_match_v16.bin
+  nn_state_path: /mldata/config/track/trackers/nn_state_v20_pw05.bin
+  reid_z_clip: 4.6
+  roi_expand_ratio: 0.14
+  sim_weight: 0.2
+  sim_weight_zscore: 0.042
+  track_buffer_seconds: 2.2
+  track_high_thr: 0.82
+  track_initial_thr: 0.045
+  track_low_thr: 0.355
+  vbox_expand: 0.232
