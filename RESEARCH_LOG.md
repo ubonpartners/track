@@ -502,6 +502,37 @@ a *structural* mechanism get more prior mass with wider `sd`.
     where the count formulation could not. Falsified if it also decouples
     or over-charges (then need GT-trajectory-aware matching).
   correlated_with: [honest-fp-threshold-sweep, honest-fp-track-metric-definition]
+  status: confirmed   # 20260515 exp#6: FRAME formulation VALIDATED — joint
+                      # gate PASSED, nm='track' θ∈[0.3,0.6], predicted
+                      # crossover present, P 0.55→~0.90. Candidate frozen
+                      # ruler θ=0.5/nm=track. See Experiment Log. Spawns
+                      # child honest-fp-frame-metric-wire-live (GATED next).
+
+- slug: honest-fp-frame-metric-wire-live
+  category: measurement
+  cost_class: medium           # 1 smoke eval + 1 clean full-pipeline cycle
+  source: agent
+  primary_axis: measurement
+  depends_on: honest-fp-frame-metric
+  mechanism: >
+    exp#6 validated the FRAME honest-FP ruler offline (θ=0.5,
+    nm_policy='track'). Make it real: wire `_honest_fp_frames_core` into
+    live compute_metrics as side-channel `fp_frames_honest`(+breakdown);
+    re-run offline==live correctness gate on a smoke set (guaranteed by
+    construction but verify §8.1); FREEZE θ/nm/code-hash in front-matter;
+    one clean full-pipeline cycle reporting the frozen ruler beside
+    fitness (re-pin baseline); then adjust training to optimise the
+    honest ruler instead of the gamed fp_tracks term.
+  prior_p_win: 0.85           # mostly engineering; risk = a live≠offline
+                              # surprise or pipeline integration breakage
+  prior_effect: {mean: 0.000, sd: 0.000}
+  prediction: >
+    Live fp_frames_honest == offline _honest_fp_frames_core on every
+    smoke clip (0 mismatch). Clean full cycle completes; frozen ruler
+    reproduces exp#6 clean_frac≈0.06–0.16 on the fresh ship eval.
+    Falsified if live≠offline, or the fresh clean ratio departs the
+    exp#6 band (→ corpus-sensitivity; re-open formulation).
+  correlated_with: [honest-fp-frame-metric, honest-fp-threshold-sweep]
   status: open
 
 - slug: poseflow-box-warp
@@ -999,12 +1030,60 @@ Entry schema (copy for each new experiment):
   honest-fp-frame-metric -> DECISIVE next, prior 0.45->0.60
 - artifacts: RESEARCH_OUT/20260515-honest-fp-threshold-sweep/
 
---- next: honest-fp-frame-metric (DECISIVE) — charge FP by surviving
-    spatially-excursive FP-frames / track-seconds (merging keeps the
-    frames; brief benign coast = few frames). Reuses cached dumps ->
-    first pass offline & cheap. If it satisfies BOTH crit-3 & crit-1 it
-    becomes the frozen honest ruler (campaign reset, re-pin). Ruler
-    unfrozen; no tracker promotion until then (§3/§4.5) ---
+### 20260515-honest-fp-frame-metric   [win(measurement) — VALIDATION]
+- selected: DECISIVE next after exp#5 falsified the segment-COUNT family
+- primary_axis: measurement
+- prior: p_win=0.55 (a joint band exists for the FRAME formulation),
+  effect~N(0,0)
+- change: add pure `_honest_fp_frames_core` to track_test.py (side-
+  channel; fitness UNTOUCHED) — count surviving FP *frames*, per-frame
+  spatial-gated, in lead/lag/bridge of matched tracks; NO length
+  threshold (exp#5's L-vs-θ coupling removed). nm_policy='track'
+  mirrors gamed (never-matched not the gaming vector). Offline sweep
+  imports the live core (no reimplementation).
+- preflight (§8.1): chain-integrity gate PASS — |dFPvol|/|dGamed|=0.331
+  reproduces the exp#3-5 exploit signature exactly → inputs are the
+  exp#5-validated chain (offline==live, 615 clips 0 mismatch there);
+  fixed a misleading hard-coded annotation before trusting the log
+- eval: reuse exp#5 cached dumps+JSONs via symlink (no scatter);
+  deterministic offline recompute, 18-cell sweep + breakdown probe
+- evidence (full176, nm='track'): joint-OK at θ∈[0.3,0.6] —
+  clean_frac 0.163/0.061 (≤0.50), crit-1 0.992/0.864 (∈[0.8,1.25]).
+  The pre-registered clean-vs-decoupling **crossover EXISTS**: clean
+  falls monotone 0.95→0.16→0.06→0.02 while crit-1 stays ≈1 then
+  collapses at θ≥1.0 (vs exp#5's monotone-opposite no-crossover).
+  Non-degenerate: nm = 52/15750 (0.3%); honest reports the REAL
+  dFPvol=−0.179 not the gamed dGamed=−0.539 (smoking-gun property).
+  nm='frames' has no band (never-matched dominates) — confirms the
+  principled nm='track' choice.
+- update: pre-registered joint gate MET with margin and the
+  specifically-predicted crossover; P(FRAME formulation freezable)
+  0.55 → ~0.90. First honest-FP formulation to PASS.
+- prediction check: HELD — removing the length threshold broke the
+  exp#5 coupling exactly as hypothesised; a θ window with clean low
+  AND crit-1≈1 exists
+- decision: win(measurement) — promote FRAME formulation to **candidate
+  frozen honest ruler** (θ=0.5, nm_policy='track'). fitness still
+  untouched; ruler not yet frozen (needs the downstream gated steps).
+- baseline: unchanged; campaign stays §3/§4.5 until ruler frozen
+- bank curation: honest-fp-frame-metric → confirmed(FRAME VALIDATED,
+  candidate ruler θ=0.5/nm=track); honest-fp-threshold-sweep family
+  closed; spawn child honest-fp-frame-metric-wire-live (next).
+- artifacts: RESEARCH_OUT/20260515-honest-fp-frame-metric/
+
+--- next: honest-fp-frame-metric-wire-live (GATED, not exploratory) —
+    1) wire `_honest_fp_frames_core` into live compute_metrics as a
+    side-channel metric `fp_frames_honest`(+nm/lead/lag/bridge),
+    θ=0.5 nm_policy='track', reuse the dump contract; re-run the
+    offline==live correctness gate on a smoke set (guaranteed by
+    construction — pure fn of dumped inputs — but verify per §8.1).
+    2) FREEZE the ruler (θ, nm_policy, code hash) in RESEARCH_LOG
+    front-matter. 3) clean full-pipeline cycle reporting the frozen
+    ruler beside fitness (re-pin baseline). 4) adjust training to
+    follow the honest ruler (campaign reset — gamed fp_tracks is what
+    training currently optimises). Only after (3) may a tracker be
+    promoted on honest-measured improvement. fitness stays untouched
+    until the ruler is frozen (§3/§4.5). ---
 
 ## Progress curve
 
@@ -1020,4 +1099,13 @@ measurement track:
        P≈0.97). Campaign pivots to honest-metric-definition before
        further fitness-measured tracker work is trusted. Prior
        fp_tracks-dominated wins (F5d ship, DAgger) flagged SUSPECT.
+  20260515 honest-fp-threshold-sweep  [win(measurement) — FALSIFICATION]
+    => segment-COUNT honest-FP family ruled out (no joint band over
+       225 cells; clean vs decoupling monotone-opposite, no crossover).
+  20260515 honest-fp-frame-metric  [win(measurement) — VALIDATION]
+    => FRAME formulation PASSES the joint gate (first to do so):
+       nm='track' θ∈[0.3,0.6] clean_frac 0.16/0.06, crit-1 0.99/0.86,
+       predicted crossover present, P 0.55→~0.90. Candidate frozen
+       honest ruler θ=0.5/nm='track'. Next: wire-live + freeze +
+       clean re-pin + training adoption (fitness untouched until then).
 ```

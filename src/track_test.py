@@ -270,6 +270,106 @@ def _honest_fp_core(events_by_hid, cd_frames,
     }
 
 
+def _honest_fp_frames_core(events_by_hid, cd_frames,
+                           theta=2.0, nm_policy="track"):
+    """Frame-resolution honest-FP measure (experiment
+    20260515-honest-fp-frame-metric). The fp_tracks gaming exploit
+    *merges* an unrelated FP run onto a matched track: the unique-track
+    count drops but the wrong (FP) *frames* stay. So count surviving FP
+    frames, gated PER FRAME by spatial excursion, in exactly the
+    lead/lag/bridge regions of a matched track where merging hides them.
+
+    The segment-COUNT formulation was FALSIFIED (exp#5): a length
+    threshold L fights theta — as theta rises clean drops but crit-1
+    decoupling drops with it, monotone-opposite, no joint band. The
+    frame metric removes the length threshold entirely: a legit
+    occlusion coast stays near the local anchor model every frame
+    (non-excursive, length irrelevant) so it is never charged however
+    long; a gamed/teleport merge sits far from the model so its frames
+    are charged. The theta-response is therefore hypothesised to be
+    qualitatively different (a clean/decoupling crossover can exist).
+
+    Per hyp track HId (events sorted by frame):
+      - never-matched track: NOT the gaming vector (the gamed metric
+        already counts it 1, honestly); nm_policy 'track' charges 1
+        (mirror gamed -> keeps crit-3 on a track-count scale),
+        'frames' charges its FP-frame count (sensitivity check).
+      - else: FP frames before first match = lead (model = first
+        matched centroid, held); after last match = lag (model = last
+        matched centroid, held); between two matched anchors = bridge
+        (model = linear interp of the two bounding matched centroids).
+      - charge each FP frame whose hyp centroid deviates from its
+        local model by > theta box-diagonals. Missing geometry ->
+        conservative (charge the frame; theta-only when cd_frames None).
+
+    Pure: identical inputs/logic for the live path and the offline
+    sweep (no reimplementation), same dump contract as
+    `_honest_fp_core`. Side-channel only; does not touch `fitness`.
+    """
+
+    def cd(frameid, hid):
+        if cd_frames is None or frameid >= len(cd_frames):
+            return None
+        return cd_frames[frameid].get(hid)
+
+    def exc(c, ex, ey, diag):
+        if c is None:
+            return True                       # no geometry -> conservative
+        diag = diag or 1.0
+        d = ((c[0] - ex) ** 2 + (c[1] - ey) ** 2) ** 0.5 / diag
+        return d > theta
+
+    total = nm = lead = lag = bridge = 0
+    for hid, seq in events_by_hid.items():
+        fids = [f for f, _ in seq]
+        is_fp = [tc == 0 for _, tc in seq]
+        matched_pos = [i for i, (_, tc) in enumerate(seq) if tc == 1]
+        if not matched_pos:
+            c = (len([1 for f in is_fp if f]) if nm_policy == "frames"
+                 else 1)
+            total += c; nm += c
+            continue
+        first_m, last_m = matched_pos[0], matched_pos[-1]
+
+        ca = cd(fids[first_m], hid)
+        for i in range(0, first_m):
+            if is_fp[i] and (ca is None or
+                             exc(cd(fids[i], hid), ca[0], ca[1], ca[2])):
+                total += 1; lead += 1
+
+        cz = cd(fids[last_m], hid)
+        for i in range(last_m + 1, len(seq)):
+            if is_fp[i] and (cz is None or
+                             exc(cd(fids[i], hid), cz[0], cz[1], cz[2])):
+                total += 1; lag += 1
+
+        fa, anch_a = fids[first_m], cd(fids[first_m], hid)
+        run = []
+        for i in range(first_m + 1, last_m + 1):
+            if is_fp[i]:
+                run.append(i)
+            else:
+                fb, anch_b = fids[i], cd(fids[i], hid)
+                for j in run:
+                    if anch_a is None or anch_b is None or fb == fa:
+                        total += 1; bridge += 1
+                        continue
+                    w = (fids[j] - fa) / (fb - fa)
+                    ex = anch_a[0] + w * (anch_b[0] - anch_a[0])
+                    ey = anch_a[1] + w * (anch_b[1] - anch_a[1])
+                    dg = 0.5 * (anch_a[2] + anch_b[2])
+                    if exc(cd(fids[j], hid), ex, ey, dg):
+                        total += 1; bridge += 1
+                fa, anch_a = fb, anch_b
+                run = []
+    return {
+        "honest_fp_frames": int(total),
+        "nm": int(nm), "leadin": int(lead),
+        "lagout": int(lag), "bridge": int(bridge),
+        "thresholds": {"theta": theta, "nm_policy": nm_policy},
+    }
+
+
 def compute_metrics(gt, test,
                     max_duration=1000,
                     frame_metrics=False,
