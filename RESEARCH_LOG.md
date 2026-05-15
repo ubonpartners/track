@@ -423,7 +423,7 @@ a *structural* mechanism get more prior mass with wider `sd`.
     iter2 exploit (then the temporal-only def is insufficient — escalate
     to the spatial gate / FP-frame metric).
   correlated_with: [honest-fp-threshold-sweep, honest-fp-spatial-gate]
-  status: open
+  status: confirmed   # 20260515 crit-3 FAIL@v0: clean ship honest/gamed=31x; see Exp Log
 
 - slug: honest-fp-threshold-sweep
   category: measurement
@@ -880,9 +880,39 @@ Entry schema (copy for each new experiment):
   training-coupled to the eventual frozen honest ruler
 - artifacts: RESEARCH_OUT/20260515-honest-fp-track-metric-definition/
 
---- next: honest-fp-cleanconfig-falsealarm (crit-3, cheap) then
-    honest-fp-threshold-sweep (crit-2, cheap) — finish validating the
-    ruler before any fitness-measured tracker work (§3/§4.5) ---
+### 20260515-honest-fp-cleanconfig-falsealarm   [win(measurement)]
+- selected: next gating validation after exp#2 (crit-3 false-alarm)
+- primary_axis: measurement
+- prior: p_win=0.55 (P a sane band gives clean honest≈gamed), effect~N(0,0)
+- change: none (read-only eval of deployed ship uc_v11); 1-test frozen eval
+- preflight (§8.1): containment tree incl logs/ created BEFORE launch
+  (prior lesson applied); sharded 1-test, frozen corpus, ~1m34s;
+  liveness-confirmed; metric already crit-1 validated → no new smoke
+- eval: RESEARCH_OUT/20260515-honest-fp-cleanconfig-falsealarm/eval/results-20260515-0937.json
+- evidence (CLEAN ship uc_v11=v13+v23_pw05, frozen):
+    full176 gamed fp_tracks 84 vs honest 2608 = 31.0x (lagout 1098 +
+    bridge 1364 dominate; fully=53≈gamed); jaad 2 vs 7 = 3.5x.
+- update: false-alarm worry CONFIRMED not falsified; P(temporal-only v0
+  usable)≈0.05; P(spatial gate required)≈0.85
+- prediction check: predicted "≫1x ⇒ thresholds too aggressive" — HELD,
+  severely (31x). Key inference: gaming and legit occlusion share the
+  SAME temporal signature; only SPATIAL info separates them ⇒ spatial
+  gate is critical-path, temporal-only band likely doesn't exist.
+- decision: win(measurement) — decisive verdict prevents freezing a
+  broken ruler. Ruler NOT frozen; campaign stays §3/§4.5.
+- baseline: unchanged; no fitness-measured tracker promotion
+- bank curation: honest-fp-cleanconfig-falsealarm → confirmed;
+  honest-fp-spatial-gate prior↑ + re-tagged critical-path (next pick);
+  honest-fp-threshold-sweep prior↓ + sequenced AFTER the spatial gate
+  (run jointly); honest-fp-track-metric-definition stays validating
+  (crit-1 pass, crit-3 fail@v0)
+- artifacts: RESEARCH_OUT/20260515-honest-fp-cleanconfig-falsealarm/
+
+--- next: honest-fp-spatial-gate (now critical-path, medium) — add the
+    spatial-excursion criterion to the bridge/lag rule so legit occlusion
+    (spatially consistent) is NOT charged while teleport/merge IS; then
+    honest-fp-threshold-sweep jointly. Ruler stays unfrozen; no
+    fitness-measured tracker promotion until crit-2&3 pass (§3/§4.5) ---
 
 ## Progress curve
 
