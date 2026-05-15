@@ -370,6 +370,19 @@ def _honest_fp_frames_core(events_by_hid, cd_frames,
     }
 
 
+# ===== FROZEN honest ruler (exp#6 20260515-honest-fp-frame-metric) =====
+# The FRAME formulation is the first honest-FP measure to PASS the joint
+# gate (segment-COUNT was FALSIFIED, exp#5). These two constants ARE the
+# freeze: nm_policy='track' joint-OK at theta in [0.3,0.6] (clean_frac
+# 0.16/0.06, crit-1 0.99/0.86); theta=0.5 is the centre with margin.
+# Changing either value re-opens the ruler and MUST be a logged
+# Experiment-Log event (RESEARCH_LOG.md), never a silent edit. fitness
+# (fitness_score) still does NOT read this — side-channel until a clean
+# full-pipeline re-pin promotes it (§3/§4.5).
+HONEST_FP_FRAME_THETA = 0.5
+HONEST_FP_FRAME_NM = "track"
+
+
 def compute_metrics(gt, test,
                     max_duration=1000,
                     frame_metrics=False,
@@ -560,6 +573,17 @@ def compute_metrics(gt, test,
             metrics_dict["fp_honest_leadin"]  = hfp["leadin"]
             metrics_dict["fp_honest_lagout"]  = hfp["lagout"]
             metrics_dict["fp_honest_bridge"]  = hfp["bridge"]
+            # FROZEN frame ruler (exp#6) — same in-memory ev/cd inputs the
+            # offline sweep was correctness-gated on, so live==offline by
+            # construction. Side-channel; fitness untouched.
+            hff = _honest_fp_frames_core(ev_by_hid, hyp_cd_frames,
+                                         theta=HONEST_FP_FRAME_THETA,
+                                         nm_policy=HONEST_FP_FRAME_NM)
+            metrics_dict["fp_frames_honest"]   = hff["honest_fp_frames"]
+            metrics_dict["fp_fhonest_nm"]      = hff["nm"]
+            metrics_dict["fp_fhonest_leadin"]  = hff["leadin"]
+            metrics_dict["fp_fhonest_lagout"]  = hff["lagout"]
+            metrics_dict["fp_fhonest_bridge"]  = hff["bridge"]
         except Exception as _e:  # never let instrumentation break the eval
             # logging.warning has no handler in spawn workers -> invisible;
             # write to fd 2 which the eval captures.
@@ -571,6 +595,11 @@ def compute_metrics(gt, test,
             metrics_dict["fp_honest_leadin"]  = 0
             metrics_dict["fp_honest_lagout"]  = 0
             metrics_dict["fp_honest_bridge"]  = 0
+            metrics_dict["fp_frames_honest"]  = 0
+            metrics_dict["fp_fhonest_nm"]     = 0
+            metrics_dict["fp_fhonest_leadin"] = 0
+            metrics_dict["fp_fhonest_lagout"] = 0
+            metrics_dict["fp_fhonest_bridge"] = 0
         # Threshold-sweep cache (exp 20260515-honest-fp-threshold-sweep):
         # SEPARATE from the honest try so a dump failure is LOUD (the sweep
         # corpus must be complete; a silent gap would bias the verdict). A
@@ -1092,6 +1121,8 @@ def _summary_metric_keys():
         "num_misses", "num_switches",
         "fp_tracks_honest", "fp_honest_fully", "fp_honest_leadin",
         "fp_honest_lagout", "fp_honest_bridge",   # exp 20260515-honest-fp-metric-def
+        "fp_frames_honest", "fp_fhonest_nm", "fp_fhonest_leadin",
+        "fp_fhonest_lagout", "fp_fhonest_bridge",  # exp#6 FROZEN frame ruler
     ]
 
 

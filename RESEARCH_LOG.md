@@ -31,6 +31,13 @@ objective_order:   [fitness, idf1, speed, simplicity]  # lexicographic; fitness 
 artifact_root:     RESEARCH_OUT          # one folder per experiment under here; zero scatter
 baseline_ref:      null   # set at bootstrap: {fitness, mota, idf1, fp_tracks, speed, provenance}
 promotion_gate:    [candidate_confirmed, full_pipeline_clean, overall_better_metrics]
+honest_ruler:                            # FROZEN exp#6 20260515-honest-fp-frame-metric
+  metric:          fp_frames_honest      # src.track_test._honest_fp_frames_core
+  theta:           0.5                    # box-diagonals; joint-OK band θ∈[0.3,0.6]
+  nm_policy:       track                  # never-matched mirrors gamed (=1 each)
+  status:          frozen                 # live==offline gate PASS (smoke 3/3, 0 mismatch)
+  fitness_uses_it: false                  # side-channel until clean full-pipeline re-pin (§3/§4.5)
+  change_is:       logged_experiment_event # editing θ/nm re-opens the ruler — never silent
 ```
 
 > Bootstrap has not yet run. `sigma` is the prior 0.003 until measured;
@@ -1071,19 +1078,46 @@ Entry schema (copy for each new experiment):
   closed; spawn child honest-fp-frame-metric-wire-live (next).
 - artifacts: RESEARCH_OUT/20260515-honest-fp-frame-metric/
 
---- next: honest-fp-frame-metric-wire-live (GATED, not exploratory) —
-    1) wire `_honest_fp_frames_core` into live compute_metrics as a
-    side-channel metric `fp_frames_honest`(+nm/lead/lag/bridge),
-    θ=0.5 nm_policy='track', reuse the dump contract; re-run the
-    offline==live correctness gate on a smoke set (guaranteed by
-    construction — pure fn of dumped inputs — but verify per §8.1).
-    2) FREEZE the ruler (θ, nm_policy, code hash) in RESEARCH_LOG
-    front-matter. 3) clean full-pipeline cycle reporting the frozen
-    ruler beside fitness (re-pin baseline). 4) adjust training to
-    follow the honest ruler (campaign reset — gamed fp_tracks is what
-    training currently optimises). Only after (3) may a tracker be
-    promoted on honest-measured improvement. fitness stays untouched
-    until the ruler is frozen (§3/§4.5). ---
+### 20260515-honest-fp-frame-metric-wire-live   [win(measurement) — GATED]
+- selected: pre-registered child of exp#6 (make the validated ruler real)
+- primary_axis: measurement
+- prior: p_win=0.85 (mostly engineering; risk = live≠offline surprise)
+- change: live compute_metrics now emits side-channel `fp_frames_honest`
+  (+fp_fhonest_nm/leadin/lagout/bridge) via the SAME pure
+  `_honest_fp_frames_core` on the in-memory ev/cd inputs; frozen-ruler
+  constants HONEST_FP_FRAME_THETA=0.5 / _NM='track' with a "changing
+  this re-opens the ruler" banner; keys added to _summary_metric_keys;
+  except-branch zero-fills. fitness_score UNTOUCHED (grep-verified).
+- preflight (§8.1): re-read the live honest block, spliced into the
+  existing try (pure reuse, no new compute path); smoke = 3 datasets,
+  num_workers 3, ~7s
+- eval: RESEARCH_OUT/20260515-honest-fp-frame-metric/eval_smoke +
+  dump_smoke; correctness gate verify_live.py
+- evidence: live `fp_frames_honest` == offline `_honest_fp_frames_core`
+  @ frozen θ=0.5/nm='track', 3/3 clips, 0 mismatch (FP clip 5==5, clean
+  clips 0==0). Live wiring faithful; ruler correctly frozen.
+- update: prediction (live==offline) HELD; P 0.85→~0.98 (residual =
+  the fresh-corpus clean-ratio check, deferred to the re-pin cycle)
+- prediction check: HELD — 0 mismatch as constructed
+- decision: ruler FROZEN in front-matter (honest_ruler: status frozen,
+  fitness_uses_it false). win(measurement).
+- baseline: unchanged; campaign stays §3/§4.5 (fitness still untouched)
+- bank curation: honest-fp-frame-metric-wire-live → confirmed; spawn
+  child honest-fp-frame-metric-repin (clean full-pipeline re-pin, next)
+- artifacts: RESEARCH_OUT/20260515-honest-fp-frame-metric/ (smoke.yaml,
+  verify_live.py, eval_smoke/, dump_smoke/, logs/)
+
+--- next: honest-fp-frame-metric-repin (GATED) — one clean full-pipeline
+    cycle (retrain → build → eval, STOP_AFTER=1) with the now-frozen
+    side-channel ruler reported beside fitness, to (a) re-pin baseline_ref
+    {fitness,mota,idf1,fp_tracks,fp_frames_honest,speed,provenance} and
+    (b) confirm the fresh-corpus clean fp_frames_honest reproduces the
+    exp#6 band (clean_frac ~0.06–0.16) — falsified ⇒ corpus-sensitive,
+    re-open formulation. Pre-flight §8.1 on the pipeline entrypoint
+    (fail-fast liveness). THEN honest-fp-train-adopt: switch the training
+    objective from gamed fp_tracks to the frozen ruler (campaign reset —
+    its own pre-registered experiment, K-seed). fitness stays untouched
+    until the re-pin cycle promotes the ruler (§3/§4.5). ---
 
 ## Progress curve
 
