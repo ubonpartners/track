@@ -46,8 +46,9 @@ honest_ruler:                            # FROZEN exp#6 20260515-honest-fp-frame
   metric:          fp_frames_honest      # src.track_test._honest_fp_frames_core
   theta:           0.5                    # box-diagonals; joint-OK band θ∈[0.3,0.6]
   nm_policy:       track                  # never-matched mirrors gamed (=1 each)
-  status:          frozen-INTERIM         # live==offline+re-pin PASS, generalises — BUT exp#7: FRAGMENTATION-BLIND (volume only; does not capture multiplicity fp_tracks exists for)
-  fitness_uses_it: false                  # side-channel; honest-fp-train-adopt ON HOLD until a fragmentation-aware ruler passes (exp#7) — §3/§4.5
+  status:          superseded-pending     # exp#6 was frozen-INTERIM (volume-only, FRAGMENTATION-BLIND). exp#9 honest-fp-gt-runlen PASSED the joint gate as a fragmentation-aware COUNT (candidate) — supersedes once operating point fixed + wired live + re-pinned
+  candidate_ruler: _honest_fp_gt_runlen_core  # exp#9 PASS; op point (θ_gt,Lmin,g_gap) = product definition, user to fix; band spans Lmin 3→20
+  fitness_uses_it: false                  # side-channel; honest-fp-train-adopt UN-blocked, pending op-point + wire-live + re-pin — §3/§4.5
   change_is:       logged_experiment_event # editing θ/nm re-opens the ruler — never silent
 ```
 
@@ -1195,24 +1196,78 @@ Entry schema (copy for each new experiment):
   honest-fitness (cheaper fallback)
 - artifacts: RESEARCH_OUT/20260515-honest-fp-episode-count/
 
---- next: honest-fp-iou-gt (DECISIVE) — the trilemma's blind spot is the
-    REFERENCE MODEL: a crude linear interp of the hyp's own motion mislabels
-    legit non-linear/occluded motion as excursive, forcing the
-    persistence-threshold compromise that kills count formulations. Replace
-    the reference with GROUND TRUTH: charge an FP frame by distance/IoU to
-    the actual GT boxes present that frame ("far from EVERY real object?").
-    GT knows the object's location through detector-missed occlusions, so
-    benign coasts are near-GT (not charged) and phantoms far-from-all-GT
-    (charged) — short OR long → episodes countable on a GT-grounded gate may
-    finally get all 3. Caveat: cached dumps have NO GT geometry → needs ONE
-    new instrumented eval dump (cheap eval, not a free sweep); §8.1
-    pre-flight, background run_in_background ONLY. CHEAPER FALLBACK to weigh
-    first: decomposed honest fitness = fp_frames_honest (volume; B+C,
-    validated) + raw standalone-phantom-track count (already honest — a
-    merge can't cut it without truly deleting the phantom — = the
-    user-facing multiplicity for things users mostly see as separate hits);
-    no new dump. honest-fp-train-adopt stays ON HOLD; fitness UNTOUCHED
-    until a fragmentation-aware honest ruler passes (§3/§4.5). ---
+### 20260515-honest-fp-iou-gt   [win(measurement) — FALSIFICATION]
+- selected: pre-registered exp#7 next; trilemma blind-spot = reference model
+- primary_axis: measurement
+- prior: p_win=0.5 (GT-grounded gate breaks the self-interp confound)
+- change: side-channel — capture per-frame GT box geometry (gt_cd_frames)
+  in compute_metrics + pure `_honest_fp_iou_gt_core` (FP frame
+  contaminating iff far from EVERY GT object that frame). fitness untouched.
+- preflight (§8.1): criteria pre-registered; fresh instrumented eval
+  (run_in_background ONLY — re-pin lesson applied), gt-miss=0 verified,
+  import-checked before the multi-min eval
+- eval: fresh ship+iter1/iter2 instrumented dumps (carry gt_cd_frames);
+  24-cell offline sweep. NOTE re-pin (10:45) retrained iter1 ⇒ fresh chain
+  (gamed 140, |dFPvol|/|dGamed|=0.269); within-batch design preserves
+  internal validity (§4.4); chain gate PASS.
+- evidence: NO joint band; same monotone-opposite shape as exp#5/#7
+  despite the BEST possible reference (ground truth). COUNT family
+  falsified 3 independent ways.
+- update: P(GT COUNT) 0.5→~0.03. SHARPENED DIAGNOSIS (the value): the
+  blocker is NOT the reference model — it is COUNT DISCRETISATION over a
+  noisy per-frame signal (every short blip = 1; suppressant threshold
+  fights the gate). Volume escapes (exp#6) but is fragmentation-blind.
+- prediction check: HELD (falsification branch); diagnosis sharpened
+- decision: not adopted. ONE structurally-distinct config left:
+  GT-grounded + min-run-length (exp#9, pre-committed LAST attempt).
+- baseline: unchanged (interim ruler exp#6)
+- bank curation: honest-fp-iou-gt → confirmed(GT COUNT FALSIFIED); spawn
+  honest-fp-gt-runlen (LAST post-hoc-ruler attempt)
+- artifacts: RESEARCH_OUT/20260515-honest-fp-iou-gt/
+
+### 20260515-honest-fp-gt-runlen   [win(measurement) — BREAKTHROUGH/VALIDATION]
+- selected: pre-committed LAST post-hoc-ruler attempt (GT ref + Lmin)
+- primary_axis: measurement
+- prior: p_win=0.45 (targets the exact exp#5↔exp#8 gap; COUNT family had
+  a strong losing prior)
+- change: pure side-channel `_honest_fp_gt_runlen_core` — count contiguous
+  contaminating-FP runs of length ≥ Lmin (GT-grounded gate; matched frame
+  hard-ends a run). fitness untouched.
+- preflight (§8.1): criteria pre-registered; reuses exp#8 GT dumps
+  (offline, cheap); import-checked
+- eval: 90-cell offline sweep (θ_gt×Lmin×g_gap) on the exp#8 chain;
+  chain gate PASS (|dFPvol|/|dGamed|=0.269)
+- evidence: **14 JOINT-OK cells**, contiguous g_gap-invariant band
+  (θ_gt 0.5–1.0, Lmin 3–20). Centre θ_gt=0.75/Lmin=8–12: clean
+  0.8–1.4×, crit-1 0.92–1.02; |dHonest|≈0.18 ≈ real |dFPvol|=0.179
+  (NOT the gamed −66%). First fragmentation-aware COUNT to pass BOTH.
+- update: P(joint band, GT run-length) 0.45→~0.93. Mechanism predicted
+  & confirmed: GT grounding removes the exp#5 Lmin↔θ confound; Lmin
+  filters GT-annotation-gap artifacts (not real FPs).
+- prediction check: HELD — the predicted decoupled joint band exists
+- decision: **candidate fragmentation-aware FROZEN ruler**. Operating
+  point (θ_gt, Lmin, g_gap) is a PRODUCT definition (Lmin = "GT-far
+  stretch length that counts as a real FP vs an annotation gap") —
+  deferred to user (band spans Lmin 3→20, all PASS). Then gated:
+  wire live → correctness gate → re-pin → honest-fp-train-adopt.
+- baseline: unchanged until re-pin; ruler candidate (not yet frozen)
+- bank curation: honest-fp-gt-runlen → confirmed(PASS); COUNT family
+  reopened-and-solved via GT+Lmin; honest-fp-train-adopt UN-blocks
+  pending operating point + wire-live + re-pin
+- artifacts: RESEARCH_OUT/20260515-honest-fp-gt-runlen/
+
+--- next: honest-fp-gt-runlen-adopt (GATED) — 1) user fixes operating
+    point (θ_gt, Lmin, g_gap) per the product definition of "a real FP"
+    (band spans Lmin 3→20; smaller Lmin honours 'brief blip = real FP',
+    clean ~1.9×; Lmin 8–12 treats sub-Lmin GT-far as annotation-gap noise,
+    clean ~0.8–1.4×; all PASS). 2) wire `_honest_fp_gt_runlen_core` live
+    as side-channel at the fixed point; offline==live correctness gate on
+    a smoke set. 3) FREEZE (replace the exp#6 interim volume ruler). 4)
+    clean full-pipeline re-pin reporting it beside fitness. 5)
+    honest-fp-train-adopt: switch the training objective from gamed
+    fp_tracks to THIS ruler (first sanctioned fitness change, K-seed vs
+    re-pinned baseline). Background run_in_background ONLY (re-pin lesson).
+    fitness UNTOUCHED until step 4 (§3/§4.5). ---
 
 ## Progress curve
 
@@ -1251,4 +1306,17 @@ measurement track:
        clean-robustness}. Ruler = exp#6 INTERIM (volume-only);
        train-adopt ON HOLD. Next: honest-fp-iou-gt (GT-grounded gate)
        / decomposed honest fitness (volume + standalone-phantom count).
+  20260515 honest-fp-iou-gt  [win(measurement) — FALSIFICATION]
+    => GT-grounded COUNT also fails identically (3rd falsification).
+       Diagnosis sharpened: blocker is COUNT DISCRETISATION over a noisy
+       per-frame signal, NOT the reference model. Last idea: GT + Lmin.
+  20260515 honest-fp-gt-runlen  [win(measurement) — BREAKTHROUGH]
+    => GT-grounded contaminating runs + min-run-length L: 14 JOINT-OK
+       cells, contiguous g_gap-invariant band (θ_gt 0.5–1.0, Lmin 3–20).
+       FIRST fragmentation-aware COUNT honest-FP ruler to PASS both
+       crit-1 & crit-3 (clean ≈1× gamed, honest tracks REAL FP volume
+       not the gamed −66%). GT grounding removed the exp#5 Lmin↔θ
+       confound; Lmin filters GT-annotation-gap artifacts. Candidate
+       frozen ruler. Next: fix op-point (product defn) → wire live →
+       re-pin → honest-fp-train-adopt resumes against it.
 ```

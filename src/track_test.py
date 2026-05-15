@@ -479,6 +479,202 @@ def _honest_fp_episodes_core(events_by_hid, cd_frames,
     }
 
 
+def _honest_fp_iou_gt_core(events_by_hid, cd_frames, gt_cd_frames,
+                           theta_gt=1.0, g_gap=0):
+    """GT-GROUNDED honest-FP (experiment 20260515-honest-fp-iou-gt).
+
+    exp#5/#7 trilemma: from self-consistency geometry (hyp vs its own
+    linear-interp motion) you get <=2 of {count semantics, gaming-
+    resistance, clean-robustness}. The blind spot is the REFERENCE: a
+    crude self-interp mislabels legit non-linear/occluded motion as
+    excursive, forcing a persistence threshold that kills counts.
+
+    Fix: ground the gate in GROUND TRUTH. An FP hyp frame is
+    *contaminating* iff its box is far from EVERY real GT object that
+    frame (min normalised centroid distance to any GT > theta_gt), OR
+    there is no GT object at all that frame (a detection with zero real
+    objects nearby is a pure phantom), OR hyp geometry is missing
+    (conservative). GT knows where the real object is even through a
+    detector-missed occlusion, so a benign coast sits near a GT (not
+    charged) and a phantom/teleport is far from all GT (charged) —
+    SHORT OR LONG, no persistence threshold needed.
+
+    Per the user's harm ruling (a contaminated stretch of an otherwise-
+    real track is a DISTINCT defect, as bad as a separate phantom), the
+    primary output is a COUNT: standalone phantom tracks (never matched
+    = 1 each, == gamed) + every connected run of contaminating FP frames
+    inside a matched track = 1 track-equivalent defect. `g_gap` bridges
+    <= that many non-contaminating FP frames within one run; a MATCHED
+    frame always ends a run (real object re-acquired -> a later
+    contaminating run is a NEW distinct defect the user sees). Also
+    reports the contaminating-frame SUM (volume view).
+
+    Pure: identical inputs/logic for the live path and the offline
+    sweep. `gt_cd_frames[frameid][gid]=(cx,cy,diag,l,t,w,h)`. Side-
+    channel only; does not touch `fitness`.
+    """
+
+    def hd(frameid, hid):
+        if cd_frames is None or frameid >= len(cd_frames):
+            return None
+        return cd_frames[frameid].get(hid)
+
+    def contaminating(frameid, hid):
+        c = hd(frameid, hid)
+        if c is None:
+            return True                       # no geometry -> conservative
+        if gt_cd_frames is None or frameid >= len(gt_cd_frames):
+            return True
+        gts = gt_cd_frames[frameid]
+        if not gts:
+            return True                       # detection, zero real objects
+        best = min(
+            (((c[0] - g[0]) ** 2 + (c[1] - g[1]) ** 2) ** 0.5
+             / (0.5 * (c[2] + g[2]) or 1.0))
+            for g in gts.values())
+        return best > theta_gt                # far from EVERY GT object
+
+    def episodes(flags):
+        n = 0
+        in_ep = False
+        gap = 0
+        for f in flags:
+            if f:
+                if not in_ep:
+                    n += 1
+                    in_ep = True
+                gap = 0
+            elif in_ep:
+                gap += 1
+                if gap > g_gap:
+                    in_ep = False
+        return n
+
+    total = nm = inrun = fsum = 0
+    for hid, seq in events_by_hid.items():
+        is_fp = [tc == 0 for _, tc in seq]
+        matched_pos = [i for i, (_, tc) in enumerate(seq) if tc == 1]
+        if not matched_pos:
+            total += 1; nm += 1
+            continue
+        flags = []
+        for i, (fid, _tc) in enumerate(seq):
+            if is_fp[i]:
+                con = contaminating(fid, hid)
+                flags.append(con)
+                if con:
+                    fsum += 1
+            else:
+                flags.append(False)           # matched frame ends a run
+        e = episodes(flags)
+        total += e; inrun += e
+    return {
+        "honest_fp_iou_gt": int(total),
+        "nm": int(nm), "inrun_episodes": int(inrun),
+        "contam_frames": int(fsum),
+        "thresholds": {"theta_gt": theta_gt, "g_gap": g_gap},
+    }
+
+
+def _honest_fp_gt_runlen_core(events_by_hid, cd_frames, gt_cd_frames,
+                              theta_gt=1.0, l_min=8, g_gap=2):
+    """GT-grounded honest-FP COUNT with a minimum contiguous-run length
+    (experiment 20260515-honest-fp-gt-runlen). The LAST post-hoc-ruler
+    attempt (pre-committed).
+
+    exp#5/#7/#8 falsified the COUNT family. Sharpened diagnosis: the
+    blocker is COUNT DISCRETISATION over a noisy per-frame signal — a
+    clean tracker emits MANY SHORT far-from-everything blips, each
+    counted as 1. exp#5 tried a min-run-length but on SELF-INTERP
+    *unmatched* runs, where legit occlusions also look like long runs,
+    so L fought theta. exp#8 used the correct GT-grounded "contaminating"
+    definition but NO min length, so blips exploded clean. This is the
+    untested combination: GT-grounded contaminating runs **with** L_min.
+
+    Mechanism: under GT grounding a legit occlusion coast is near the
+    (GT-known) object => NOT contaminating => never a long contaminating
+    run. Clean detector noise = SHORT contaminating runs. A gamed
+    phantom-merge = a SUSTAINED contaminating run. So L_min separates
+    clean(short) from gamed(long) and no longer fights theta_gt because
+    the legit-occlusion confound that coupled them in exp#5 is removed by
+    GT grounding.
+
+        honest = # of contiguous contaminating-FP runs whose contaminating
+                 length >= l_min (g_gap non-contaminating FP frames
+                 bridged within a run; a MATCHED frame hard-ends a run =
+                 real object re-acquired, a later run is a NEW defect).
+        never-matched track: its FP run is scored by the SAME rule (a
+        real phantom is far from GT for >= l_min frames => 1; a GT-missed
+        real object stays near GT => 0, correctly not a phantom).
+
+    Fragmentation-aware COUNT (satisfies the user's harm ruling: a
+    contaminated stretch is a distinct defect). Pure; same dump contract.
+    Side-channel only; does not touch `fitness`.
+    """
+
+    def hd(frameid, hid):
+        if cd_frames is None or frameid >= len(cd_frames):
+            return None
+        return cd_frames[frameid].get(hid)
+
+    def contaminating(frameid, hid):
+        c = hd(frameid, hid)
+        if c is None:
+            return True
+        if gt_cd_frames is None or frameid >= len(gt_cd_frames):
+            return True
+        gts = gt_cd_frames[frameid]
+        if not gts:
+            return True
+        best = min(
+            (((c[0] - g[0]) ** 2 + (c[1] - g[1]) ** 2) ** 0.5
+             / (0.5 * (c[2] + g[2]) or 1.0))
+            for g in gts.values())
+        return best > theta_gt
+
+    total = nm = inrun = 0
+    for hid, seq in events_by_hid.items():
+        matched = any(tc == 1 for _, tc in seq)
+        clen = 0          # contaminating frames in the current run
+        gap = 0           # consecutive non-contaminating FP frames
+        active = False
+
+        def close_run(n):
+            return 1 if n >= l_min else 0
+
+        runs = 0
+        for i, (fid, tc) in enumerate(seq):
+            if tc == 1:                       # matched -> hard end of run
+                if active:
+                    runs += close_run(clen)
+                active = False; clen = 0; gap = 0
+                continue
+            # tc == 0 (FP frame)
+            if contaminating(fid, hid):
+                if not active:
+                    active = True; clen = 0
+                clen += 1; gap = 0
+            elif active:
+                gap += 1
+                if gap > g_gap:
+                    runs += close_run(clen)
+                    active = False; clen = 0; gap = 0
+        if active:
+            runs += close_run(clen)
+
+        total += runs
+        if matched:
+            inrun += runs
+        else:
+            nm += runs
+    return {
+        "honest_fp_gt_runlen": int(total),
+        "nm": int(nm), "inrun_episodes": int(inrun),
+        "thresholds": {"theta_gt": theta_gt, "l_min": l_min,
+                        "g_gap": g_gap},
+    }
+
+
 # ===== FROZEN honest ruler (exp#6 20260515-honest-fp-frame-metric) =====
 # The FRAME formulation is the first honest-FP measure to PASS the joint
 # gate (segment-COUNT was FALSIFIED, exp#5). These two constants ARE the
@@ -542,6 +738,12 @@ def compute_metrics(gt, test,
     # frame, keyed by hyp track_id == motmetrics HId (auto_id order ==
     # update-call order == this list's index). Cheap; only read post-loop.
     hyp_cd_frames=[]
+    # Parallel per-acc.update() GT box geometry for the GT-grounded
+    # honest-FP gate (exp 20260515-honest-fp-iou-gt). Same index == same
+    # accumulator frame as hyp_cd_frames. {gt_id:(cx,cy,diag,l,t,w,h)}
+    # — full box so the offline gate can use IoU or centroid distance.
+    # Side-channel only; dumped, never read by fitness.
+    gt_cd_frames=[]
 
     if show_pbar:
         pbar=tqdm(total=int(duration/time_incr),
@@ -620,6 +822,11 @@ def compute_metrics(gt, test,
                 tid=int(r[0]); l,tp,w,h=float(r[1]),float(r[2]),float(r[3]),float(r[4])
                 cd[tid]=(l+w*0.5, tp+h*0.5, (w*w+h*h)**0.5)
             hyp_cd_frames.append(cd)
+            gd={}
+            for r in gt_dets:
+                gid=int(r[0]); l,tp,w,h=float(r[1]),float(r[2]),float(r[3]),float(r[4])
+                gd[gid]=(l+w*0.5, tp+h*0.5, (w*w+h*h)**0.5, l, tp, w, h)
+            gt_cd_frames.append(gd)
         t+=time_incr
         if show_pbar:
             pbar.update(1)
@@ -724,6 +931,7 @@ def compute_metrics(gt, test,
                     pickle.dump({"ds_key": honest_dump_tag,
                                  "events_by_hid": ev_by_hid,
                                  "cd_frames": hyp_cd_frames,
+                                 "gt_cd_frames": gt_cd_frames,
                                  "gamed_fp_tracks": int(num_false_positive_tracks)},
                                 _f, protocol=5)
                 os.replace(tmp, fin)   # atomic; never a half-written pkl
