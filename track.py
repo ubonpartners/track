@@ -164,7 +164,7 @@ if __name__ == '__main__':
     parser.add_argument('--cevo', action='store_true', help='make new CEVO videos')
     parser.add_argument('--test', type=str, default=None, help='test yaml file')
     parser.add_argument('--search', type=str, default=None, help='search config yaml file')
-    parser.add_argument('--eval',   type=str, default=None, help='single-pass parallel eval yaml (cartesian product of tests × datasets via mp_workqueue, 4 workers by default)')
+    parser.add_argument('--eval',   type=str, default=None, help='single-pass parallel eval yaml (cartesian product of tests × datasets via mp_workqueue; num_workers defaults to "auto" — 4 workers for ≤1 GPU, 2×N for N>1 GPUs)')
     parser.add_argument('--track', action='store_true', help='test tracker on a single sequence')
     parser.add_argument('--compare', type=str, default=None, help='compare multiple sets of tracking results')
     parser.add_argument('--display', action='store_true', help='visualise results')
