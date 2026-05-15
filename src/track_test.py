@@ -167,30 +167,58 @@ def _honest_fp_tracks(df, hyp_cd_frames=None,
 
     Invariant: honest_fp_tracks >= gamed fp_tracks.
     """
-    MATCHED = {"MATCH", "SWITCH", "TRANSFER", "MIGRATE", "ASCEND"}
+    ev = _events_by_hid_from_df(df)
+    return _honest_fp_core(ev, hyp_cd_frames, l_lead, l_lag, g_max, theta)
+
+
+# tcode: 0 = FP (unmatched), 1 = matched-to-a-GT (MATCH/SWITCH/transfer
+# family). Rows that are neither are not emitted for an HId.
+_MATCHED_TYPES = {"MATCH", "SWITCH", "TRANSFER", "MIGRATE", "ASCEND"}
+
+
+def _events_by_hid_from_df(df):
+    """Compact, picklable per-HId event sequence from a motmetrics events
+    frame: {hid:int -> [(frameid:int, tcode:int), ...] sorted by frameid}.
+    The single source of truth consumed by both the live metric and the
+    offline threshold sweep (identical logic, no reimplementation)."""
     sub = df[df["HId"].notna() & (df["Type"] != "RAW")]
-    honest = 0
-    fully = lead = lag = bridge = 0
+    out = {}
+    for hid, g in sub.groupby("HId"):
+        g = g.sort_index(level=0)
+        seq = []
+        for fid, typ in zip(g.index.get_level_values(0), g["Type"]):
+            if typ == "FP":
+                seq.append((int(fid), 0))
+            elif typ in _MATCHED_TYPES:
+                seq.append((int(fid), 1))
+        if seq:
+            out[int(hid)] = seq
+    return out
+
+
+def _honest_fp_core(events_by_hid, cd_frames,
+                    l_lead=5, l_lag=5, g_max=10, theta=2.0):
+    """Pure honest-FP counter over the compact event structure. Used
+    identically by `_honest_fp_tracks` (live) and the offline
+    threshold-sweep, so a sweep result is exactly what the live metric
+    would have produced. `cd_frames[frameid][hid]=(cx,cy,diag)` or None."""
 
     def cd(frameid, hid):
-        if hyp_cd_frames is None or frameid >= len(hyp_cd_frames):
+        if cd_frames is None or frameid >= len(cd_frames):
             return None
-        return hyp_cd_frames[frameid].get(hid)
+        return cd_frames[frameid].get(hid)
 
     def excursive(run_fids, hid, ref_a, ref_b):
-        """True if any box in run_fids deviates > theta diagonals from the
-        a->b interpolation (ref_b=None => constant ref_a). None ref => fall
-        back to temporal (treat as excursive)."""
-        if ref_a is None:
-            return True
-        (fa, ca) = ref_a
+        if ref_a is None or ref_a[1] is None:
+            return True                       # no geometry -> conservative
+        fa, ca = ref_a
         cb = ref_b[1] if ref_b else None
         fb = ref_b[0] if ref_b else None
         worst = 0.0
         for fid in run_fids:
             c = cd(fid, hid)
             if c is None:
-                return True            # missing geometry -> conservative
+                return True
             if cb is not None and fb != fa:
                 w = (fid - fa) / (fb - fa)
                 ex, ey = ca[0] + w * (cb[0] - ca[0]), ca[1] + w * (cb[1] - ca[1])
@@ -201,15 +229,13 @@ def _honest_fp_tracks(df, hyp_cd_frames=None,
             worst = max(worst, d)
         return worst > theta
 
-    for hid, g in sub.groupby("HId"):
-        hid = int(hid)
-        g = g.sort_index(level=0)
-        fids = list(g.index.get_level_values(0))
-        types = list(g["Type"])
-        is_fp = [t == "FP" for t in types]
-        matched_pos = [i for i, t in enumerate(types) if t in MATCHED]
+    honest = fully = lead = lag = bridge = 0
+    for hid, seq in events_by_hid.items():
+        fids = [f for f, _ in seq]
+        is_fp = [tc == 0 for _, tc in seq]
+        matched_pos = [i for i, (_, tc) in enumerate(seq) if tc == 1]
         if not matched_pos:
-            honest += 1; fully += 1            # never matched -> 1 FP
+            honest += 1; fully += 1
             continue
         first_m, last_m = matched_pos[0], matched_pos[-1]
 
@@ -218,24 +244,22 @@ def _honest_fp_tracks(df, hyp_cd_frames=None,
                 lead_fids, hid, (fids[first_m], cd(fids[first_m], hid)), None):
             honest += 1; lead += 1
 
-        lag_fids = [fids[i] for i in range(last_m + 1, len(types)) if is_fp[i]]
+        lag_fids = [fids[i] for i in range(last_m + 1, len(seq)) if is_fp[i]]
         if len(lag_fids) >= l_lag and excursive(
                 lag_fids, hid, (fids[last_m], cd(fids[last_m], hid)), None):
             honest += 1; lag += 1
 
-        # bridges: FP runs bounded by the matched frames either side
         run_fids = []
         anchor_a = (fids[first_m], cd(fids[first_m], hid))
         for i in range(first_m + 1, last_m + 1):
             if is_fp[i]:
                 run_fids.append(fids[i])
-            elif types[i] in MATCHED:
+            else:                              # matched anchor
                 if len(run_fids) >= g_max:
                     anchor_b = (fids[i], cd(fids[i], hid))
                     if excursive(run_fids, hid, anchor_a, anchor_b):
                         honest += 1; bridge += 1
-                if not is_fp[i]:
-                    anchor_a = (fids[i], cd(fids[i], hid))
+                anchor_a = (fids[i], cd(fids[i], hid))
                 run_fids = []
     return {
         "honest_fp_tracks": int(honest),
@@ -255,7 +279,8 @@ def compute_metrics(gt, test,
                     eval_rate_divisor=1,
                     eval_min_framerate=30.0,
                     show_pbar=False,
-                    metrics="python"):
+                    metrics="python",
+                    honest_dump_tag=None):
     assert match_iou<0.9 and match_iou>0.1, f"stupid match_iou {match_iou}"
     start_time=min(gt.first_frame_time(), test.first_frame_time())
     t=start_time
@@ -426,20 +451,49 @@ def compute_metrics(gt, test,
         # FP for each *material* unmatched segment.
         # Store only summable scalars — display_results sum()s every result
         # key across clips, so a nested dict here would crash aggregation.
+        ev_by_hid = None
         try:
-            hfp = _honest_fp_tracks(df, hyp_cd_frames=hyp_cd_frames)
+            ev_by_hid = _events_by_hid_from_df(df)
+            hfp = _honest_fp_core(ev_by_hid, hyp_cd_frames)
             metrics_dict["fp_tracks_honest"]  = hfp["honest_fp_tracks"]
             metrics_dict["fp_honest_fully"]   = hfp["fully_unmatched"]
             metrics_dict["fp_honest_leadin"]  = hfp["leadin"]
             metrics_dict["fp_honest_lagout"]  = hfp["lagout"]
             metrics_dict["fp_honest_bridge"]  = hfp["bridge"]
         except Exception as _e:  # never let instrumentation break the eval
-            logging.warning(f"honest-fp instrumentation failed: {_e!r}")
+            # logging.warning has no handler in spawn workers -> invisible;
+            # write to fd 2 which the eval captures.
+            import traceback as _tb
+            sys.stderr.write("honest-fp compute FAILED: "
+                             + _tb.format_exc() + "\n"); sys.stderr.flush()
             metrics_dict["fp_tracks_honest"]  = num_false_positive_tracks
             metrics_dict["fp_honest_fully"]   = num_false_positive_tracks
             metrics_dict["fp_honest_leadin"]  = 0
             metrics_dict["fp_honest_lagout"]  = 0
             metrics_dict["fp_honest_bridge"]  = 0
+        # Threshold-sweep cache (exp 20260515-honest-fp-threshold-sweep):
+        # SEPARATE from the honest try so a dump failure is LOUD (the sweep
+        # corpus must be complete; a silent gap would bias the verdict). A
+        # post-eval assert (dump count == clip count) backstops this.
+        _dd = os.environ.get("HONEST_FP_DUMP_DIR")
+        if _dd and honest_dump_tag and ev_by_hid is not None:
+            import gzip
+            os.makedirs(_dd, exist_ok=True)
+            tmp = os.path.join(_dd, f".{honest_dump_tag}.tmp")
+            fin = os.path.join(_dd, f"{honest_dump_tag}.pkl.gz")
+            try:
+                with gzip.open(tmp, "wb") as _f:
+                    pickle.dump({"ds_key": honest_dump_tag,
+                                 "events_by_hid": ev_by_hid,
+                                 "cd_frames": hyp_cd_frames,
+                                 "gamed_fp_tracks": int(num_false_positive_tracks)},
+                                _f, protocol=5)
+                os.replace(tmp, fin)   # atomic; never a half-written pkl
+            except Exception:
+                import traceback as _tb
+                sys.stderr.write(f"honest-fp DUMP FAILED [{honest_dump_tag}]: "
+                                 + _tb.format_exc() + "\n"); sys.stderr.flush()
+                raise   # loud: a missing dump invalidates the sweep
 
         all_gt_ids = df['OId'].dropna().unique()
         matched_gt_ids = df.loc[df['Type'] == 'MATCH', 'OId'].unique()
@@ -769,7 +823,8 @@ def track_test_work_fn(params, mpwq_context, mpwq_progress_fn):
                            max_duration=params["max_duration"],
                            match_iou=match_iou,
                            eval_rate_divisor=eval_rate_divisor,
-                           eval_min_framerate=eval_min_framerate)
+                           eval_min_framerate=eval_min_framerate,
+                           honest_dump_tag=f'{params.get("test_key","t")}__{params.get("ds_key","ds")}')
 
     del trackset
     del trackset_gt

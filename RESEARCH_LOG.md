@@ -970,10 +970,41 @@ Entry schema (copy for each new experiment):
   definition stays validating
 - artifacts: RESEARCH_OUT/20260515-honest-fp-spatial-gate/
 
---- next: honest-fp-threshold-sweep (DECISIVE, cheap) — joint (θ,l_lead,
-    l_lag,g_max) search for clean honest/gamed∈~[0.7,2] AND iter1→iter2
-    decoupling≥~0.8 simultaneously; if no band exists pivot to
-    honest-fp-frame-metric. Ruler unfrozen; no tracker promotion (§3/§4.5) ---
+### 20260515-honest-fp-threshold-sweep   [win(measurement) — FALSIFICATION]
+- selected: DECISIVE crux after exp#4 (crit-3 vs crit-1 θ tension)
+- primary_axis: measurement
+- prior: p_win=0.35 (a joint band exists), effect~N(0,0)
+- change: refactor honest-FP -> pure _honest_fp_core (live==offline);
+  env-gated atomic per-clip dump (events+centroids) in compute_metrics;
+  offline sweep.py. Frozen fitness untouched.
+- preflight (§8.1): correctness gate offline==live 615 clips 0 mismatch;
+  dump completeness 205/410 asserted; caught+fixed silent mp dump loss;
+  extended θ grid to include θ→0 after noticing truncation of the
+  temporal-only regime — completed the frontier before concluding
+- eval: RESEARCH_OUT/20260515-honest-fp-threshold-sweep/eval_{ship,iter}/results-*.json (frozen corpus); sweep 225 cells
+- evidence (full176): as θ rises clean honest/gamed 31.8x->1.7x while
+  crit-1 decoupling 0.90->0.57 — opposite directions, NO crossover.
+  Over 225 cells max decoupling while clean-OK = 0.65 (<0.8 needed).
+  NO joint band. θ→0 reproduces exp#2 (0.88≈0.90) AND exp#3 (31x≈31.8x).
+- update: pre-registered falsification condition MET across the full θ
+  axis; P(count formulation freezable) 0.35 -> ~0.02. Exploit 0.33
+  signature now seen in 5 independent measurements.
+- prediction check: HELD — no band exists (the falsification branch)
+- decision: win(measurement) — decisive complete negative; rules out the
+  entire segment-COUNT family; prevents endless threshold-fiddling
+- baseline: unchanged; ruler still unfrozen; campaign stays §3/§4.5
+- bank curation: honest-fp-threshold-sweep -> confirmed(count FALSIFIED);
+  honest-fp-track-metric-definition + -spatial-gate -> superseded
+  (count line closed; their cache/excursion machinery REUSED);
+  honest-fp-frame-metric -> DECISIVE next, prior 0.45->0.60
+- artifacts: RESEARCH_OUT/20260515-honest-fp-threshold-sweep/
+
+--- next: honest-fp-frame-metric (DECISIVE) — charge FP by surviving
+    spatially-excursive FP-frames / track-seconds (merging keeps the
+    frames; brief benign coast = few frames). Reuses cached dumps ->
+    first pass offline & cheap. If it satisfies BOTH crit-3 & crit-1 it
+    becomes the frozen honest ruler (campaign reset, re-pin). Ruler
+    unfrozen; no tracker promotion until then (§3/§4.5) ---
 
 ## Progress curve
 
