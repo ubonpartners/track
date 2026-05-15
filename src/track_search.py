@@ -114,7 +114,8 @@ def eval_track(yaml_file):
 
       tests:          one or more {test_key: {config: ..., min_interval: ...}}
       datasets:       {clip_name: {path: ..., split: ...}}   (split optional)
-      num_workers:    int (1–8 typical; 4 is the recommended default)
+      num_workers:    int or "auto" (default: "auto" — 4 workers when ≤1 GPU
+                      is visible, 2 × N workers when N > 1 GPUs are visible)
       columns:        list of "key,header,fmt" strings
       sort_key:       column to sort the report by (e.g. fitness or mota)
       results_location: optional dir for the persisted .txt report
@@ -131,7 +132,7 @@ def eval_track(yaml_file):
     """
     config = stuff.load_dictionary(yaml_file)
     if "num_workers" not in config:
-        config["num_workers"] = 4
+        config["num_workers"] = "auto"
     if "sort_key" not in config:
         config["sort_key"] = "fitness"
     if "columns" not in config:

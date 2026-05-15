@@ -606,7 +606,7 @@ def track_test(config, split=None, desc="track test"):
     resultfile=None
     if "results_cache_file" in config:
         resultfile=config["results_cache_file"]
-    num_workers=config["num_workers"]
+    num_workers=stuff.resolve_num_workers(config["num_workers"])
     cached_results=[]
     if resultfile is not None and os.path.isfile(resultfile):
         with open(resultfile, 'rb') as handle:
