@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import stuff
 
-from src.analysis.pair_log_schema import (
+from src.pair_log_schema import (
     PAIR_LOG_DTYPE,
     PAIR_LOG_FEATURE_NAMES,
     PAIR_LOG_VERSION,

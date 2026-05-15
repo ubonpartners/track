@@ -5,7 +5,7 @@ import sys
 
 import stuff
 
-import src.analysis as analysis
+from src.pair_log import run_track_analysis
 
 
 def main() -> int:
@@ -31,9 +31,9 @@ def main() -> int:
         help="regenerate UBTRK2 files even if already present",
     )
     parser.add_argument(
-        "--show-all-metrics",
+        "--show-per-sequence",
         action="store_true",
-        help="print all weighted metrics for each variant",
+        help="print per-sequence pair-logger metrics",
     )
     args = parser.parse_args()
 
@@ -55,32 +55,29 @@ def main() -> int:
     if args.force_regen:
         config["force_regen"] = True
 
-    result = analysis.run_track_analysis(config)
+    result = run_track_analysis(config)
 
     print("Track analysis complete")
     print(f"Output root: {result['output_root']}")
     print(f"Summary JSON: {result['summary_json']}")
-    print(f"Compare JSON: {result['compare_json']}")
     print(f"Summary MD: {result['summary_md']}")
-    print(f"Compare MD: {result['compare_md']}")
 
     print("\nGeneration:")
     pprint.pprint(result["summary"]["generation"])
-    print("\nTop ranking:")
-    pprint.pprint(result["compare"].get("ranking", []))
+    print("\nAggregate metrics:")
+    pprint.pprint(result["summary"]["aggregates"])
 
-    if args.show_all_metrics:
-        print("\nAll weighted metrics by variant:")
-        weighted = result["summary"].get("weighted_mean_metrics_by_variant", {})
-        for variant in sorted(weighted.keys()):
-            print(f"\n[{variant}]")
-            metrics = weighted.get(variant, {})
-            for key in sorted(metrics.keys()):
-                value = metrics[key]
-                if value is None:
-                    print(f"  {key}: n/a")
+    if args.show_per_sequence:
+        print("\nPer-sequence metrics:")
+        per_seq = result["summary"].get("per_sequence_metrics", {})
+        for seq in sorted(per_seq.keys()):
+            print(f"\n[{seq}]")
+            for k in sorted(per_seq[seq].keys()):
+                v = per_seq[seq][k]
+                if isinstance(v, float):
+                    print(f"  {k}: {v:.6f}")
                 else:
-                    print(f"  {key}: {value:.6f}")
+                    print(f"  {k}: {v}")
     return 0
 
 

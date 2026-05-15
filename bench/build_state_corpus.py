@@ -54,8 +54,11 @@ import numpy as np
 import yaml
 
 import src.trackset as ts
-from src.analysis.modules import _best_iou_match, _gt_objects_at_time_class
-from src.analysis.pair_log_schema import (
+from src.pair_log import (
+    best_iou_match as _best_iou_match,
+    gt_objects_at_time_class as _gt_objects_at_time_class,
+)
+from src.pair_log_schema import (
     PAIR_LOG_DTYPE,
     PAIR_LOG_MAGIC,
     PAIR_LOG_VERSION,
@@ -631,7 +634,7 @@ def extract_sequence(
         magic = int(trc.get("magic", 0))
         if magic != PAIR_LOG_MAGIC:
             raise ValueError(f"{sequence_name}: trace magic mismatch")
-        from src.analysis.pair_log_schema import PAIR_LOG_DTYPE_V2 as _V2_DT
+        from src.pair_log_schema import PAIR_LOG_DTYPE_V2 as _V2_DT
         rs = int(trc.get("record_size", 0))
         if rs not in (record_size_bytes(), _V2_DT.itemsize):
             raise ValueError(
@@ -1108,7 +1111,7 @@ def extract_sequence_label_driven(
             continue
         # decode_records accepts both v2 (152) and v3 (156) byte layouts.
         # Match either; raise on anything else.
-        from src.analysis.pair_log_schema import PAIR_LOG_DTYPE_V2 as _V2_DT
+        from src.pair_log_schema import PAIR_LOG_DTYPE_V2 as _V2_DT
         rs = int(trc.get("record_size", 0))
         if rs not in (record_size_bytes(), _V2_DT.itemsize):
             raise ValueError(

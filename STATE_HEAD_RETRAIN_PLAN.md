@@ -651,7 +651,7 @@ in Phase 1g.
 ### Phase 2d — match-cost NN audit — bug found, retrain deferred
 
 Higher leverage than 2a/2b/2c but bigger scope. The match-cost NN
-labelling logic in `src/analysis/modules.py:1864` (label = "track
+labelling logic in `src/pair_log.py:1864` (label = "track
 and det aligned to same GT") looks correct and matches runtime
 semantics — no obvious bug like the state head's. The remaining
 risk is the same kind of distribution drift the state head had:
@@ -670,7 +670,7 @@ that v9 is shipping.
 
 **Resumed 2d audit after Phase 2a wrapped up**:
 
-Read `src/analysis/modules.py:1716-1900` (`evaluate_pair_logger`).
+Read `src/pair_log.py:1716-1900` (`evaluate_pair_logger`).
 Found a similar staleness bug to the state head's:
 
 `modules.py:1850`:
@@ -745,7 +745,7 @@ Replaced the per-frame emitted-objects-only update + cache-forever
 fallback in `evaluate_pair_logger` with a single up-front pass over
 distinct track_ids in the pair-trace records. UNCONFIRMED/LOST tracks
 now get fresh GT alignment every frame instead of a stale cached
-value. (`src/analysis/modules.py:1779-1849`)
+value. (`src/pair_log.py:1779-1849`)
 
 ### Phase 2e.1 — pair_log v7 regeneration
 

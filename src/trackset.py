@@ -1210,7 +1210,7 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events_list=Non
                         # the matched record, then render any track that the
                         # tracker did NOT promote into the emitted output —
                         # those are the UNCONFIRMED / LOST internal tracks.
-                        from src.analysis import pair_log_schema as _pls
+                        from src import pair_log_schema as _pls
                         try:
                             magic = debug_entry.get("magic")
                             version = debug_entry.get("version")

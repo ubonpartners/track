@@ -49,7 +49,7 @@ def _file_contains(path: Path, needles: list[str | re.Pattern]) -> list[str]:
 # (relative_path, [sentinel strings/regexes], purpose)
 PY_SENTINELS = [
     (
-        "src/analysis/pair_log_schema.py",
+        "src/pair_log_schema.py",
         ["PAIR_LOG_VERSION = 3", '"subbox_diou_warped"', "PAIR_LOG_DTYPE_V2"],
         "pair-trace v3 schema with backward-compat v2 decode",
     ),
