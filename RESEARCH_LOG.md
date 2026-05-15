@@ -252,6 +252,65 @@ a *structural* mechanism get more prior mass with wider `sd`.
 
 # ---- user-seeded ideas (2026-05-15) ---------------------------------------
 
+- slug: honest-fp-track-metric
+  category: measurement        # SPECIAL: audits/repairs the headline ruler itself
+  cost_class: cheap            # DIAGNOSIS is cheap (post-process existing ubtrk2+JSON);
+                               # the metric *fix* is medium + campaign-resetting
+  source: user
+  primary_axis: measurement    # protects every other axis; not a tracker win itself
+  touches: [analysis: track_test fp_tracks accounting vs GT spans ; ubtrk2 runs]
+  mechanism: >
+    fitness penalises *unique* FP tracks (-0.0005*fp_tracks). A unique FP
+    is a whole output track that never matches any GT. The optimizer can
+    cut that count WITHOUT removing false positives — by ID-merging an
+    (in reality unrelated) FP segment onto a true GT track, or stitching
+    two FP tracks into one. The FP frames still exist on screen; they just
+    stop being counted as a *separate* track. That is Goodhart gaming, not
+    real improvement. SMOKING GUN in our own data: 2026-05-15 optimized
+    bootstrap iter2 drove fp_tracks 103 -> 48 while MOTA collapsed
+    0.6148 -> 0.5654 — the head learned the exploit, not the task.
+    Some gamed merges are detectable post-hoc:
+      (a) lead-in/lag-out: an output track scored as a GT identity but
+          whose lifetime starts noticeably BEFORE that GT first appears
+          (or ends well AFTER it leaves) — the extra span is a hidden FP
+          absorbed by the ID match.
+      (b) spatial excursion: a "matched" track whose box is far from ANY
+          GT for a large fraction of its frames (covers background then
+          briefly touches a GT).
+      (c) teleport/merge: one output track whose trajectory has implausible
+          jumps between two disjoint FP regions (two FPs stitched to read
+          as <=1 unique FP), or MOT merge/fragment events linking an
+          unmatched segment to a matched one.
+    An "honest" FP accounting charges FP by track-segment / FP-frames that
+    survive these checks, not only by whole-never-matched tracks.
+  prior_p_win: 0.70            # P(diagnosis shows material, detectable gaming)
+  prior_effect: {mean: 0.000, sd: 0.000}   # not a tracker win; recalibrates the ruler
+  prediction: >
+    Cheap pass over the current best tracker's ubtrk2 + GT on the frozen
+    corpus, counting (a)/(b)/(c). Expect a non-trivial fraction of
+    "matched" tracks to carry a detectable lead-in/lag-out or excursion;
+    expect the iter2 (low-fp_tracks, low-MOTA) run to show MORE gamed
+    merges than iter1 — that contrast is the discriminating test. If
+    gaming is immaterial (<~2% of fp_tracks delta explained), the
+    hypothesis is FALSIFIED and fitness is trustworthy as-is (itself a
+    very valuable result — it would re-validate every prior fp_tracks
+    "win"). If material, define an honest-FP metric.
+  correlated_with: [dagger-multiiter-regression, adaptive-nn-prior, state-corpus-fp-boost]
+  status: open
+  handling_note: >
+    Special scope. RESEARCH.md §2/§3 freeze the fitness formula and eval
+    for a campaign — so the DIAGNOSIS (read-only audit of how gameable the
+    current metric is) is in-scope and top-priority *because* it tests the
+    validity of the ruler every other idea is judged by. But a confirmed
+    defect does NOT silently change the metric mid-campaign: per RESEARCH.md
+    §3 it triggers a campaign reset — freeze the honest metric, re-pin the
+    baseline by re-measuring under it, and re-judge open results. Until
+    then it cannot "promote"; its win condition is producing the audit
+    verdict, not moving fitness. This is the highest-leverage idea in the
+    bank: if the headline is gameable, prior fp_tracks-driven wins
+    (incl. F5d ship, DAgger conservatism) may be partly illusory.
+
+
 - slug: poseflow-box-warp
   category: inference          # ubon_cstuff motion-warp change; no NN retrain
   cost_class: medium           # C rebuild + 1 eval; NO training loop added
@@ -491,8 +550,9 @@ tie-breaker and flagged `(info)`.
 
 | Rank | slug | EV | cost | P(win) | axis | note |
 |---|---|---|---|---|---|---|
-| 1 | cheap-filter-delta-realign | 0.0020 | cheap | 0.45 | fitness | gates remove-cheap-filter + match-nn-retrain |
-| 2 | literature-feature-scan | 0.0024(info) | cheap | 0.60 | gen | cheap generator; high option value |
+| 1 | honest-fp-track-metric | (info,max) | cheap | 0.70 | measurement | audits the ruler every fitness idea uses; iter2 is a smoking gun |
+| 2 | cheap-filter-delta-realign | 0.0020 | cheap | 0.45 | fitness | gates remove-cheap-filter + match-nn-retrain |
+| 3 | literature-feature-scan | 0.0024(info) | cheap | 0.60 | gen | cheap generator; high option value |
 | 3 | ocm-why-no-gain | 0.0013(info) | cheap | 0.65 | simplicity | audit already flags ocm_cos low; near-certain verdict |
 | 4 | dedup-iou-sweep | 0.0011 | cheap | 0.35 | fitness | F5d showed surface still live |
 | 5 | feature-ablation-prune | (info) | medium | 0.55 | simplicity | bottom-4 named in FEATURE_AUDIT |
@@ -510,12 +570,17 @@ tie-breaker and flagged `(info)`.
 | 17 | state-head-poswfit-kseed | 0.00006 | medium | 0.25 | fitness | likely confirms "not a lever" |
 | — | jaad-pair-upweight | — | — | — | killed | falsified by project_d1 |
 
-First pick = **cheap-filter-delta-realign**: top fitness-EV, cheap, and it
-*gates two* heavier ideas (remove-cheap-filter-machinery,
-match-nn-retrain-at-ship-delta) — maximal information value. Run the
-cheap generators/diagnostics (#2 literature-feature-scan, #3
-ocm-why-no-gain) early too: they are ~zero compute and spawn/curate the
-rest of the bank.
+First pick = **honest-fp-track-metric**. It is cheap (read-only audit of
+existing ubtrk2 + GT) and has the highest possible information value: it
+tests whether the headline `fitness` — the ruler *every* other idea is
+judged by — is being gamed via FP-track merges. If it is, prior
+fp_tracks-driven "wins" (F5d ship, DAgger conservatism) are partly
+illusory and the campaign re-pins under an honest metric (RESEARCH.md §3);
+if not, fitness is re-validated and every fitness idea proceeds with
+confidence. You fix the ruler before measuring more with it. Then
+**cheap-filter-delta-realign** (gates two heavier ideas), and the cheap
+generators/diagnostics (literature-feature-scan, ocm-why-no-gain) which
+are ~zero compute and curate the rest of the bank.
 
 ### Curation note — 2026-05-15 (DAgger multi-iter regression)
 

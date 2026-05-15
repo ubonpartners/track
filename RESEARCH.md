@@ -239,6 +239,34 @@ The headline progress curve in `RESEARCH_LOG.md` is built from
 within-batch deltas chained through confirmed promotions, not from raw
 absolute numbers across campaigns.
 
+### 4.5 Metric integrity (the Goodhart hazard)
+
+The deepest way to fool yourself is for the **headline metric itself** to
+be gameable — then a real, confirmed, reproducible win can still be a
+*proxy* win, and the whole loop optimises an exploit. fitness's
+`-0.0005·fp_tracks` term counts *unique never-matched output tracks*; the
+optimizer can cut that count by ID-merging an unrelated FP segment onto a
+true track (or stitching two FPs into one) rather than removing the false
+positives — the FP pixels stay on screen, they just stop counting. Direct
+evidence this is real here: the 2026-05-15 DAgger iter2 drove fp_tracks
+103→48 while MOTA *collapsed* 0.615→0.565 — classic Goodhart.
+
+Rules:
+
+- A **metric-integrity audit is always in scope and high priority**, even
+  though §2/§3 freeze the metric for a campaign. Auditing the ruler is not
+  changing it; it is read-only diagnosis (see `honest-fp-track-metric` in
+  `RESEARCH_LOG.md`).
+- A confirmed metric defect does **not** trigger a silent mid-campaign
+  metric change. It triggers a **campaign reset** (§3): freeze the
+  honest metric, re-pin the baseline by re-measuring under it, and
+  re-judge open results. Prior wins driven by the defective term are
+  re-examined, not assumed valid.
+- When a win is *dominated by the gameable term* (e.g. almost all of
+  `Δfit` comes from `fp_tracks` while MOTA/IDF1 sag within guard), treat
+  it as **suspect** and require the integrity audit on that result before
+  promotion, regardless of the §5 arithmetic.
+
 ---
 
 ## 5. Decision rule
