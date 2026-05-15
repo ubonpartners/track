@@ -26,9 +26,20 @@ The non-negotiable principles:
 - **Reproducibility is a precondition, not a nicety.** Every experiment
   pins config diff, git SHA, engine/bin versions, seed(s), and keeps the
   machine-readable eval JSON sidecar.
-- **Steady forward progress.** The baseline only ever moves up, and only
-  on a *confirmed* win. The baseline is a re-measured number on the frozen
-  corpus, never a remembered one.
+- **One experiment, one folder. No artifact scatter.** Everything an
+  experiment generates — diffs, eval JSON/TXT, pipeline outputs, retrained
+  bins/checkpoints, logs, temp files — lives under that experiment's single
+  directory and nowhere else (§9). The repo and the rest of the filesystem
+  stay clean. An experiment that wrote outside its folder is treated as
+  `errored` and re-run.
+- **Improvement is multi-objective, fitness-first.** A win is *any* of:
+  higher fitness; or — at statistically *similar* fitness — higher IDF1,
+  or faster execution, or simpler code/architecture (§2.1). Fitness can
+  never be *bought* with the others: a fitness regression beyond noise is
+  a loss regardless of IDF1/speed/simplicity gains.
+- **Steady forward progress.** The baseline only ever moves up (on the
+  active objective), and only on a *confirmed* win. The baseline is a
+  re-measured number on the frozen corpus, never a remembered one.
 
 ---
 
@@ -86,6 +97,37 @@ per-frame FP rate) the tracker is tuned for.
 `fp_tracks` is integer and (modulo the FP-thread ordering noted in §4)
 deterministic, so it is the highest-information single number in the report.
 When fitness is marginal, look at `fp_tracks` first.
+
+### 2.1 Objectives (strict priority order)
+
+Improvement is multi-objective but **lexicographic, fitness-first**. An
+experiment is a win if it improves the highest-priority objective it can
+reach *without regressing any higher one beyond noise*:
+
+1. **Fitness.** `Δfit ≥ +2σ` with all guards intact → win (primary axis).
+2. **IDF1 at similar fitness.** If fitness is *statistically unchanged*
+   (`|Δfit| < 2σ`, i.e. neither a fitness win nor a fitness loss beyond
+   noise) and no guard regressed, then `Δidf1 ≥ +2σ_idf1` → win
+   (secondary axis: better identity consistency for free).
+3. **Execution speed at similar fitness.** Similar fitness (as above),
+   IDF1 not regressed beyond noise, and a **meaningful, pinned-condition**
+   speedup (`Δspeed ≥ speed_improve_min`, default +5%, measured on the
+   frozen corpus at fixed hardware + worker count) → win.
+4. **Simpler code/architecture at similar fitness.** Similar fitness, IDF1
+   and speed not regressed beyond noise, and a *recorded, quantified*
+   simplification → win. "Simpler" is not a vibe: it must cite at least one
+   concrete reduction — net-negative code diff (LOC), fewer model
+   parameters, removed tunable knobs, or a deleted code path/module — and
+   the number goes in `decision.md`.
+
+Hard rule: **fitness is never bought.** `Δfit ≤ −2σ` (or any guard past its
+gate, or any family past `ε`) is a **loss** no matter how much IDF1, speed,
+or simplicity improved. The objective hierarchy only lets a *fitness-neutral*
+change win on a lower axis; it never trades fitness away.
+
+Each experiment declares, up front in its hypothesis, which axis it targets
+(`primary_axis: fitness|idf1|speed|simplicity`); the decision records which
+axis it actually won on. The progress curve (§7.3) is per-axis.
 
 ### What is *out of scope* for this loop
 
@@ -209,12 +251,19 @@ Let `Δfit = fitness(candidate) − fitness(control_same_batch)`, both from the
 same eval batch (or, for seed-sensitive changes, `Δfit` of the per-seed
 medians).
 
+Let "**similar fitness**" mean `|Δfit| < 2σ` *and* no guard past its gate
+*and* no family past `ε` (a genuinely fitness-neutral change, not a hidden
+regression). Secondary axes are only consulted under similar fitness.
+
 | Outcome | Condition |
 |---|---|
-| **win** | `Δfit ≥ +2σ` (default +0.006) **and** no guard regresses past its gate (§2) **and** no per-family fitness regresses by more than `ε` (default 0.010) **and**, if seed-sensitive, this is the K-seed median, not a single seed. |
-| **loss** | `Δfit ≤ +Δmin` (default +0.001) **or** any guard regresses past its gate **or** any family regresses by more than `ε`. |
-| **inconclusive** | `+Δmin < Δfit < +2σ` (clears the floor but not the noise gate) **or** a seed-sensitive change measured at a single seed. The loop logs it and moves on; if it is the best available lead it is escalated to a confirmation run / K-seed before any promotion. |
-| **errored** | Eval crashed, NN bin failed to load (the evaluator aborts itself), pipeline step failed, or the config was rejected. Logs preserved; the loop continues. |
+| **win (fitness)** | `Δfit ≥ +2σ` (default +0.006) **and** no guard regresses past its gate (§2) **and** no per-family fitness regresses by more than `ε` (default 0.010) **and**, if seed-sensitive, this is the K-seed median. |
+| **win (idf1)** | similar fitness **and** `Δidf1 ≥ +2σ_idf1` (default +0.006). |
+| **win (speed)** | similar fitness **and** `Δidf1 ≥ −2σ_idf1` **and** pinned-condition speedup `≥ speed_improve_min` (default +5%). |
+| **win (simplicity)** | similar fitness **and** idf1 & speed not regressed beyond their noise **and** a quantified simplification recorded in `decision.md` (LOC↓ / params↓ / knobs removed / module deleted). |
+| **loss** | `Δfit ≤ −2σ` **or** any guard regresses past its gate **or** any family regresses by more than `ε` **or** (for a declared secondary-axis experiment) the targeted axis did not clear its bar and no higher axis did either. |
+| **inconclusive** | fitness in `(−2σ, +2σ)` but the experiment's declared axis is unresolved at the measured precision (e.g. `+Δmin < Δfit < +2σ` for a fitness experiment, or a seed-sensitive change measured at a single seed). Logged; escalated to confirmation / K-seed if it is the best lead. |
+| **errored** | Eval crashed, NN bin failed to load (evaluator self-aborts), a pipeline step failed, the config was rejected, **or the experiment wrote artifacts outside its own folder** (§9). Logs preserved; the loop continues. |
 
 **Confirmation before promotion.** A win is *candidate-confirmed* only after:
 - a re-run in a fresh eval batch reproduces `Δfit ≥ +2σ` (config-only
@@ -224,9 +273,17 @@ medians).
 Only a candidate-confirmed win promotes the baseline (§7).
 
 Defaults (mirror these into `RESEARCH_LOG.md` front-matter):
-`sigma = 0.003`, `win_sigmas = 2.0`, `delta_min = 0.001`,
-`epsilon_family = 0.010`, `mota_guard = -0.004`, `idf1_guard = -0.005`,
-`fp_tracks_guard = +3`, `K_seed = 3`.
+`sigma = 0.003`, `sigma_idf1 = 0.003` (measure at bootstrap, floor 0.003),
+`win_sigmas = 2.0`, `delta_min = 0.001`, `epsilon_family = 0.010`,
+`mota_guard = -0.004`, `idf1_guard = -0.005`, `fp_tracks_guard = +3`,
+`speed_improve_min = 0.05` (fractional, pinned conditions), `K_seed = 3`.
+
+**Speed measurement** must be apples-to-apples: same machine, same visible
+GPU count, same `num_workers`, frozen corpus, eval cache cleared. Use the
+evaluator's own wall time (`elapsed_seconds` in the JSON sidecar) and/or
+mean `tracked_fps`; take the median of 3 timed runs since wall time is
+noisier than fitness. A speed claim without pinned conditions recorded in
+`provenance.json` is rejected.
 
 ---
 
@@ -327,25 +384,53 @@ entry. Then:
 
 ### 7.3 Baseline promotion
 
-On a **candidate-confirmed win** (§5):
+Promotion has a **hard three-part gate**. All three must pass, in order;
+failing any one means *no promotion* (the change stays a logged result, not
+the baseline):
 
-1. **Config-only win** — apply the change to `uc_v11.yaml` (or flip its
-   pointer), commit on a branch `research/<date>-<slug>` with the slug and
-   the within-batch `Δfit`, merge to the research branch. The shipping path
-   stays human-gated (a confirmed win is a *promotion to baseline*, not an
-   automatic ship).
-2. **NN win** — copy the new bin to `/mldata/config/track/trackers/` under a
-   bumped versioned name, flip the `uc_v11.yaml` pointer, commit as above.
-   Keep the source `.pt` + its `_artefact_meta` trailer.
-3. **Re-pin the baseline.** Run one more eval where the *new* config is the
-   control, store its `results-<ts>.json` as `baseline/current.json`, and
-   record the new absolute number in `RESEARCH_LOG.md` *for reference only* —
-   future comparisons are still within-batch against this new control.
-4. Update the progress curve (chain of within-batch deltas through
-   promotions).
+1. **Candidate-confirmed win** on the declared axis (§5) — the re-run /
+   K-seed reproduction of the within-batch delta.
+2. **Clean full pipeline cycle.** The change is run through the *entire
+   reproducible pipeline* end-to-end — `ml/orchestration/bootstrap_recipe.sh`
+   (or `run_pipeline.sh` for the relevant scope) — with **zero `errored`
+   steps**. A config-only change still goes through this: the pipeline is
+   re-run with the new config so the baseline is always a fully-reproduced
+   artifact, never a hand-edited config that never survived the real cycle.
+   This also re-exposes corpus drift (§4.3) — the win must survive a fresh
+   build, not just a fresh eval.
+3. **Overall better metrics, not just the headline.** On the frozen corpus
+   *after* the clean pipeline run: the targeted axis clears its bar **and**
+   no guard regresses past its gate **and** no family past `ε` **and** the
+   metric set is net-not-worse (fitness, IDF1, fp_tracks, per-family all
+   either improved or within noise). "Won on one number, quietly worse on
+   three" is **not** a promotion.
 
-A loss or inconclusive reverts the change (config restored / bin discarded);
-the artifact directory and the log entry are kept.
+Only when all three pass:
+
+- **Config win** — apply to `uc_v11.yaml` (or flip its pointer).
+- **NN win** — copy the pipeline-produced bin to
+  `/mldata/config/track/trackers/` under a bumped versioned name, flip the
+  `uc_v11.yaml` pointer; keep the source `.pt` + its `_artefact_meta`.
+- **Reproducibly commit.** One commit on `research/<date>-<slug>`
+  containing: the config/code diff, `provenance.json` (three repo SHAs,
+  engine/bin sha256s, seed(s), the *exact pipeline invocation* that
+  produced the promoted artifact), and the post-pipeline eval JSON. The
+  commit message states the slug, the win axis, and the within-batch
+  delta. A cold checkout of that commit + the recorded invocation must
+  regenerate the baseline. Shipping stays human-gated — promotion sets the
+  research baseline, it does not auto-ship.
+- **Re-pin the baseline.** The post-pipeline eval becomes the new control:
+  store its `results-<ts>.json` as `baseline/current.json` + its
+  `provenance.json`; record the new absolute numbers in `RESEARCH_LOG.md`
+  *for reference only* — future comparisons stay within-batch against this
+  new control.
+- **Update the per-axis progress curve** (chain of confirmed within-batch
+  deltas through promotions).
+
+A loss, inconclusive, an unconfirmed win, a pipeline run with any `errored`
+step, or a "headline-only" win that fails the overall-better-metrics check
+all → **no promotion**: the change is reverted (config restored / pipeline
+bins pruned per §9), and the artifact directory + log entry are kept.
 
 ---
 
@@ -369,14 +454,16 @@ while not should_stop():                       # §10 stop conditions
     decision = decide(slug, metrics)           # §5
     posterior = bayes_update(idea, metrics)    # §7.2, written explicitly
 
-    if decision == "win":
+    if decision.startswith("win"):
         confirmed = confirm(slug)              # re-run / K-seed (§5)
-        if confirmed:
-            promote_baseline(slug, metrics)    # §7.3
+        clean = confirmed and run_full_pipeline_clean(slug)   # §7.3 gate 2
+        overall_ok = clean and overall_better_metrics(slug)   # §7.3 gate 3
+        if confirmed and clean and overall_ok:
+            promote_baseline(slug, metrics)    # §7.3 + reproducible commit
         else:
-            decision = "inconclusive"
-    if decision != "win":
-        revert_change(slug)
+            decision = "inconclusive"          # win not promotable (yet)
+    if not decision.startswith("win") or decision == "inconclusive":
+        revert_change(slug)                    # bins pruned per §9
 
     append_log(slug, idea, prior, metrics, posterior, decision)  # RESEARCH_LOG.md
     rerank_and_curate_bank(metrics)            # update correlated, add/kill ideas
@@ -387,21 +474,51 @@ parallel experiments would contend and break the within-batch invariant).
 
 ---
 
-## 9. Reproducibility & artifacts
+## 9. Reproducibility & artifact containment
 
-Per experiment, under `RESEARCH_OUT/<YYYYMMDD>-<slug>/`:
+**Containment is a hard invariant.** One experiment ⇒ one directory:
+`RESEARCH_OUT/<YYYYMMDD>-<slug>/`. *Every* byte the experiment generates
+lands under it and nowhere else. The repo working tree and the rest of the
+filesystem stay clean. Concretely, before any work the experiment sets:
+
+- the eval yaml's `results_location` → `<slug>/eval/`
+- any pipeline `--out` / data dir (`DDIR`, `EVAL_OUTDIR`, pair-log
+  `output_root`, state-corpus prefix, retrained `.pt`/`.bin`) →
+  `<slug>/pipeline/`
+- `TMPDIR` → `<slug>/tmp/` (so library temp files don't litter `/tmp`)
+- all stdout/stderr logs → `<slug>/logs/`
+
+Then it asserts containment: after the run, *nothing* outside `<slug>/`
+changed except the intended git-tracked config/code diff (which is also
+saved as `<slug>/change.patch`). A stray write outside the folder ⇒ the
+experiment is `errored` and re-run (§5). Generated heavyweight artifacts
+(retrained bins, corpora) on a **loss** are deleted after the decision is
+written; `decision.md`, `provenance.json`, the eval JSON, and the patch
+are kept forever.
+
+Per-experiment layout, `RESEARCH_OUT/<YYYYMMDD>-<slug>/`:
 
 ```
-hypothesis.md      # prior, mechanism, falsifiable prediction, EV vs runner-up
+hypothesis.md      # prior, mechanism, falsifiable prediction, primary_axis,
+                   #   EV vs runner-up
 change.patch       # exact uc_v11.yaml / code diff (git diff)
 provenance.json    # git SHA (track + stuff + ubon_cstuff), engine + bin
-                   #   versions/sha256, seed(s), eval yaml sha256, hostname, UTC
-eval/results-<ts>.json   # the machine sidecar from track.py --eval (kept)
-eval/results-<ts>.txt    # human report (kept)
-decision.md        # win/loss/inconclusive + the explicit Bayesian update:
-                   #   μ0,τ0 → Δfit,σ_obs → μ1,τ1 → P(win), and the
-                   #   per-family / fp_tracks check, and what it implies
+                   #   versions/sha256, seed(s), eval yaml sha256, hostname,
+                   #   UTC, and the pinned speed conditions (GPU count,
+                   #   num_workers) if speed is the axis
+eval/              # results-<ts>.json + .txt sidecars (kept)
+pipeline/          # retrain intermediates (.pt/.bin/corpora) — pruned on loss
+logs/              # all captured stdout/stderr
+tmp/               # TMPDIR for this experiment — wiped after decision
+decision.md        # win-axis + the explicit Bayesian update:
+                   #   μ0,τ0 → Δfit,σ_obs → μ1,τ1 → P(win); per-family /
+                   #   fp_tracks check; idf1/speed/simplicity deltas if a
+                   #   secondary axis was targeted; and what it implies
 ```
+
+`RESEARCH_OUT/` itself lives outside the git tree (or is git-ignored) so
+experiment bulk never pollutes commits; only confirmed-win config/code
+changes are committed, on their `research/<slug>` branch.
 
 Reproducibility preconditions, asserted at bootstrap and never assumed:
 
@@ -486,8 +603,10 @@ falsifiable prediction, with the reference cited in its bank entry.
 
 | Setting | Value |
 |---|---|
+| Objectives (lexicographic) | fitness ≫ IDF1@≈fit ≫ speed@≈fit ≫ simplicity@≈fit; fitness never bought |
 | Headline metric | `fitness` (`track_test.fitness_score`), `__ovr` rollup |
 | Guards | `mota`, `idf1`, `fp_tracks`, per-family fitness |
+| Artifact rule | one folder per experiment (`RESEARCH_OUT/<slug>/`); zero scatter; outside-write ⇒ errored |
 | Evaluator | single: `python track.py --eval <frozen yaml>` (GPU-sharded) |
 | Corpus | frozen `eval_ship_baseline.yaml` (full176 + jaad_val) |
 | Comparison | within-batch only (candidate vs control in one eval) |

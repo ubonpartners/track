@@ -14,18 +14,23 @@ Authoritative copy of the §5 defaults. A change here is itself a logged
 event in the Experiment Log (with reason), never a silent edit.
 
 ```yaml
-sigma:            0.003   # single-eval fitness noise; replace with bootstrap-measured value
-win_sigmas:       2.0     # win bar = +win_sigmas * sigma  (=> +0.006)
-delta_min:        0.001   # loss ceiling
-epsilon_family:   0.010   # max tolerated per-family fitness regression
-mota_guard:      -0.004
-idf1_guard:      -0.005
-fp_tracks_guard: +3       # absolute integer
-K_seed:           3       # seeds for any training step (escalate to 5 if straddling)
-K_loss_stop:      8       # consecutive losses => halt + ask user
-ev_floor:         0.0005  # fitness per cheap-unit; below this, no open idea => consider stop
-cost_units:       {cheap: 1, medium: 8, heavy: 30}
-baseline_ref:     null    # set at bootstrap: {fitness, mota, idf1, fp_tracks, provenance}
+sigma:             0.003  # single-eval fitness noise; replace w/ bootstrap-measured
+sigma_idf1:        0.003   # single-eval IDF1 noise; replace w/ bootstrap-measured
+win_sigmas:        2.0     # win bar = +win_sigmas * sigma  (=> +0.006)
+delta_min:         0.001   # loss ceiling
+epsilon_family:    0.010   # max tolerated per-family fitness regression
+mota_guard:       -0.004
+idf1_guard:       -0.005
+fp_tracks_guard:  +3       # absolute integer
+speed_improve_min: 0.05    # fractional speedup bar (pinned conditions) for a speed win
+K_seed:            3       # seeds for any training step (escalate to 5 if straddling)
+K_loss_stop:       8       # consecutive losses => halt + ask user
+ev_floor:          0.0005  # fitness per cheap-unit; below => consider stop
+cost_units:        {cheap: 1, medium: 8, heavy: 30}
+objective_order:   [fitness, idf1, speed, simplicity]  # lexicographic; fitness never bought
+artifact_root:     RESEARCH_OUT          # one folder per experiment under here; zero scatter
+baseline_ref:      null   # set at bootstrap: {fitness, mota, idf1, fp_tracks, speed, provenance}
+promotion_gate:    [candidate_confirmed, full_pipeline_clean, overall_better_metrics]
 ```
 
 > Bootstrap has not yet run. `sigma` is the prior 0.003 until measured;
@@ -261,20 +266,24 @@ the decision, and the bank curation that followed.
 Entry schema (copy for each new experiment):
 
 ```
-### <YYYYMMDD>-<slug>   [win|loss|inconclusive|errored]
+### <YYYYMMDD>-<slug>   [win(fitness|idf1|speed|simplicity)|loss|inconclusive|errored]
 - selected: EV=<v> (runner-up <slug> EV=<v>); reason=<why this pick>
+- primary_axis: <fitness|idf1|speed|simplicity>
 - prior: p_win=<>, effect~N(μ0=<>, τ0=<>)
 - change: <one line + path to change.patch>
 - eval: <path to results-<ts>.json>; corpus=eval_ship_baseline (frozen)
-- evidence:
-    candidate fitness=<>  control(same-batch) fitness=<>  Δfit=<>
-    mota Δ=<>  idf1 Δ=<>  fp_tracks Δ=<>
+- evidence (within-batch vs same-batch control):
+    fitness Δ=<>   mota Δ=<>   idf1 Δ=<>   fp_tracks Δ=<>
     families: full176 Δ=<>  jaad_val Δ=<>
+    speed: <elapsed_s cand/control, pinned GPU/workers>  (if speed axis)
+    simplicity: <LOC↓ / params↓ / knobs removed / module deleted>  (if simplicity axis)
     (seed-sensitive? per-seed: [..]; median used)
 - update: σ_obs=<>; μ1=<> τ1=<>; posterior P(win)=<>
 - prediction check: <held / partially / FALSIFIED — what it implies>
-- decision: <win|loss|inconclusive|errored> + (confirmed? how)
-- baseline: <unchanged | promoted: new control provenance=<path>>
+- decision: <outcome> + (candidate-confirmed? how)
+- promotion gate: confirmed=<y/n>  pipeline_clean=<y/n, log path>  overall_better=<y/n>
+- containment: artifacts only under RESEARCH_OUT/<slug>/ ? <verified y/n>
+- baseline: <unchanged | promoted: commit=<sha> invocation=<cmd> control provenance=<path>>
 - bank curation: <correlated updates w/ rationale; ideas added/demoted/killed>
 - artifacts: RESEARCH_OUT/<YYYYMMDD>-<slug>/
 ```
