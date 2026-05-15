@@ -304,6 +304,15 @@ def evaluate_pair_logger(
         raise ValueError("pair_logger: module_params.output_dir is required")
     seed_match_iou = float(module_params.get("seed_match_iou", 0.5))
     det_match_iou = float(module_params.get("det_match_iou", 0.5))
+    # honest-fp-train-adopt-v2: PRECISE+DOSED phantom-negatives. Only a
+    # phantom this real track could plausibly ABSORB (det overlaps the
+    # track's predicted box by > min_track_iou) is the gaming vector;
+    # v1's blunt "every real-track × any far det" over-dosed and cost
+    # MOTA. subsample (stride) keeps negatives from swamping positives.
+    phantom_neg_min_track_iou = float(
+        module_params.get("phantom_neg_min_track_iou", 0.1))
+    _pn_sub = float(module_params.get("phantom_neg_subsample", 1.0))
+    phantom_neg_stride = max(1, int(round(1.0 / _pn_sub))) if _pn_sub > 0 else 1
     class_name = str(module_params.get("class_name", "person"))
     require_any_trace = bool(module_params.get("require_any_trace", True))
 
@@ -324,7 +333,9 @@ def evaluate_pair_logger(
     n_frames_with_records = 0
     n_dropped_no_gt_track = 0
     n_dropped_no_gt_det = 0
-    n_phantom_neg = 0   # honest-fp-train-adopt: (real track, IoU==0 det)
+    n_phantom_neg = 0   # honest-fp-train-adopt-v2: kept phantom-negs
+    n_phantom_neg_seen = 0      # passed precise gate (pre-subsample)
+    n_phantom_neg_dropped = 0   # dropped by subsample (dose)
     n_pos = 0
     n_neg = 0
 
@@ -422,23 +433,35 @@ def evaluate_pair_logger(
             ]
             det_best_gt, det_best_iou = best_iou_match(det_box, gt_curr)
             if det_best_gt is None or det_best_iou < det_match_iou:
-                # honest-fp-train-adopt (20260515): the track here is
-                # GT-aligned (real). If the detection overlaps NO real
-                # object (IoU==0 with every GT — the resolved honest
-                # ruler's phantom definition), this is exactly the
-                # gaming vector: absorbing a phantom onto a real track.
-                # Emit it as a NEGATIVE example so the match-NN learns
-                # NOT to do that (training signal aligned with the
-                # de-gamed fitness). The ambiguous gray zone
-                # 0<IoU<det_match_iou stays DROPPED — loose-but-near-
-                # real detections are NOT what honest fitness penalises;
-                # labelling them 0 would teach rejection of imprecise
-                # real detections and hurt MOTA/recall.
+                # honest-fp-train-adopt-v2 (20260515): the track here is
+                # GT-aligned (real). A detection overlapping NO real
+                # object (IoU==0 with every GT = the resolved honest
+                # ruler's phantom) that THIS track could plausibly
+                # ABSORB (overlaps the track's predicted box) is exactly
+                # the gaming vector — emit it as a NEGATIVE so the
+                # match-NN learns not to absorb it (training aligned with
+                # the de-gamed fitness). PRECISE: require track∩det IoU >
+                # phantom_neg_min_track_iou (v1 made *every* far det a
+                # negative → over-rejection → MOTA −0.020). DOSE: keep
+                # 1/stride of them so negatives don't swamp positives.
+                # Gray zone 0<det_IoU<det_match_iou stays DROPPED (loose-
+                # but-near-real; not what honest fitness penalises).
                 if det_best_gt is None or det_best_iou <= 0.0:
-                    kept_indices.append(r_idx)
-                    kept_labels.append(0)
-                    n_neg += 1
-                    n_phantom_neg += 1
+                    track_box = [
+                        float(rec["track_x0"]), float(rec["track_y0"]),
+                        float(rec["track_x1"]), float(rec["track_y1"]),
+                    ]
+                    if _box_iou(track_box, det_box) > phantom_neg_min_track_iou:
+                        n_phantom_neg_seen += 1
+                        if n_phantom_neg_seen % phantom_neg_stride == 0:
+                            kept_indices.append(r_idx)
+                            kept_labels.append(0)
+                            n_neg += 1
+                            n_phantom_neg += 1
+                        else:
+                            n_phantom_neg_dropped += 1
+                    else:
+                        n_dropped_no_gt_det += 1
                 else:
                     n_dropped_no_gt_det += 1
                 continue
@@ -509,6 +532,8 @@ def evaluate_pair_logger(
         "n_dropped_no_gt_track": n_dropped_no_gt_track,
         "n_dropped_no_gt_det": n_dropped_no_gt_det,
         "n_phantom_neg": n_phantom_neg,
+        "n_phantom_neg_seen": n_phantom_neg_seen,
+        "n_phantom_neg_dropped": n_phantom_neg_dropped,
         "n_frames_with_trace": n_frames_with_trace,
         "n_frames_with_records": n_frames_with_records,
         "n_frames_total": len(frames),
@@ -651,7 +676,8 @@ def _build_summary(
         per_seq_metrics[seq_name] = m
         for k in ("n_pairs", "n_positives", "n_negatives",
                   "n_dropped_no_gt_track", "n_dropped_no_gt_det",
-                  "n_phantom_neg",
+                  "n_phantom_neg", "n_phantom_neg_seen",
+                  "n_phantom_neg_dropped",
                   "n_frames_with_trace", "n_frames_with_records",
                   "n_frames_total"):
             try:
@@ -671,6 +697,8 @@ def _build_summary(
         "n_dropped_no_gt_track": int(totals.get("n_dropped_no_gt_track", 0)),
         "n_dropped_no_gt_det": int(totals.get("n_dropped_no_gt_det", 0)),
         "n_phantom_neg": int(totals.get("n_phantom_neg", 0)),
+        "n_phantom_neg_seen": int(totals.get("n_phantom_neg_seen", 0)),
+        "n_phantom_neg_dropped": int(totals.get("n_phantom_neg_dropped", 0)),
     }
 
     generation_ok = [g for g in generation_results if g.get("ok")]
