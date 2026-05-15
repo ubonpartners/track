@@ -1082,6 +1082,13 @@ def extract_sequence_label_driven(
     # "phantom", which is exactly the bias we are trying to remove.
     # ------------------------------------------------------------------
     track_gt_history: Dict[int, Dict[int, int]] = defaultdict(dict)
+    # honest-fp-train-adopt-v4: per-(tid,fi) whether the track box
+    # overlaps ANY GT at all (IoU>0), distinct from the >=seed_match_iou
+    # alignment. A loose-near-real frame (0<IoU<0.5) is NOT a phantom
+    # under the resolved honest ruler (counts only IoU==0 runs) — the
+    # state-NN must NOT be taught to drop/demote it (= FN/MOTA loss for
+    # zero honest-FP benefit: the v1 mechanism in state-NN form).
+    track_overlaps_gt: Dict[int, Dict[int, bool]] = defaultdict(dict)
     per_track_recs_per_frame: Dict[int, Dict[int, np.ndarray]] = {}
     for fi, frame in enumerate(run.frames):
         ft = float(frame_times[fi])
@@ -1097,6 +1104,8 @@ def extract_sequence_label_driven(
             if box is None:
                 continue
             best_gt, best_iou = _best_iou_match(list(box), gt_curr)
+            track_overlaps_gt[tid].setdefault(
+                fi, best_gt is not None and best_iou > 0.0)
             if best_gt is not None and best_iou >= seed_match_iou:
                 track_gt_history[tid][fi] = int(best_gt.track_id)
             else:
@@ -1142,6 +1151,8 @@ def extract_sequence_label_driven(
                 float(recs[0]["track_y1"]),
             ]
             best_gt, best_iou = _best_iou_match(box, gt_curr)
+            track_overlaps_gt[tid].setdefault(
+                fi, best_gt is not None and best_iou > 0.0)
             if best_gt is not None and best_iou >= seed_match_iou:
                 track_gt_history[tid][fi] = int(best_gt.track_id)
             else:
@@ -1187,19 +1198,29 @@ def extract_sequence_label_driven(
             or track_gt_history.get(tid, {}).get(fi, -1) != -1
         )
 
+    # honest-fp-train-adopt-v4: a frame where the track box overlaps a
+    # real GT object at all (IoU>0) is NOT a phantom under the resolved
+    # honest ruler (counts only IoU==0 runs). Do NOT hard-drop/demote it
+    # — that is pure FN/MOTA loss for zero honest-FP benefit. Restrict
+    # drop/demote pressure to genuinely far-from-all-GT (IoU==0) frames.
+    def overlaps_gt(tid: int, fi: int) -> bool:
+        return bool(track_overlaps_gt.get(tid, {}).get(fi, False))
+
     def oracle_drop_unconfirmed(tid: int, fi: int) -> bool:
         return (
             not future_alignment(tid, fi)
             and track_gt_history.get(tid, {}).get(fi, -1) == -1
             and historic_gt_id(tid, fi) is None
+            and not overlaps_gt(tid, fi)        # v4: IoU==0 only
         )
 
     def oracle_demote(tid: int, fi: int) -> bool:
         cur = track_gt_history.get(tid, {}).get(fi, -1)
-        return cur == -1 and not future_alignment(tid, fi)
+        return (cur == -1 and not future_alignment(tid, fi)
+                and not overlaps_gt(tid, fi))   # v4: IoU==0 only
 
     def oracle_drop_lost(tid: int, fi: int) -> bool:
-        return not future_alignment(tid, fi)
+        return not future_alignment(tid, fi) and not overlaps_gt(tid, fi)
 
     # ------------------------------------------------------------------
     # Pass C: walk frames, replay state with label-driven oracle, emit

@@ -445,35 +445,15 @@ def evaluate_pair_logger(
             det_is_phantom = det_best_gt is None or det_best_iou <= 0.0
 
             if track_gt_id is None:
-                # honest-fp-train-adopt-v3.1 (20260515): POSITIVE half,
-                # PRECISE+DOSED. Phantom track + phantom det (IoU==0 with
-                # every GT). Merging is honest-fitness-positive only when
-                # it actually CONSOLIDATES — i.e. the det is a plausible
-                # CONTINUATION of THIS phantom track (overlaps its
-                # predicted box). v3's UNCONDITIONAL 157591 positives
-                # taught a blunt general merge bias → MOTA −0.005 vs v2,
-                # honest_v2 UP (no consolidation). So: require track∩det
-                # IoU > fpfp_pos_min_track_iou (same precision idea that
-                # fixed v1→v2 for the negative) AND subsample 1/stride so
-                # positives don't swamp (v3 was ~20× the negatives).
-                if det_is_phantom:
-                    track_box = [
-                        float(rec["track_x0"]), float(rec["track_y0"]),
-                        float(rec["track_x1"]), float(rec["track_y1"]),
-                    ]
-                    if _box_iou(track_box, det_box) > fpfp_pos_min_track_iou:
-                        n_fpfp_merge_seen += 1
-                        if n_fpfp_merge_seen % fpfp_pos_stride == 0:
-                            kept_indices.append(r_idx)
-                            kept_labels.append(1)
-                            n_pos += 1
-                            n_fpfp_merge_pos += 1
-                        else:
-                            n_fpfp_merge_dropped += 1
-                    else:
-                        n_dropped_no_gt_track += 1
-                else:
-                    n_dropped_no_gt_track += 1
+                # FP+FP-merge POSITIVE (v3/v3.1) FALSIFIED: it did not
+                # help in any dose (blunt 0.5700 / balanced 0.5711, both
+                # < v2's precise-negative-only 0.5758; honest_v2 stayed
+                # ~849, never approached no-NN 786). Reverted to v2
+                # behaviour: phantom-track pairs DROPPED. honest_v2 is
+                # state-NN-governed (invariant across match-NN) — see
+                # honest-fp-train-adopt-v4. v2's precise NEGATIVE below
+                # is retained (the only match-NN signal that helped).
+                n_dropped_no_gt_track += 1
                 continue
 
             if det_best_gt is None or det_best_iou < det_match_iou:
