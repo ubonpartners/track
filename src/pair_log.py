@@ -313,6 +313,16 @@ def evaluate_pair_logger(
         module_params.get("phantom_neg_min_track_iou", 0.1))
     _pn_sub = float(module_params.get("phantom_neg_subsample", 1.0))
     phantom_neg_stride = max(1, int(round(1.0 / _pn_sub))) if _pn_sub > 0 else 1
+    # honest-fp-train-adopt-v3.1: PRECISE+DOSED FP+FP-merge POSITIVE.
+    # Only when the phantom det plausibly CONTINUES this phantom track
+    # (track∩det IoU > min) AND subsampled — v3's unconditional 157591
+    # positives (~20× the negatives) taught a blunt merge bias → MOTA.
+    # Default subsample 0.05 targets ≈ the phantom-negative scale (~8k)
+    # for a balanced symmetric signal (v2's recipe: modest+precise).
+    fpfp_pos_min_track_iou = float(
+        module_params.get("fpfp_pos_min_track_iou", 0.1))
+    _fp_sub = float(module_params.get("fpfp_pos_subsample", 0.05))
+    fpfp_pos_stride = max(1, int(round(1.0 / _fp_sub))) if _fp_sub > 0 else 1
     class_name = str(module_params.get("class_name", "person"))
     require_any_trace = bool(module_params.get("require_any_trace", True))
 
@@ -336,7 +346,9 @@ def evaluate_pair_logger(
     n_phantom_neg = 0   # honest-fp-train-adopt-v2: kept phantom-negs
     n_phantom_neg_seen = 0      # passed precise gate (pre-subsample)
     n_phantom_neg_dropped = 0   # dropped by subsample (dose)
-    n_fpfp_merge_pos = 0        # v3: (phantom track, phantom det)→label 1
+    n_fpfp_merge_pos = 0        # v3.1: kept FP+FP-merge positives
+    n_fpfp_merge_seen = 0       # passed precise gate (pre-subsample)
+    n_fpfp_merge_dropped = 0    # dropped by subsample (dose)
     n_pos = 0
     n_neg = 0
 
@@ -433,21 +445,33 @@ def evaluate_pair_logger(
             det_is_phantom = det_best_gt is None or det_best_iou <= 0.0
 
             if track_gt_id is None:
-                # honest-fp-train-adopt-v3 (20260515): POSITIVE half.
-                # The track is a phantom (never GT-aligned). If the det
-                # is ALSO a phantom (IoU==0 with every GT — the resolved
-                # honest ruler), MERGING them is honest-fitness-positive:
-                # two contiguous far-from-GT episodes → one (MOTA-
-                # neutral; phantoms touch no GT, frame-FP unchanged).
-                # Teach the match-NN to consolidate (label 1). v1/v2 had
-                # only the negative half; the match-NN signal is now
-                # complete. A phantom track + real/loose det stays
-                # DROPPED (ambiguous; not the FP+FP-merge vector).
+                # honest-fp-train-adopt-v3.1 (20260515): POSITIVE half,
+                # PRECISE+DOSED. Phantom track + phantom det (IoU==0 with
+                # every GT). Merging is honest-fitness-positive only when
+                # it actually CONSOLIDATES — i.e. the det is a plausible
+                # CONTINUATION of THIS phantom track (overlaps its
+                # predicted box). v3's UNCONDITIONAL 157591 positives
+                # taught a blunt general merge bias → MOTA −0.005 vs v2,
+                # honest_v2 UP (no consolidation). So: require track∩det
+                # IoU > fpfp_pos_min_track_iou (same precision idea that
+                # fixed v1→v2 for the negative) AND subsample 1/stride so
+                # positives don't swamp (v3 was ~20× the negatives).
                 if det_is_phantom:
-                    kept_indices.append(r_idx)
-                    kept_labels.append(1)
-                    n_pos += 1
-                    n_fpfp_merge_pos += 1
+                    track_box = [
+                        float(rec["track_x0"]), float(rec["track_y0"]),
+                        float(rec["track_x1"]), float(rec["track_y1"]),
+                    ]
+                    if _box_iou(track_box, det_box) > fpfp_pos_min_track_iou:
+                        n_fpfp_merge_seen += 1
+                        if n_fpfp_merge_seen % fpfp_pos_stride == 0:
+                            kept_indices.append(r_idx)
+                            kept_labels.append(1)
+                            n_pos += 1
+                            n_fpfp_merge_pos += 1
+                        else:
+                            n_fpfp_merge_dropped += 1
+                    else:
+                        n_dropped_no_gt_track += 1
                 else:
                     n_dropped_no_gt_track += 1
                 continue
@@ -555,6 +579,8 @@ def evaluate_pair_logger(
         "n_phantom_neg_seen": n_phantom_neg_seen,
         "n_phantom_neg_dropped": n_phantom_neg_dropped,
         "n_fpfp_merge_pos": n_fpfp_merge_pos,
+        "n_fpfp_merge_seen": n_fpfp_merge_seen,
+        "n_fpfp_merge_dropped": n_fpfp_merge_dropped,
         "n_frames_with_trace": n_frames_with_trace,
         "n_frames_with_records": n_frames_with_records,
         "n_frames_total": len(frames),
@@ -699,6 +725,7 @@ def _build_summary(
                   "n_dropped_no_gt_track", "n_dropped_no_gt_det",
                   "n_phantom_neg", "n_phantom_neg_seen",
                   "n_phantom_neg_dropped", "n_fpfp_merge_pos",
+                  "n_fpfp_merge_seen", "n_fpfp_merge_dropped",
                   "n_frames_with_trace", "n_frames_with_records",
                   "n_frames_total"):
             try:
@@ -721,6 +748,8 @@ def _build_summary(
         "n_phantom_neg_seen": int(totals.get("n_phantom_neg_seen", 0)),
         "n_phantom_neg_dropped": int(totals.get("n_phantom_neg_dropped", 0)),
         "n_fpfp_merge_pos": int(totals.get("n_fpfp_merge_pos", 0)),
+        "n_fpfp_merge_seen": int(totals.get("n_fpfp_merge_seen", 0)),
+        "n_fpfp_merge_dropped": int(totals.get("n_fpfp_merge_dropped", 0)),
     }
 
     generation_ok = [g for g in generation_results if g.get("ok")]

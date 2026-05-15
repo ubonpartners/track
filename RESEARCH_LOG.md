@@ -1495,6 +1495,14 @@ Entry schema (copy for each new experiment):
     regressed to 0.5700, < v2). None promoted; v2 best; no-NN 0.5826
     still tops all.
 
+--- next: honest-fp-train-adopt-v3.1 [user-chosen] — RUNNING. v2's
+    precise negative + PRECISE+DOSED FP+FP-merge positive (track∩det
+    IoU>0.1 = genuine consolidation, subsample 0.05 → ≈negative scale).
+    The proven v1→v2 fix applied to the positive. Pre-reg criteria
+    unchanged (beat no-NN 0.5826, MOTA held). If still <no-NN ⇒ match-NN
+    lever exhausted → v4 (state-NN honest-ruler align) or accept no-NN.
+    Then v4, then fitness-impact-weighted-loss. ---
+
 --- next: honest-fp-train-adopt-v3 [user-approved order] — KEEP v2's
     precise negative, ADD the missing POSITIVE half: in src/pair_log.py
     the first gate drops (phantom track, *) pairs (track_gt_id is None →
