@@ -1365,23 +1365,45 @@ Entry schema (copy for each new experiment):
   no-NN, or treat no-NN as the new reference to beat via honest-trained NN?
 - artifacts: RESEARCH_OUT/20260515-nn-vs-nonn-metric/
 
---- DONE: honest-fp-repin2 (baseline pinned 68aeb7c); dagger-reaudit-honest
-    (STOP_AFTER=1 confirmed real); nn-vs-nonn-metric (expected: NN
-    optimised the OLD objective so is net-negative under honest fitness;
-    no-NN is metric-neutral. Confirms the de-gaming; motivates the
-    retrain — user chose honest-fp-train-adopt).
+### 20260515-honest-fp-train-adopt   [win(measurement) — pre-reg falsification, informative]
+- selected: user-chosen pivot (retrain NN vs honest fitness)
+- change: src/pair_log.py c8d151d — (GT-track, IoU==0-with-all-GT det)
+  → label-0 negative instead of drop (55526 phantom-neg injected);
+  bootstrap STOP_AFTER=1 retrain; eval under de-gamed fitness.
+- prior: P(v1 relabel beats no-NN) = 0.5
+- evidence (within-batch full176): honest-relabelled iter1 fitNEW
+  0.5609 < no-NN 0.5826 AND < pinned iter1 0.5706. honest_v2 908→704
+  (FP-suppression WORKS, even < no-NN's 786; old_fp 121→86; num_FP
+  −8944) BUT MOTA 0.6197→0.5993 (−0.0204, guard FAIL); IDF1 −0.0025
+  (guard PASS). Net fitNEW DOWN (MOTA loss > honest-FP gain).
+- update: PRIMARY not met → pre-registered falsification branch (the
+  blunt-relabel MOTA risk was explicitly pre-registered — expected, not
+  a surprise). Concept VALIDATED (anti-gaming signal strongly works);
+  mechanism isolated: 55k blunt negatives (every real-track × any far
+  det) over-dosed → match-NN over-rejects legit hard matches → MOTA.
+  P(precise+dosed v2 beats no-NN) ≈ 0.45.
+- decision: not promoted; baseline stays pinned iter1; no-NN (0.5826)
+  remains best honest config (standing open Q). Escalate per pre-reg.
+- artifacts: RESEARCH_OUT/20260515-honest-fp-train-adopt/
 
---- next: AWAIT USER STEER on the campaign pivot (NN is net-negative
-    honestly; legacy no-NN fitNEW 0.5826 > iter1 0.5706). Options:
-    (A) honest-fp-train-adopt — regenerate the NN training corpus/objective
-    so the match/state NN optimises the honest fitness, not gamed
-    fp_tracks (heavy; the real lever; turns the NN from gaming-artifact
-    into genuine improvement). (B) re-pin baseline to no-NN and optimise
-    from there. (C) dagger-corpus-noNN-candidacy (corpus self-confirmation
-    fix) — complementary to (A). Recommend (A). Cheap-bank sweeps
-    (cheap-filter-delta-realign etc.) are now LOW priority — tuning a
-    gaming-artifact NN's knobs is unlikely to matter vs fixing the
-    objective. run_in_background ONLY; one heavy pipeline at a time. ---
+--- DONE: repin2 (68aeb7c); dagger-reaudit (STOP1 real); nn-vs-nonn
+    (NN net-neg honestly, expected); honest-fp-train-adopt v1 (blunt
+    relabel: FP-suppression works but over-doses → MOTA −0.020, not
+    promoted).
+
+--- next: AWAIT USER STEER — v1 relabel validated the concept but the
+    blunt 55k-negative dose cost MOTA. Options:
+    (A) honest-fp-train-adopt-v2 [recommended] — emit phantom-negative
+    ONLY for PLAUSIBLE-absorption pairs (det near THAT track's
+    predicted pos = the real lead/lag/bridge vector) + subsample / BCE
+    down-weight so negatives don't swamp positives. Precise+dosed →
+    keep the honest_v2 drop, recover MOTA. Heavy (~25min cycle).
+    (B) re-pin baseline to no-NN (0.5826) and optimise from there —
+    accept the NN has no honest headroom over the heuristic.
+    (C) state-NN corpus relabel and/or dagger-corpus-noNN-candidacy.
+    (D) nn_lambda down-weight (band-aid, cheap eval-only test of the
+    over-suppression hypothesis before another retrain).
+    run_in_background ONLY; one heavy pipeline at a time. ---
 
 ## Progress curve
 
