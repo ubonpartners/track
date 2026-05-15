@@ -42,7 +42,7 @@ Runtime requirements:
 | `track_analysis.py` | CLI entry for pair-log emission (run tracker + label trace records vs GT) |
 | `src/pair_log.py` | Pair-log emission engine used by `track_analysis.py` |
 | `src/pair_log_schema.py` | Binary record schema (mirrors `ubon_cstuff/src/track/utrack/utrack_pair_trace.h`) |
-| `TRACK_ANALYSIS.md` | Design and config contract for the analysis app |
+| `ml/` | Training pipeline for the learned `nn_match` and `nn_state` runtime binaries — see [`ml/docs/`](ml/docs/) |
 | `experiments/archive/` | Historical one-off sweeps and experiment notes (not part of the supported CLI) |
 | `TRACKER_DEBUG.md` | Detailed tracker-result/debug format and migration/design notes |
 
@@ -207,7 +207,11 @@ Format documentation is intentionally split by ownership:
 
 See also:
 
-- `TRACKER_DEBUG.md`
+- `TRACKER_DEBUG.md` — tracker-result/debug format
+- [`ml/docs/README.md`](ml/docs/README.md) — training pipeline overview
+- [`ml/docs/PIPELINE.md`](ml/docs/PIPELINE.md) — end-to-end retrain recipe
+- [`ml/docs/EXPERIMENT_HISTORY.md`](ml/docs/EXPERIMENT_HISTORY.md) — chronological experiment record
+- [`ml/docs/FEATURE_AUDIT.md`](ml/docs/FEATURE_AUDIT.md) — match-NN feature importance + ablations
 
 ## License
 
