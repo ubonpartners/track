@@ -1495,13 +1495,44 @@ Entry schema (copy for each new experiment):
     regressed to 0.5700, < v2). None promoted; v2 best; no-NN 0.5826
     still tops all.
 
---- next: honest-fp-train-adopt-v3.1 [user-chosen] — RUNNING. v2's
-    precise negative + PRECISE+DOSED FP+FP-merge positive (track∩det
-    IoU>0.1 = genuine consolidation, subsample 0.05 → ≈negative scale).
-    The proven v1→v2 fix applied to the positive. Pre-reg criteria
-    unchanged (beat no-NN 0.5826, MOTA held). If still <no-NN ⇒ match-NN
-    lever exhausted → v4 (state-NN honest-ruler align) or accept no-NN.
-    Then v4, then fitness-impact-weighted-loss. ---
+### 20260515-honest-fp-train-adopt-v3.1   [win(measurement) — match-NN lever EXHAUSTED]
+- change: src/pair_log.py ec7a6a1 — v2 precise neg + PRECISE+DOSED
+  FP+FP positive. Balanced signal achieved: 5382 pos / 7922 neg
+  (precise gate 157591→110885 only ~30%; dose 110885→5382 did the work).
+- prior: P(v3.1 beats no-NN)=0.45
+- evidence (within-batch full176): v3.1 fitNEW 0.5711 — ≈ pinned iter1
+  0.5706, BELOW v2 0.5758. honest_v2 849 (v2 839; never approaches
+  no-NN 786). ΔMOTA vs iter1 −0.0025. The FP+FP positive does NOT help
+  in ANY dose (blunt v3 0.5700 / balanced v3.1 0.5711, both < v2).
+- prediction check: pre-registered v3.1-fail branch MET — match-NN
+  lever EXHAUSTED. Mechanistic finding: honest_v2 INVARIANT (~840)
+  across every match-NN change (908 old → 839 v2 → 849 v3/v3.1) →
+  phantom-consolidation/lifecycle is NOT a match-NN decision; it is
+  state-NN-governed. Strong motivation for v4.
+- update: v2 (precise negative only) is the BEST NN (0.5758), still
+  −0.0068 < no-NN 0.5826. Match-NN: 5 cycles, done.
+- decision: not promoted; v2 best NN; no-NN 0.5826 still tops all.
+  Pivot to v4 (state-NN) per agreed order + this mechanistic evidence.
+- artifacts: RESEARCH_OUT/20260515-honest-fp-train-adopt/ (analyze_v3_1.log,
+  eval_iter1_honest_v3_1.json)
+
+--- DONE+: train-adopt v3.1 (precise+dosed pos, balanced 5382:7922 →
+    0.5711 < v2 0.5758). Match-NN lever EXHAUSTED (5 cycles; v2 best
+    0.5758, −0.0068 vs no-NN; honest_v2 invariant ~840 ⇒ state-NN-
+    governed). no-NN 0.5826 still best overall.
+
+--- next: honest-fp-train-adopt-v4 [agreed order; strongly motivated] —
+    state-NN honest-ruler alignment. build_state_corpus.py:958/976-980
+    drop/promote labels use seed_match_iou=0.5 GT alignment, so a
+    loose-near-real (0<IoU<0.5, NOT a phantom per the IoU=0 ruler)
+    track gets gt_id_now=-1 → drop pressure = the v1 mechanism in
+    state-NN form (FN/MOTA loss for zero honest benefit). Fix: hard-drop
+    pressure ONLY for genuinely far-from-all-GT (IoU==0) segments; keep
+    v2's match-NN precise negative. honest_v2 is state-NN-governed
+    (invariant across match-NN) so this is the lever with headroom.
+    Pre-reg criteria unchanged. Heavy ~25min, run_in_background ONLY.
+    Then fitness-impact-weighted-loss. ("accept no-NN" remains the
+    fallback if v4 also fails.) ---
 
 --- next: honest-fp-train-adopt-v3 [user-approved order] — KEEP v2's
     precise negative, ADD the missing POSITIVE half: in src/pair_log.py
