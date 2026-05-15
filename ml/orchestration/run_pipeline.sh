@@ -263,7 +263,8 @@ eval_yaml = {
     'num_workers': 'auto',
     'columns': [
         'num_frames,FR,{:5.0f}',
-        'fp_tracks,FPTr,{:5.0f}',
+        'fp_tracks,FPold,{:5.0f}',
+        'fp_tracks_honest_v2,FPh2,{:6.0f}',
         'fp_per_frame,FPpf,{:5.2f}',
         'mota,MOTA,{:6.3f}',
         'idf1,IDF1,{:6.3f}',

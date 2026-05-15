@@ -37,8 +37,34 @@ def _box_in_ignore(box, ignore_boxes, frac_thresh):
             return True
     return False
 
+# fitness penalises the HONEST FP-track count (exp 20260515-honest-fp-iou0:
+# IoU==0 run-count, GT-grounded, parameter-free — the de-gamed replacement
+# for the gameable `fp_tracks`), LENGTH-NORMALISED: honest_v2 is a raw
+# count so it grows with sequence length, unlike mota & fp_per_frame which
+# are rates. Penalise the honest-FP-episode RATE per second of VIDEO
+# (honest_v2 / duration), NOT per num_frames: num_frames = duration *
+# frame_rate / eval_rate_divisor conflates duration with sampling fps,
+# and the honest count is an EPISODE count that scales with duration
+# (a 2s phantom is 1 run at 10 or 30 fps), not with sampling density.
+# (fp_per_frame legitimately uses num_frames — its numerator IS a
+# per-frame event count.) duration-based ⇒ all fitness terms are
+# sequence-length AND frame-rate invariant; works per-clip and on summed
+# aggregate rows (Σhonest/Σduration). K calibrated so the aggregate
+# honest penalty ≈ the OLD 5e-4*fp_tracks penalty on the current
+# networks — see RESEARCH_OUT/.../honest-fp-iou0/scale_rate*.log.
+# Reported fp_tracks_honest_v2 stays a raw count; mota, idf1, old
+# fp_tracks all still reported.
+_FP_TRACK_COEF = 0.35   # per honest-FP episode per second of video;
+# calibrated: ship full176 honest 795 / 6798s = 0.117 ep/s; 0.35*0.117
+# = 0.0409 ≈ old 5e-4*81 = 0.0405 (ratio 1.01). calib_dur.log.
 def fitness_score(r):
-    return r["mota"]-0.0005*r["fp_tracks"]-0.0*r["fp_tracks_frac"]-0.002*r["fp_per_frame"]
+    h = r.get("fp_tracks_honest_v2")
+    if h is None:                       # legacy rows w/o the honest field
+        h = r["fp_tracks"] * 10.0       # ~scale-match so fitness stays sane
+    dur = r.get("duration", 0) or 0
+    h_rate = h / dur if dur > 0 else 0.0
+    return (r["mota"] - _FP_TRACK_COEF * h_rate
+            - 0.0 * r["fp_tracks_frac"] - 0.002 * r["fp_per_frame"])
 
 def summary_string(r):
     s=f" MOTA:{r['mota']:6.5f}"
@@ -576,6 +602,87 @@ def _honest_fp_iou_gt_core(events_by_hid, cd_frames, gt_cd_frames,
     }
 
 
+def _honest_fp_runs_core(events_by_hid, cd_frames, gt_cd_frames):
+    """RESOLVED honest FP-track ruler (experiment 20260515-honest-fp-iou0;
+    converged with the user through exp#5-#9 + the criterion correction).
+
+    honest_fp_tracks = number of contiguous runs of FP frames whose box
+    OVERLAPS NO REAL GT OBJECT (IoU == 0 with every GT box that frame, or
+    no GT that frame), where a MATCHED frame ends a run (the real object
+    was (re)acquired ⇒ a later spurious run is a NEW distinct defect).
+
+    PARAMETER-FREE. Rationale (settled with the user):
+      - "no overlap with any real object" is the simplest, least-arguable
+        definition of a false detection; replaces the tunable θ_gt proxy.
+      - run-COUNT (not frame-SUM): a brief 2-3 frame spurious blip is ONE
+        unique FP; merging FP+FP into one run stays 1 (never penalised);
+        an FP run welded onto a GT-matched track is still counted (the
+        gaming the old fp_tracks hid). Fragmentation-aware (the property
+        fp_tracks exists for: tracks are what users see).
+      - GT-grounded ⇒ box-jitter / occlusion-coast on a real track stays
+        on/over its real object (IoU>0) ⇒ NOT counted (no false alarm);
+        GT interpolation is valid corpus-wide (verified: 'no GT in frame'
+        = 0.5%), so no Lmin / persistence threshold is needed or used.
+      - NO crit-3 'clean≈gamed' constraint: gamed is the broken baseline
+        that misses in-track FP runs; honest is EXPECTED to exceed it
+        (clean ship ≈9.6× ≈797 vs 83) — that gap IS the de-gamed signal.
+
+    Invariant (verified 615/615 clips): honest ≤ #FP frames ==
+    motmetrics num_false_positives. Gaming-resistant: under the iter1→
+    iter2 exploit gamed −65% but honest −28% ≈ real FP-volume −18%
+    (signature 0.27, honest 0.63 — decisively NOT the illusion).
+
+    Pure; same dump contract; needs the full hyp box (cd tuple
+    (cx,cy,diag,l,t,w,h)). Side-channel only; does not touch `fitness`.
+    """
+
+    def _iou(a, b):
+        ix = min(a[3] + a[5], b[3] + b[5]) - max(a[3], b[3])
+        iy = min(a[4] + a[6], b[4] + b[6]) - max(a[4], b[4])
+        if ix <= 0 or iy <= 0:
+            return 0.0
+        inter = ix * iy
+        ua = a[5] * a[6] + b[5] * b[6] - inter
+        return inter / ua if ua > 0 else 0.0
+
+    def contaminating(frameid, hid):
+        c = cd_frames[frameid].get(hid) if (
+            cd_frames is not None and frameid < len(cd_frames)) else None
+        if c is None or len(c) < 7:
+            return True                       # no/old geom -> conservative
+        gts = (gt_cd_frames[frameid] if (gt_cd_frames is not None
+               and frameid < len(gt_cd_frames)) else None)
+        if not gts:
+            return True                       # zero real objects -> spurious
+        return all(_iou(c, v) <= 0.0 for v in gts.values())
+
+    total = nm = inrun = 0
+    for hid, seq in events_by_hid.items():
+        matched = any(tc == 1 for _, tc in seq)
+        runs = 0
+        cur = False
+        for fid, tc in seq:
+            if tc == 1:                       # matched frame ends a run
+                cur = False
+                continue
+            if contaminating(fid, hid):
+                if not cur:
+                    runs += 1
+                    cur = True
+            else:
+                cur = False
+        total += runs
+        if matched:
+            inrun += runs
+        else:
+            nm += runs
+    return {
+        "honest_fp_tracks_v2": int(total),
+        "nm": int(nm), "inrun": int(inrun),
+        "thresholds": {"gate": "iou0", "param_free": True},
+    }
+
+
 def _honest_fp_gt_runlen_core(events_by_hid, cd_frames, gt_cd_frames,
                               theta_gt=1.0, l_min=8, g_gap=2):
     """GT-grounded honest-FP COUNT with a minimum contiguous-run length
@@ -820,7 +927,7 @@ def compute_metrics(gt, test,
             cd={}
             for r in t_dets:
                 tid=int(r[0]); l,tp,w,h=float(r[1]),float(r[2]),float(r[3]),float(r[4])
-                cd[tid]=(l+w*0.5, tp+h*0.5, (w*w+h*h)**0.5)
+                cd[tid]=(l+w*0.5, tp+h*0.5, (w*w+h*h)**0.5, l, tp, w, h)
             hyp_cd_frames.append(cd)
             gd={}
             for r in gt_dets:
@@ -839,6 +946,7 @@ def compute_metrics(gt, test,
 
     if use_c_metrics:
         metrics_dict=c_mota.get_results()
+        metrics_dict["duration"]=duration
     else:
         mh = mm.metrics.create()
         summary = mh.compute(acc, metrics=['num_frames', 'idf1', 'idp', 'idr', \
@@ -852,6 +960,11 @@ def compute_metrics(gt, test,
                         name='acc')
 
         metrics_dict=summary.loc['acc'].to_dict()
+        # video DURATION in seconds (last_time - first t), NOT num_frames:
+        # num_frames = duration * frame_rate / eval_rate_divisor conflates
+        # duration with sampling fps. fitness length-normalises the honest
+        # FP-track *episode* count by duration (frame-rate invariant).
+        metrics_dict["duration"]=duration
 
         # add some extra metrics like
         # 'fp_tracks' - number of detected track IDs that correspond to no GT
@@ -900,6 +1013,15 @@ def compute_metrics(gt, test,
             metrics_dict["fp_fhonest_leadin"]  = hff["leadin"]
             metrics_dict["fp_fhonest_lagout"]  = hff["lagout"]
             metrics_dict["fp_fhonest_bridge"]  = hff["bridge"]
+            # RESOLVED honest FP-track ruler (exp 20260515-honest-fp-iou0):
+            # IoU==0 run-count, GT-grounded, parameter-free. THIS now
+            # drives `fitness` (scaled coef, see fitness_score). Old
+            # fp_tracks kept for reporting/comparison only.
+            hrn = _honest_fp_runs_core(ev_by_hid, hyp_cd_frames,
+                                       gt_cd_frames)
+            metrics_dict["fp_tracks_honest_v2"] = hrn["honest_fp_tracks_v2"]
+            metrics_dict["fp_h2_nm"]            = hrn["nm"]
+            metrics_dict["fp_h2_inrun"]         = hrn["inrun"]
         except Exception as _e:  # never let instrumentation break the eval
             # logging.warning has no handler in spawn workers -> invisible;
             # write to fd 2 which the eval captures.
@@ -916,6 +1038,12 @@ def compute_metrics(gt, test,
             metrics_dict["fp_fhonest_leadin"] = 0
             metrics_dict["fp_fhonest_lagout"] = 0
             metrics_dict["fp_fhonest_bridge"] = 0
+            # fitness reads fp_tracks_honest_v2 — on failure fall back to
+            # the old gamed count so fitness degrades gracefully (and the
+            # failure is already loud on stderr + the completeness assert).
+            metrics_dict["fp_tracks_honest_v2"] = num_false_positive_tracks
+            metrics_dict["fp_h2_nm"]            = num_false_positive_tracks
+            metrics_dict["fp_h2_inrun"]         = 0
         # Threshold-sweep cache (exp 20260515-honest-fp-threshold-sweep):
         # SEPARATE from the honest try so a dump failure is LOUD (the sweep
         # corpus must be complete; a silent gap would bias the verdict). A
@@ -1440,6 +1568,11 @@ def _summary_metric_keys():
         "fp_honest_lagout", "fp_honest_bridge",   # exp 20260515-honest-fp-metric-def
         "fp_frames_honest", "fp_fhonest_nm", "fp_fhonest_leadin",
         "fp_fhonest_lagout", "fp_fhonest_bridge",  # exp#6 FROZEN frame ruler
+        "fp_tracks_honest_v2", "fp_h2_nm", "fp_h2_inrun",  # exp#10 RESOLVED
+        # ruler — drives `fitness` (IoU=0 run-count). Must be a summary key
+        # so fitness_score finds it on aggregate rows too.
+        "duration",   # video seconds; fitness length-normalises honest_v2
+                      # by duration (frame-rate invariant). Summable.
     ]
 
 

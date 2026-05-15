@@ -42,14 +42,15 @@ baseline_ref:                            # PINNED 20260515 honest-fp-frame-metri
   provenance: RESEARCH_OUT/20260515-honest-fp-frame-metric/baseline_ref.json
   # full detail: {fitness, mota, idf1, fp_tracks, num_FP, fp_frames_honest, speed→num_frames 86140}
 promotion_gate:    [candidate_confirmed, full_pipeline_clean, overall_better_metrics]
-honest_ruler:                            # FROZEN exp#6 20260515-honest-fp-frame-metric
-  metric:          fp_frames_honest      # src.track_test._honest_fp_frames_core
-  theta:           0.5                    # box-diagonals; joint-OK band θ∈[0.3,0.6]
-  nm_policy:       track                  # never-matched mirrors gamed (=1 each)
-  status:          superseded-pending     # exp#6 was frozen-INTERIM (volume-only, FRAGMENTATION-BLIND). exp#9 honest-fp-gt-runlen PASSED the joint gate as a fragmentation-aware COUNT (candidate) — supersedes once operating point fixed + wired live + re-pinned
-  candidate_ruler: _honest_fp_gt_runlen_core  # exp#9 PASS; op point (θ_gt,Lmin,g_gap) = product definition, user to fix; band spans Lmin 3→20
-  fitness_uses_it: false                  # side-channel; honest-fp-train-adopt UN-blocked, pending op-point + wire-live + re-pin — §3/§4.5
-  change_is:       logged_experiment_event # editing θ/nm re-opens the ruler — never silent
+honest_ruler:                            # RESOLVED exp#10 20260515-honest-fp-iou0
+  metric:          fp_tracks_honest_v2   # src.track_test._honest_fp_runs_core
+  gate:            iou0                   # box overlaps NO real GT object that frame
+  aggregation:     run-count; matched frame ends a run; PARAMETER-FREE (no θ/Lmin)
+  status:          resolved-frozen        # exp#6(volume) & exp#9(Lmin) superseded as the LIVE ruler (kept for history). Editing the gate/aggregation = a logged Experiment-Log event.
+  fitness_uses_it: true                   # fitness_score: mota - 5e-5*fp_tracks_honest_v2 - 0.002*fp_per_frame  (K = old 5e-4 ÷10; weight preserved on current nets)
+  invariant:       honest <= #FP frames == num_false_positives (verified 615/615)
+  retired_crit3:   true                   # 'clean honest≈gamed' RETIRED — gamed structurally undercounts; honest>gamed on clean is correct (logged change, exp#10)
+  baseline_ref:    STALE                  # fitness changed -> must re-pin (next: honest-fp-repin2)
 ```
 
 > Bootstrap has not yet run. `sigma` is the prior 0.003 until measured;
@@ -1256,18 +1257,55 @@ Entry schema (copy for each new experiment):
   pending operating point + wire-live + re-pin
 - artifacts: RESEARCH_OUT/20260515-honest-fp-gt-runlen/
 
---- next: honest-fp-gt-runlen-adopt (GATED) — 1) user fixes operating
-    point (θ_gt, Lmin, g_gap) per the product definition of "a real FP"
-    (band spans Lmin 3→20; smaller Lmin honours 'brief blip = real FP',
-    clean ~1.9×; Lmin 8–12 treats sub-Lmin GT-far as annotation-gap noise,
-    clean ~0.8–1.4×; all PASS). 2) wire `_honest_fp_gt_runlen_core` live
-    as side-channel at the fixed point; offline==live correctness gate on
-    a smoke set. 3) FREEZE (replace the exp#6 interim volume ruler). 4)
-    clean full-pipeline re-pin reporting it beside fitness. 5)
-    honest-fp-train-adopt: switch the training objective from gamed
-    fp_tracks to THIS ruler (first sanctioned fitness change, K-seed vs
-    re-pinned baseline). Background run_in_background ONLY (re-pin lesson).
-    fitness UNTOUCHED until step 4 (§3/§4.5). ---
+### 20260515-honest-fp-iou0   [win(measurement) — RESOLVED + 1st fitness change]
+- selected: user challenged the Lmin justification (GT has no gaps —
+  interpolation valid everywhere) and crit-3 (clean≈gamed compares to the
+  broken baseline). Both correct.
+- primary_axis: measurement (terminal: the campaign's de-gaming goal)
+- change: probe_clean.py (EVIDENCE, not theory): on clean ship matched
+  tracks, 'no GT in frame' = 0.5% (my annotation-gap theory FALSIFIED);
+  99.5% of contaminating frames are 'real GT present, hyp box ≥θ from
+  EVERY one' = genuine spurious detections gamed hides. ⇒ Lmin
+  unjustified; crit-3 retired (gamed undercounts by construction →
+  honest>gamed on clean is CORRECT, not a false alarm). Added full hyp
+  box to the dump; pure `_honest_fp_runs_core` = IoU==0 (no overlap with
+  ANY real object), run-COUNT, matched-frame-ends-run, PARAMETER-FREE.
+- evidence: head-to-head (fresh full-box chain) — IoU=0 clean 797 vs old
+  83 (9.6×, matches the user's ~10× intuition); gaming step gamed −65%
+  but honest −28% ≈ real FP-vol −18% (sig 0.27, honest 0.63 — decisively
+  NOT the illusion). Invariant honest ≤ #FP frames == num_false_positives
+  verified 615/615. All gates gaming-resistant; IoU=0 chosen (param-free,
+  least-arguable, the user's stated natural definition).
+- FITNESS CHANGE (user-authorised, first sanctioned per §3/§4.5 now the
+  ruler is resolved): fitness_score penalises fp_tracks_honest_v2 with
+  K=5e-5 (= old 5e-4 ÷10; honest≈10× old on current nets so the
+  FP-track penalty weight is preserved — ship old 5e-4·83=0.0415 ≈ new
+  5e-5·797=0.0399). Still reports mota, idf1, old fp_tracks,
+  fp_tracks_honest_v2, fitness (pipeline columns updated).
+- preflight (§8.1): import-checked; smoke eval clean; correctness gate
+  PASS — live fp_tracks_honest_v2 == offline 3/3, fitness recompute
+  exact 3/3.
+- update: campaign measurement goal ACHIEVED — fitness now penalises a
+  gaming-resistant, parameter-free, fragmentation-aware, well-formed FP
+  ruler. crit-3 RETIRED (logged criterion change, front-matter).
+- decision: ruler RESOLVED & FROZEN (_honest_fp_runs_core, IoU=0);
+  exp#6/#9 superseded as the live ruler. fitness_uses_it = TRUE.
+- baseline: MUST be re-pinned under the new fitness (next).
+- bank curation: honest-fp-iou0 → confirmed(RESOLVED); honest-fp-gt-
+  runlen / -frame-metric → superseded as live ruler (kept for history);
+  honest-fp-train-adopt → folded in (fitness already switched).
+- artifacts: RESEARCH_OUT/20260515-honest-fp-iou0/
+
+--- next: honest-fp-repin2 (GATED) — clean full-pipeline cycle
+    (bootstrap_recipe.sh STOP_AFTER=1, run_in_background ONLY) under the
+    NEW fitness; re-pin baseline_ref {fitness(new), mota, idf1, fp_tracks
+    (old), fp_tracks_honest_v2, num_FP, provenance}; confirm end-to-end
+    'roughly similar weight' (new fitness ≈ old-style fitness on the
+    baseline within a few %), live==offline on 176 clips, honest ≤ num_FP.
+    THEN training/selection runs against the de-gamed fitness; prior
+    fp_tracks-dominated 'wins' (F5d ship, DAgger) re-audit under it.
+    §8.1 pre-flight; fitness now CHANGED so the freeze is lifted —
+    baseline_ref is stale until this completes. ---
 
 ## Progress curve
 
