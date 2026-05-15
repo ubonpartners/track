@@ -1088,4 +1088,4 @@ tracker_config_overrides:
 variants:
 - impl: baseline
   name: baseline
-workers: 4
+workers: auto
