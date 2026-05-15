@@ -1333,24 +1333,47 @@ Entry schema (copy for each new experiment):
     dominated past 'wins' (F5d ship, DAgger STOP_AFTER) are SUSPECT and
     must be re-audited under honest fitness before reuse.
 
---- DONE: (1) honest-fp-repin2 — baseline RE-PINNED (68aeb7c, fit 0.5706
-    honest_v2 908). (2) dagger-reaudit-honest — H_real-regression
-    (STOP_AFTER=1 confirmed; gamed metric had masked ½ the severity).
+### 20260515-nn-vs-nonn-metric   [win(measurement) — MAJOR; reframes campaign]
+- selected: user question — does the NN help more/less under the de-gamed
+  metric? Decomposed no-NN→state-only→match-only→both, full176 within-batch.
+- preflight: hit a self-inflicted bug — build_eval.py emitted
+  nn_lambda:null → C yaml-cpp strict-float 'bad conversion' → worker
+  crash → parent block (false 'hang'). Root-caused in 30s via unbuffered
+  direct-env-python (NOT conda-run+long-timeout — see memory
+  feedback-background-runs). Fix: leave nn_lambda a real float; nn
+  disabled by empty nn_path (C .empty() guard). 1-clip smoke 5s.
+- evidence: ΔfitOLD(NN−noNN)=+0.0508 vs ΔfitNEW=−0.0120. NN: ΔMOTA
+  −0.0054 (worse), ΔIDF1 +0.0061 (slightly better), Δhonest_v2 +122
+  (more honest FP), Δnum_FP +13858, Δold_fp −113 (234→121). The NN's
+  entire old-metric value was collapsing the GAMEABLE fp_tracks
+  (≈+0.057 at 5e-4 each). Honestly: legacy no-NN is the BEST config
+  (fitNEW 0.5826 > iter1 0.5706 > all NN variants).
+- update: the trained match/state NN, optimised against the gamed
+  objective, learned the merge/absorb gaming and is net slightly HARMFUL
+  honestly (one real gain: small IDF1). Validates the whole de-gaming
+  campaign — converted a +0.05 NN illusion into the true −0.012.
+- decision: measurement/diagnostic; NO fitness change, NO silent re-pin.
+  CAMPAIGN PIVOT (needs user steer): the NN training pipeline has been
+  chasing a gamed metric; the real lever is honest-fp-train-adopt
+  (retrain NN vs honest fitness). Open Q for user: re-pin baseline to
+  no-NN, or treat no-NN as the new reference to beat via honest-trained NN?
+- artifacts: RESEARCH_OUT/20260515-nn-vs-nonn-metric/
 
---- next: work the bank cheap→costly vs the pinned iter1 baseline
-    (within-batch, RESEARCH.md promotion gate), priors RE-JUDGED vs the
-    de-gamed fitness:
-    (3a) cheap-filter-delta-realign [next, cheap, p0.45] — eval iter1
-    config at utrack.match_cheap_filter_delta ∈ {0.5,0.6,0.7=control}
-    on full176; train/infer distribution-mismatch hypothesis (NN trained
-    @0.5, ship infers @0.7). Eval-only, no retrain. Then dedup-iou-sweep,
-    nn-lambda-sweep, new-track-thr-sweep (all cheap config sweeps).
-    (3b) STRUCTURAL: dagger-corpus-noNN-candidacy [child of dagger-
-    reaudit; the real MOTA-recovery lever — keep iter0 non-NN candidacy,
-    relabel TARGETS only; heavier, full retrain]. (3c) user-seeded
-    poseflow-box-warp, ablation-study.
-    run_in_background ONLY; one heavy pipeline at a time; promote only on
-    full-pipeline-clean + overall-better vs baseline_ref. ---
+--- DONE: honest-fp-repin2 (baseline pinned 68aeb7c); dagger-reaudit-honest
+    (STOP_AFTER=1 confirmed real); nn-vs-nonn-metric (NN is a gaming
+    artifact under honest fitness — MAJOR).
+
+--- next: AWAIT USER STEER on the campaign pivot (NN is net-negative
+    honestly; legacy no-NN fitNEW 0.5826 > iter1 0.5706). Options:
+    (A) honest-fp-train-adopt — regenerate the NN training corpus/objective
+    so the match/state NN optimises the honest fitness, not gamed
+    fp_tracks (heavy; the real lever; turns the NN from gaming-artifact
+    into genuine improvement). (B) re-pin baseline to no-NN and optimise
+    from there. (C) dagger-corpus-noNN-candidacy (corpus self-confirmation
+    fix) — complementary to (A). Recommend (A). Cheap-bank sweeps
+    (cheap-filter-delta-realign etc.) are now LOW priority — tuning a
+    gaming-artifact NN's knobs is unlikely to matter vs fixing the
+    objective. run_in_background ONLY; one heavy pipeline at a time. ---
 
 ## Progress curve
 
