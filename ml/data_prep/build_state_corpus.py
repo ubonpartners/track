@@ -53,6 +53,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import yaml
 
+import stuff
+
 import src.trackset as ts
 from src.pair_log import (
     best_iou_match as _best_iou_match,
@@ -1626,6 +1628,43 @@ class _TH:
 
 # --- driver -----------------------------------------------------------------
 
+def _extract_seq_work_fn(work_item, mpwq_context, mpwq_progress_fn=None):
+    """mp_workqueue worker: extract one sequence's state-corpus examples.
+
+    CPU-bound (FObsReplay.f_obs is pure numpy). The phase3 replay weights
+    are loaded once per worker process and cached in mpwq_context.
+    """
+    seq_name, seq, A = work_item
+    delay_aug_offsets = A["delay_aug_offsets"]
+
+    f_obs_replay = mpwq_context.get("process_setup_results")
+    if f_obs_replay is None and A["phase3_model"]:
+        f_obs_replay = FObsReplay(A["phase3_model"])
+        mpwq_context["process_setup_results"] = f_obs_replay
+
+    if A["label_driven"]:
+        ex = extract_sequence_label_driven(
+            seq_name, A["ubtrk2_path"], A["gt_path"],
+            k_min=A["k_min"], buffer_sec=A["buffer_sec"],
+            max_missed=A["max_missed"],
+            h_lookahead_sec=A["h_lookahead_sec"],
+            immediate_confirm_thr=A["immediate_confirm_thr"],
+            delay_aug_offsets=delay_aug_offsets,
+            delay_aug_tau=A["delay_aug_tau"],
+            f_obs_replay=f_obs_replay,
+            fitness_fp_boost=A["fitness_fp_boost"],
+        )
+    else:
+        ex = extract_sequence(
+            seq_name, A["ubtrk2_path"], A["gt_path"],
+            k_min=A["k_min"], buffer_sec=A["buffer_sec"],
+            max_missed=A["max_missed"],
+            h_lookahead_sec=A["h_lookahead_sec"],
+            f_obs_replay=f_obs_replay,
+        )
+    return {"seq_name": seq_name, "split": A["split"], "ex": ex}
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--pair-log-dir", required=True,
@@ -1665,6 +1704,11 @@ def main():
                         "The 2026-05-11 state_corpus_v18 reproducibility "
                         "incident was caused by v18 lacking this — no one "
                         "could reconstruct which pair-log dir it came from.")
+    p.add_argument("--workers", default="auto",
+                   help="parallel sequence workers (int or 'auto'). This "
+                        "step is CPU-bound (numpy f_obs replay); 'auto' "
+                        "resolves via stuff.resolve_num_workers. 0 = "
+                        "synchronous single process.")
     p.add_argument("--fitness-fp-boost", type=float, default=1.0,
                    help="Weight multiplier for examples on tracks that "
                         "never match any GT (= fp_tracks in fitness "
@@ -1677,16 +1721,30 @@ def main():
         int(x) for x in args.delay_aug.split(",") if x.strip()
     )
 
-    f_obs_replay = None
     if args.phase3_model:
-        f_obs_replay = FObsReplay(args.phase3_model)
-        print(f"f_obs replay: {args.phase3_model}  α={f_obs_replay.alpha}  "
-              f"e_dim={f_obs_replay.e_dim}", flush=True)
+        # Validate up-front in the parent so a bad checkpoint fails fast
+        # (workers re-load their own copy lazily).
+        _probe = FObsReplay(args.phase3_model)
+        print(f"f_obs replay: {args.phase3_model}  α={_probe.alpha}  "
+              f"e_dim={_probe.e_dim}", flush=True)
+        del _probe
 
     cfg = yaml.safe_load(open(args.gt_config))
     by_split: Dict[str, List[np.ndarray]] = {"train": [], "val": [], "test": []}
 
     ubtrk2_root = os.path.join(args.pair_log_dir, "ubtrk2")
+    common = {
+        "k_min": args.k_min, "buffer_sec": args.buffer_sec,
+        "max_missed": args.max_missed,
+        "h_lookahead_sec": args.h_lookahead_sec,
+        "immediate_confirm_thr": args.immediate_confirm_thr,
+        "delay_aug_offsets": delay_aug_offsets,
+        "delay_aug_tau": args.delay_aug_tau,
+        "label_driven": args.label_driven,
+        "phase3_model": args.phase3_model,
+        "fitness_fp_boost": args.fitness_fp_boost,
+    }
+    work_items = []
     for seq_name, seq in cfg["dataset"].items():
         split = seq.get("split", "train")
         gt_path = seq["trackset"]
@@ -1694,27 +1752,33 @@ def main():
         if not os.path.exists(ubtrk2_path):
             print(f"[skip] {seq_name}: no ubtrk2 at {ubtrk2_path}")
             continue
-        print(f"[{split:5s}] {seq_name}", flush=True)
-        if args.label_driven:
-            ex = extract_sequence_label_driven(
-                seq_name, ubtrk2_path, gt_path,
-                k_min=args.k_min, buffer_sec=args.buffer_sec,
-                max_missed=args.max_missed,
-                h_lookahead_sec=args.h_lookahead_sec,
-                immediate_confirm_thr=args.immediate_confirm_thr,
-                delay_aug_offsets=delay_aug_offsets,
-                delay_aug_tau=args.delay_aug_tau,
-                f_obs_replay=f_obs_replay,
-                fitness_fp_boost=args.fitness_fp_boost,
-            )
-        else:
-            ex = extract_sequence(
-                seq_name, ubtrk2_path, gt_path,
-                k_min=args.k_min, buffer_sec=args.buffer_sec,
-                max_missed=args.max_missed,
-                h_lookahead_sec=args.h_lookahead_sec,
-                f_obs_replay=f_obs_replay,
-            )
+        A = dict(common)
+        A["split"] = split
+        A["gt_path"] = gt_path
+        A["ubtrk2_path"] = ubtrk2_path
+        work_items.append((seq_name, seq, A))
+
+    workers = stuff.resolve_num_workers(args.workers)
+    print(f"extracting {len(work_items)} sequences with {workers} workers "
+          f"(CPU-bound; no GPU)", flush=True)
+
+    # CPU-bound numpy work — disable GPU sharding so workers aren't
+    # needlessly pinned to one GPU each.
+    results = stuff.mp_workqueue_run(
+        work_items, _extract_seq_work_fn,
+        num_workers=workers,
+        desc="state-corpus extract",
+        auto_gpu_shard=False,
+    )
+
+    # mp_workqueue returns results in completion order; restore the
+    # gt-config sequence order so the concatenated corpus (and thus the
+    # written npz row order) is deterministic regardless of worker count.
+    seq_order = {item[0]: i for i, item in enumerate(work_items)}
+    results.sort(key=lambda r: seq_order.get(r["seq_name"], 1 << 30))
+
+    for r in results:
+        ex = r["ex"]
         n_pos = {
             "promote": int((ex["valid_promote"] & ex["promote_label"]).sum()),
             "demote":  int((ex["valid_demote"]  & ex["demote_label"]).sum()),
@@ -1725,10 +1789,11 @@ def main():
             "demote":  int(ex["valid_demote"].sum()),
             "drop":    int(ex["valid_drop"].sum()),
         }
-        print(f"        n={len(ex):6d}  promote={n_pos['promote']}/{n_total['promote']}  "
+        print(f"[{r['split']:5s}] {r['seq_name']}  n={len(ex):6d}  "
+              f"promote={n_pos['promote']}/{n_total['promote']}  "
               f"demote={n_pos['demote']}/{n_total['demote']}  "
               f"drop={n_pos['drop']}/{n_total['drop']}")
-        by_split[split].append(ex)
+        by_split[r["split"]].append(ex)
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     from ml.util._artefact_meta import make_pt_meta, save_npz_with_meta
