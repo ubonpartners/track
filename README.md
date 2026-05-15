@@ -43,7 +43,6 @@ Runtime requirements:
 | `src/pair_log.py` | Pair-log emission engine used by `track_analysis.py` |
 | `src/pair_log_schema.py` | Binary record schema (mirrors `ubon_cstuff/src/track/utrack/utrack_pair_trace.h`) |
 | `ml/` | Training pipeline for the learned `nn_match` and `nn_state` runtime binaries — see [`ml/docs/`](ml/docs/) |
-| `experiments/archive/` | Historical one-off sweeps and experiment notes (not part of the supported CLI) |
 | `TRACKER_DEBUG.md` | Detailed tracker-result/debug format and migration/design notes |
 
 ## Supported Formats

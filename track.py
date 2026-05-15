@@ -164,7 +164,7 @@ def test_track(t, config_file, display=False, output=None, proxy=None, metrics="
         ts.display_trackset(trackset_list=[trackset], trackset_gt=trackset_gt, frame_events_list=[frame_events], output=output)
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(prog='view.py')
+    parser = argparse.ArgumentParser(prog='track.py')
     parser.add_argument('--logging', type=str, default='info', help="Logging config: level[:console|file]")
     parser.add_argument('--trackset', type=str, default='/mldata/tracking/mot/annotation/MOT20-01.json')
     parser.add_argument('--view', action='store_true', help='view a trackset')
