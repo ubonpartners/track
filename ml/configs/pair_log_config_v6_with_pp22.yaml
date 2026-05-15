@@ -1,0 +1,228 @@
+# Phase-1 follow-up: pair-log config with the offline-driven match_cost
+# improvements turned on. Same scenes/splits as pair_log_config.yaml so
+# results are directly comparable.
+#
+# Changes vs baseline (driven by ml/explore_score.py + explore_ocm.py):
+#   - utrack.motion_fuse_max:  use max(of, kf) instead of weighted-avg fusion
+#   - utrack.weak_h_weight: 0  (drop redundant size-h ratio cue)
+#   - utrack.weak_a_weight: 0  (drop redundant size-a ratio cue)
+#   - utrack.ocm_all_passes:    fire OCM in pass 0 too
+#   - utrack.ocm_min_speed: 0.01 (recover ~12% more candidates that fail
+#                                  the speed gate at 0.02)
+# weak_c_weight is kept (independent signal, not redundant with motion).
+
+tracker_config: /mldata/config/track/trackers/uc_v11.yaml
+tracker_config_overrides:
+    utrack:
+        debug_match_cost_trace: true
+        # NN-free corpus: Phase 3 disabled so pre_thr_score == bare match_cost.
+        # The retrained Phase 3 will run with this distribution at inference.
+        # Empty path so the existing prod model (trained on 12+6 inputs) doesn't
+        # even load against the new 11+5 feature builders.
+        nn_path: ""
+        nn_lambda: 0.0
+
+analysis_name: pair_log_v6_with_pp22
+output_root: runs/track_analysis/pair_log_v6_with_pp22
+metrics_enabled: ["pair_logger"]
+
+module_params:
+    pair_logger:
+        output_dir: runs/track_analysis/pair_log_v6_with_pp22/pair_log
+        seed_match_iou: 0.5
+        det_match_iou: 0.5
+        class_name: person
+        require_any_trace: true
+
+dataset_split: all
+
+dataset:
+    MOT20-05:                          { split: val,   trackset: /mldata/tracking/mot/annotation/MOT20-05.json }
+    MOT20-01:                          { split: train, trackset: /mldata/tracking/mot/annotation/MOT20-01.json }
+    MOT20-02:                          { split: test,  trackset: /mldata/tracking/mot/annotation/MOT20-02.json }
+    MOT20-03:                          { split: train, trackset: /mldata/tracking/mot/annotation/MOT20-03.json }
+    MOT17-02:                          { split: val,   trackset: /mldata/tracking/mot/annotation/MOT17-02.json }
+    MOT17-04:                          { split: train, trackset: /mldata/tracking/mot/annotation/MOT17-04.json }
+    MOT17-05:                          { split: train, trackset: /mldata/tracking/mot/annotation/MOT17-05.json }
+    MOT17-09:                          { split: train, trackset: /mldata/tracking/mot/annotation/MOT17-09.json }
+    MOT17-10:                          { split: val,   trackset: /mldata/tracking/mot/annotation/MOT17-10.json }
+    MOT17-11:                          { split: train, trackset: /mldata/tracking/mot/annotation/MOT17-11.json }
+    MOT17-13:                          { split: train, trackset: /mldata/tracking/mot/annotation/MOT17-13.json }
+    UKof_LD_Indoor_Light_OHcam_002:    { split: train, trackset: /mldata/tracking/cevo/annotation/UKof_LD_Indoor_Light_OHcam_002.json }
+    UKof_LD_Indoor_Light_OHcam_001:    { split: val,   trackset: /mldata/tracking/cevo/annotation/UKof_LD_Indoor_Light_OHcam_001.json }
+    UKof_LD_Indoor_Light_FFcam_001:    { split: test,  trackset: /mldata/tracking/cevo/annotation/UKof_LD_Indoor_Light_FFcam_001.json }
+    UKof_HD_Indoor_Light_OHcam_001:    { split: train, trackset: /mldata/tracking/cevo/annotation/UKof_HD_Indoor_Light_OHcam_001.json }
+    UKof_HD_Indoor_Light_OHcam_002:    { split: train, trackset: /mldata/tracking/cevo/annotation/UKof_HD_Indoor_Light_OHcam_002.json }
+    UKof_LD_Indoor_Light_OHcam_010:    { split: val,   trackset: /mldata/tracking/cevo/annotation/UKof_LD_Indoor_Light_OHcam_010.json }
+    UKof_MD_Indoor_Light_OHcam_001:    { split: train, trackset: /mldata/tracking/cevo/annotation/UKof_MD_Indoor_Light_OHcam_001.json }
+    UKof_LD_Indoor_Light_OHcam_004:    { split: train, trackset: /mldata/tracking/cevo/annotation/UKof_LD_Indoor_Light_OHcam_004.json }
+    UKof_MD_Indoor_LLight_OHcam_001:   { split: train, trackset: /mldata/tracking/cevo/annotation/UKof_MD_Indoor_LLight_OHcam_001.json }
+    INof_MD_Indoor_Night_OHcam_001:    { split: val,   trackset: /mldata/tracking/cevo/annotation/INof_MD_Indoor_Night_OHcam_001.json }
+    INof_MD_Indoor_Night_OHcam_002:    { split: train, trackset: /mldata/tracking/cevo/annotation/INof_MD_Indoor_Night_OHcam_002.json }
+    UKof_LD_Indoor_Light_OHcam_006:    { split: train, trackset: /mldata/tracking/cevo/annotation/UKof_LD_Indoor_Light_OHcam_006.json }
+    UKof_LD_Indoor_Light_OHcam_009:    { split: train, trackset: /mldata/tracking/cevo/annotation/UKof_LD_Indoor_Light_OHcam_009.json }
+    UKof_LD_Indoor_Light_OHcam_008:    { split: val,   trackset: /mldata/tracking/cevo/annotation/UKof_LD_Indoor_Light_OHcam_008.json }
+    UKof_LD_Indoor_Light_OHcam_007:    { split: train, trackset: /mldata/tracking/cevo/annotation/UKof_LD_Indoor_Light_OHcam_007.json }
+    UKof_LD_Indoor_Light_OHcam_011:    { split: train, trackset: /mldata/tracking/cevo/annotation/UKof_LD_Indoor_Light_OHcam_011.json }
+    UKof_LD_Indoor_Light_OHcam_003:    { split: train, trackset: /mldata/tracking/cevo/annotation/UKof_LD_Indoor_Light_OHcam_003.json }
+    UKof_MD_Indoor_Light_FFcam_001:    { split: val,   trackset: /mldata/tracking/cevo/annotation/UKof_MD_Indoor_Light_FFcam_001.json }
+    UKof_LD_Indoor_Light_FFcam_002:    { split: train, trackset: /mldata/tracking/cevo/annotation/UKof_LD_Indoor_Light_FFcam_002.json }
+    UKof_LD_Indoor_Light_OHcam_005:    { split: train, trackset: /mldata/tracking/cevo/annotation/UKof_LD_Indoor_Light_OHcam_005.json }
+    INof_LD_IN_LLight_FFcam_001:       { split: train, trackset: /mldata/tracking/cevo_april25/annotation/INof_LD_IN_LLight_FFcam_001.json }
+    INof_LD_Out_Light_FFcam_001:       { split: val,   trackset: /mldata/tracking/cevo_april25/annotation/INof_LD_Out_Light_FFcam_001.json }
+    INof_MD_Out_Light_FFcam_001:       { split: test,  trackset: /mldata/tracking/cevo_april25/annotation/INof_MD_Out_Light_FFcam_001.json }
+    INof_FD_OutFD_Light_FFcam_001:     { split: val,   trackset: /mldata/tracking/cevo_april25/annotation/INof_FD_OutFD_Light_FFcam_001.json }
+    INof_LD_OutLD_Light_FFcam_001:     { split: train, trackset: /mldata/tracking/cevo_april25/annotation/INof_LD_OutLD_Light_FFcam_001.json }
+    INof_LD_Out_Light_FFcam_002:       { split: val,   trackset: /mldata/tracking/cevo_april25/annotation/INof_LD_Out_Light_FFcam_002.json }
+    INof_MD_Out_Light_FFcam_002:       { split: train, trackset: /mldata/tracking/cevo_april25/annotation/INof_MD_Out_Light_FFcam_002.json }
+    INof_LD_IN_Light_FFcam_002:        { split: val,   trackset: /mldata/tracking/cevo_april25/annotation/INof_LD_IN_Light_FFcam_002.json }
+    INof_LD_OutLD_Light_FFcam_002:     { split: train, trackset: /mldata/tracking/cevo_april25/annotation/INof_LD_OutLD_Light_FFcam_002.json }
+    INof_MD_Out_Light_FFcam_003:       { split: test,  trackset: /mldata/tracking/cevo_april25/annotation/INof_MD_Out_Light_FFcam_003.json }
+    INof_LD_Out_Light_FFcam_004:       { split: train, trackset: /mldata/tracking/cevo_april25/annotation/INof_LD_Out_Light_FFcam_004.json }
+    INof_MD_Out_Light_FFcam_004:       { split: val,   trackset: /mldata/tracking/cevo_april25/annotation/INof_MD_Out_Light_FFcam_004.json }
+    # --- personpath22 (added 2026-05-06) ---
+    PP22_00000:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00000.json }
+    PP22_00001:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00001.json }
+    PP22_00002:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00002.json }
+    PP22_00003:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00003.json }
+    PP22_00004:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00004.json }
+    PP22_00005:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00005.json }
+    PP22_00006:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00006.json }
+    PP22_00007:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00007.json }
+    PP22_00010:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00010.json }
+    PP22_00012:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00012.json }
+    PP22_00014:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00014.json }
+    PP22_00015:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00015.json }
+    PP22_00016:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00016.json }
+    PP22_00017:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00017.json }
+    PP22_00021:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00021.json }
+    PP22_00022:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00022.json }
+    PP22_00023:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00023.json }
+    PP22_00025:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00025.json }
+    PP22_00026:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00026.json }
+    PP22_00027:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00027.json }
+    PP22_00029:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00029.json }
+    PP22_00032:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00032.json }
+    PP22_00033:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00033.json }
+    PP22_00034:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00034.json }
+    PP22_00037:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00037.json }
+    PP22_00039:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00039.json }
+    PP22_00040:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00040.json }
+    PP22_00041:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00041.json }
+    PP22_00042:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00042.json }
+    PP22_00044:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00044.json }
+    PP22_00047:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00047.json }
+    PP22_00049:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00049.json }
+    PP22_00050:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00050.json }
+    PP22_00052:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00052.json }
+    PP22_00053:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00053.json }
+    PP22_00054:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00054.json }
+    PP22_00055:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00055.json }
+    PP22_00058:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00058.json }
+    PP22_00059:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00059.json }
+    PP22_00060:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00060.json }
+    PP22_00061:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00061.json }
+    PP22_00062:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00062.json }
+    PP22_00065:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00065.json }
+    PP22_00070:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00070.json }
+    PP22_00072:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00072.json }
+    PP22_00073:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00073.json }
+    PP22_00074:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00074.json }
+    PP22_00075:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00075.json }
+    PP22_00077:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00077.json }
+    PP22_00081:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00081.json }
+    PP22_00083:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00083.json }
+    PP22_00084:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00084.json }
+    PP22_00088:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00088.json }
+    PP22_00089:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00089.json }
+    PP22_00091:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00091.json }
+    PP22_00093:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00093.json }
+    PP22_00094:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00094.json }
+    PP22_00095:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00095.json }
+    PP22_00097:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00097.json }
+    PP22_00101:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00101.json }
+    PP22_00103:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00103.json }
+    PP22_00104:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00104.json }
+    PP22_00106:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00106.json }
+    PP22_00108:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00108.json }
+    PP22_00110:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00110.json }
+    PP22_00111:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00111.json }
+    PP22_00112:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00112.json }
+    PP22_00115:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00115.json }
+    PP22_00116:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00116.json }
+    PP22_00119:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00119.json }
+    PP22_00120:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00120.json }
+    PP22_00123:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00123.json }
+    PP22_00128:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00128.json }
+    PP22_00129:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00129.json }
+    PP22_00131:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00131.json }
+    PP22_00132:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00132.json }
+    PP22_00134:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00134.json }
+    PP22_00135:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00135.json }
+    PP22_00136:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00136.json }
+    PP22_00137:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00137.json }
+    PP22_00140:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00140.json }
+    PP22_00142:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00142.json }
+    PP22_00143:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00143.json }
+    PP22_00145:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00145.json }
+    PP22_00146:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00146.json }
+    PP22_00148:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00148.json }
+    PP22_00151:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00151.json }
+    PP22_00152:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00152.json }
+    PP22_00154:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00154.json }
+    PP22_00155:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00155.json }
+    PP22_00156:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00156.json }
+    PP22_00157:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00157.json }
+    PP22_00159:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00159.json }
+    PP22_00160:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00160.json }
+    PP22_00164:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00164.json }
+    PP22_00165:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00165.json }
+    PP22_00168:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00168.json }
+    PP22_00171:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00171.json }
+    PP22_00176:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00176.json }
+    PP22_00177:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00177.json }
+    PP22_00180:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00180.json }
+    PP22_00181:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00181.json }
+    PP22_00182:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00182.json }
+    PP22_00184:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00184.json }
+    PP22_00185:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00185.json }
+    PP22_00186:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00186.json }
+    PP22_00187:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00187.json }
+    PP22_00188:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00188.json }
+    PP22_00192:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00192.json }
+    PP22_00194:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00194.json }
+    PP22_00195:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00195.json }
+    PP22_00196:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00196.json }
+    PP22_00197:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00197.json }
+    PP22_00199:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00199.json }
+    PP22_00202:                       { split: train, trackset: /mldata/tracking/personpath22/annotation/uid_vid_00202.json }
+    PP22_00203:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00203.json }
+    PP22_00204:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00204.json }
+    PP22_00206:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00206.json }
+    PP22_00208:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00208.json }
+    PP22_00209:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00209.json }
+    PP22_00210:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00210.json }
+    PP22_00211:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00211.json }
+    PP22_00213:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00213.json }
+    PP22_00214:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00214.json }
+    PP22_00215:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00215.json }
+    PP22_00216:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00216.json }
+    PP22_00217:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00217.json }
+    PP22_00220:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00220.json }
+    PP22_00223:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00223.json }
+    PP22_00224:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00224.json }
+    PP22_00225:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00225.json }
+    PP22_00227:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00227.json }
+    PP22_00229:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00229.json }
+    PP22_00231:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_00231.json }
+    PP22_99999:                       { split: val,   trackset: /mldata/tracking/personpath22/annotation/uid_vid_99999.json }
+
+force_regen: true
+debug_enable: true
+min_interval: 0.199
+workers: 0
+
+variants:
+    - { name: baseline, impl: baseline }
+
+baseline_variant: baseline

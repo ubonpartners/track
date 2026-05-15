@@ -119,7 +119,7 @@ def eval_track(yaml_file):
       sort_key:       column to sort the report by (e.g. fitness or mota)
       results_location: optional dir for the persisted .txt report
 
-    Compared to bench/eval_head_fitness this:
+    Compared to ml/eval_head_fitness this:
       - shares loaded detector engines across the work queue
         (no per-clip process spinup);
       - evaluates multiple tracker variants in a single run (cartesian

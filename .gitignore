@@ -13,11 +13,11 @@ REVIEW.md
 tss.py
 wc
 
-# Training/eval artefact trees — regenerable via bench/bootstrap_recipe.sh
-# (bench/data alone can grow to tens of GB; whole tree was wiped 2026-05-14)
-bench/data/
-bench/data_*/
-bench/_archive/
+# Training/eval artefact trees — regenerable via ml/orchestration/bootstrap_recipe.sh
+# (ml/data alone can grow to tens of GB; whole tree was wiped 2026-05-14)
+ml/data/
+ml/data_*/
+ml/_archive/
 
 # track_analysis.py run output trees (regen via the bootstrap recipe)
 # Note: runs/state_head_retrain/ contains tracked benchmark snapshots

@@ -4,7 +4,7 @@ Schema for the per-frame (track, det) pair feature trace.
 This is the Python mirror of
 ubon_cstuff/src/track/utrack/utrack_pair_trace.h.  Adding/removing fields
 or changing their order requires the matching change there, and the
-round-trip parity test in track/bench/round_trip_schema_test.py must
+round-trip parity test in track/ml/round_trip_schema_test.py must
 pass before merging either side.
 
 Design notes:

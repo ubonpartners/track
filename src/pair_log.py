@@ -15,7 +15,7 @@ pieces in one place:
     evaluator on each clip's trace.
   * ``evaluate_pair_logger(sequence_ctx, module_params)`` — labels each
     (track, det) pair via best-IoU GT alignment and writes the NPZ.
-  * Small IoU / GT-objects helpers re-used by ``bench/build_state_corpus.py``.
+  * Small IoU / GT-objects helpers re-used by ``ml/data_prep/build_state_corpus.py``.
 
 Public API is exposed at module scope; the older variant-keyed summary
 shape and ``compare.{json,md}`` outputs are gone.
@@ -158,7 +158,7 @@ def _filter_dataset_by_split(
 
 
 # ----------------------------------------------------------------------
-# IoU + GT helpers — kept here because bench/build_state_corpus.py imports
+# IoU + GT helpers — kept here because ml/data_prep/build_state_corpus.py imports
 # them (best_iou_match, gt_objects_at_time_class) and evaluate_pair_logger
 # uses them too.
 # ----------------------------------------------------------------------
@@ -779,11 +779,11 @@ def run_track_analysis(config: Dict[str, Any]) -> Dict[str, Any]:
     # otherwise silently runs ALL clips with the wrong tracker behavior
     # and we only notice when the corpus comes back wrong.
     try:
-        from bench._pipeline_checks import (
+        from ml.util._pipeline_checks import (
             validate_utrack_overrides, assert_tracker_bins_present,
         )
     except Exception:
-        # bench/ may be absent in some downstream installs. Skip silently.
+        # ml/ may be absent in some downstream installs. Skip silently.
         validate_utrack_overrides = None
         assert_tracker_bins_present = None
     if validate_utrack_overrides is not None:
