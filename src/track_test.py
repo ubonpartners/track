@@ -132,6 +132,63 @@ def compute_detection_metrics(gt, test,
                 metrics_dict[f"det_p_{cl_name}_{s}"]=p_curve[cl][index]
                 metrics_dict[f"det_r_{cl_name}_{s}"]=r_curve[cl][index]
 
+def _honest_fp_tracks(df, l_lead=5, l_lag=5, g_max=10):
+    """Segment-based unique-FP count over a motmetrics events frame.
+
+    Robust-unique-FP definition (experiment
+    20260515-honest-fp-track-metric-definition). For each hypothesis
+    track HId, order its events by frame and split into matched vs FP
+    frames (Type=='FP' is unmatched; MATCH/SWITCH/transfer-family count
+    as associated-to-a-GT). Then charge a unique FP for each *material*
+    unmatched segment:
+      - lead-in : FP run BEFORE the first matched frame, length >= l_lead
+      - lag-out : FP run AFTER  the last  matched frame, length >= l_lag
+      - bridge  : FP run BETWEEN two matched frames, length >= g_max
+      - a never-matched track stays exactly 1 FP (== the gamed metric).
+    Thresholds are in *evaluated frames* (~0.1 s each at the eval
+    framerate); they are the validation knobs for the threshold-
+    robustness sweep. Spatial-excursion gate is a documented follow-up;
+    this temporal v0 already captures the user's core proposal.
+
+    Invariant: honest_fp_tracks >= gamed fp_tracks (partial-match tracks
+    score 0 under the gamed metric but may score >0 here).
+    """
+    MATCHED = {"MATCH", "SWITCH", "TRANSFER", "MIGRATE", "ASCEND"}
+    sub = df[df["HId"].notna() & (df["Type"] != "RAW")]
+    honest = 0
+    fully = lead = lag = bridge = 0
+    for hid, g in sub.groupby("HId"):
+        g = g.sort_index(level=0)
+        types = list(g["Type"])
+        is_fp = [t == "FP" for t in types]
+        matched_pos = [i for i, t in enumerate(types) if t in MATCHED]
+        if not matched_pos:
+            honest += 1            # never matched anything — 1 FP (unchanged)
+            fully += 1
+            continue
+        first_m, last_m = matched_pos[0], matched_pos[-1]
+        lead_n = sum(1 for i in range(0, first_m) if is_fp[i])
+        lag_n = sum(1 for i in range(last_m + 1, len(types)) if is_fp[i])
+        if lead_n >= l_lead:
+            honest += 1; lead += 1
+        if lag_n >= l_lag:
+            honest += 1; lag += 1
+        run = 0
+        for i in range(first_m + 1, last_m):
+            if is_fp[i]:
+                run += 1
+            else:
+                if run >= g_max:
+                    honest += 1; bridge += 1
+                run = 0
+    return {
+        "honest_fp_tracks": int(honest),
+        "fully_unmatched": int(fully),
+        "leadin": int(lead), "lagout": int(lag), "bridge": int(bridge),
+        "thresholds": {"l_lead": l_lead, "l_lag": l_lag, "g_max": g_max},
+    }
+
+
 def compute_metrics(gt, test,
                     max_duration=1000,
                     frame_metrics=False,
@@ -289,6 +346,22 @@ def compute_metrics(gt, test,
         # Finally
         num_false_positive_tracks = len(false_positive_track_ids)
         metrics_dict["fp_tracks"]=num_false_positive_tracks
+
+        # --- honest (segment-based) unique-FP, side-channel only --------------
+        # Experiment 20260515-honest-fp-track-metric-definition. Does NOT
+        # alter fitness (fitness_score reads fp_tracks/fp_per_frame/mota) —
+        # this is an extra diagnostic field so the frozen metric (§3) is
+        # untouched. A partially-matched track currently scores 0 unique FP
+        # however much FP it carries before/after/between its matched
+        # section; that is the exploit. Here we additionally charge a unique
+        # FP for each *material* unmatched segment.
+        try:
+            hfp = _honest_fp_tracks(df)
+            metrics_dict["fp_tracks_honest"] = hfp["honest_fp_tracks"]
+            metrics_dict["fp_tracks_honest_breakdown"] = hfp  # leadin/lagout/bridge/fully
+        except Exception as _e:  # never let instrumentation break the eval
+            metrics_dict["fp_tracks_honest"] = num_false_positive_tracks
+            metrics_dict["fp_tracks_honest_breakdown"] = {"error": repr(_e)}
 
         all_gt_ids = df['OId'].dropna().unique()
         matched_gt_ids = df.loc[df['Type'] == 'MATCH', 'OId'].unique()
