@@ -431,23 +431,28 @@ a *structural* mechanism get more prior mass with wider `sd`.
   source: agent
   primary_axis: measurement
   depends_on: honest-fp-track-metric-definition
-  touches: [_honest_fp_tracks l_lead/l_lag/g_max ; re-score, no re-eval]
+  touches: [_honest_fp_tracks l_lead/l_lag/g_max/theta ; re-score, no re-eval]
+  decisive: true        # 20260515 exp#4: THE crux. crit-3 (clean≈gamed) and
+                        # crit-1 (decoupling≥~0.8) are in TENSION along θ —
+                        # θ=2.0 gave 0.8x clean but decoupling 0.40; temporal-
+                        # only gave 0.88 decoupling but 31x clean. Joint
+                        # search over (θ,l_lead,l_lag,g_max) for BOTH.
   mechanism: >
-    Criterion 2: the 0.33->0.88 decoupling fix and the clean≈honest
-    property must be STABLE across a sensible threshold range, not
-    knife-edge. _honest_fp_tracks can be re-evaluated at many
-    (l_lead,l_lag,g_max) settings from the SAME per-frame event data
-    (cheap — ideally cache the events frame so no re-eval is needed).
-  prior_p_win: 0.50
+    Criterion 2 + the exp#4 tension: find (θ,l_lead,l_lag,g_max) giving
+    clean-ship honest/gamed ∈ ~[0.7,2] AND iter1→iter2 honest decoupling
+    ≥ ~0.8 *simultaneously*. Cheap if the per-frame event+centroid data
+    is cached so thresholds re-score without re-eval. If no joint band
+    exists the count formulation can't separate gaming from legit
+    occlusion -> pivot to honest-fp-frame-metric.
+  prior_p_win: 0.35    # exp#4 lowered: genuine chance no joint band exists
   prior_effect: {mean: 0.000, sd: 0.000}
   prediction: >
-    There exists a contiguous threshold band where (a) iter1→iter2
-    honest decoupling stays ~0.8-1.0 AND (b) clean-ship honest≈gamed.
-    Report the band + a recommended operating point. Falsified if the
-    two requirements have no overlapping band (def too weak -> spatial
-    gate / FP-frame metric).
-  correlated_with: [honest-fp-cleanconfig-falsealarm, honest-fp-spatial-gate]
-  status: open
+    Either a contiguous (θ,thresholds) band satisfies BOTH crit-3 and
+    crit-1 (report it + operating point) OR none does (FALSIFIES the
+    count formulation -> honest-fp-frame-metric).
+  correlated_with: [honest-fp-cleanconfig-falsealarm, honest-fp-spatial-gate,
+                    honest-fp-frame-metric]
+  status: open   # DECISIVE next pick
 
 - slug: honest-fp-spatial-gate
   category: measurement
@@ -471,6 +476,32 @@ a *structural* mechanism get more prior mass with wider `sd`.
     separate legit-long-occlusion from teleport (then fall back to an
     FP-frame / FP-track-seconds metric).
   correlated_with: [honest-fp-cleanconfig-falsealarm, honest-fp-threshold-sweep]
+  status: confirmed   # 20260515 exp#4: crit-3 FIXED (31x->0.8x) but crit-1
+                      # REGRESSED (decoupling 0.88->0.40 @θ2.0). θ tension.
+                      # Prediction only HALF held. See Experiment Log.
+
+- slug: honest-fp-frame-metric
+  category: measurement
+  cost_class: medium
+  source: agent
+  primary_axis: measurement
+  depends_on: honest-fp-threshold-sweep   # contingency if no count θ-band exists
+  mechanism: >
+    exp#4 showed segment-COUNT honest-FP has crit-3 vs crit-1 in tension
+    along θ. Contingency: charge FP by *surviving spatially-excursive FP
+    frames* (FP-track-seconds), not per-segment units. Merging an FP into
+    a matched track keeps the FP frames so they still count (hard to
+    game); a short benign coast contributes few frames (graceful on clean
+    trackers). Closest to the user's original "count FP for detections
+    not matching a GT before/after a matching section".
+  prior_p_win: 0.45
+  prior_effect: {mean: 0.000, sd: 0.000}
+  prediction: >
+    Clean ship ≈ small multiple of gamed FP-frames (sane) AND iter1→iter2
+    honest-frame Δ tracks FP-volume Δ (decoupling →~1) — satisfies BOTH
+    where the count formulation could not. Falsified if it also decouples
+    or over-charges (then need GT-trajectory-aware matching).
+  correlated_with: [honest-fp-threshold-sweep, honest-fp-track-metric-definition]
   status: open
 
 - slug: poseflow-box-warp
