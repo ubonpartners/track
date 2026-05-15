@@ -29,18 +29,19 @@ ev_floor:          0.0005  # fitness per cheap-unit; below => consider stop
 cost_units:        {cheap: 1, medium: 8, heavy: 30}
 objective_order:   [fitness, idf1, speed, simplicity]  # lexicographic; fitness never bought
 artifact_root:     RESEARCH_OUT          # one folder per experiment under here; zero scatter
-baseline_ref:                            # PINNED 20260515 honest-fp-frame-metric-repin
+baseline_ref:                            # RE-PINNED 20260515 honest-fp-repin2 (under DE-GAMED fitness)
   source:    clean bootstrap iter1 (ml/orchestration/bootstrap_recipe.sh STOP_AFTER=1)
-  git_sha:   {track: 08daed2, stuff: d02eda8, ubon_cstuff: 57b21b1}
+  git_sha:   {track: 7ed26f0, stuff: d02eda8, ubon_cstuff: 57b21b1}
   group:     full176 / test=full
-  fitness:   0.5463
-  mota:      0.6181
-  idf1:      0.5758
-  fp_tracks: 139
-  num_false_positives: 98394
-  fp_frames_honest:    8403   # frozen ruler; clean_frac 0.0854 (in exp#6 ship band)
-  provenance: RESEARCH_OUT/20260515-honest-fp-frame-metric/baseline_ref.json
-  # full detail: {fitness, mota, idf1, fp_tracks, num_FP, fp_frames_honest, speed→num_frames 86140}
+  fitness:   0.5706   # NEW de-gamed: mota - 0.35*(fp_tracks_honest_v2/duration) - 0.002*fp_per_frame
+  mota:      0.6197
+  idf1:      0.5752
+  fp_tracks_old:        121     # gameable (reporting only; NOT in fitness)
+  fp_tracks_honest_v2:  908     # de-gamed ruler — drives fitness
+  num_false_positives:  103128  # invariant honest(908) <= num_FP: OK
+  duration_s:           6798.3
+  provenance: RESEARCH_OUT/20260515-honest-fp-iou0/baseline_ref.json
+  # prior baseline (gamed fitness 0.5463) SUPERSEDED; all optimization Δ measured vs THIS within-batch
 promotion_gate:    [candidate_confirmed, full_pipeline_clean, overall_better_metrics]
 honest_ruler:                            # RESOLVED exp#10 20260515-honest-fp-iou0
   metric:          fp_tracks_honest_v2   # src.track_test._honest_fp_runs_core
@@ -50,7 +51,7 @@ honest_ruler:                            # RESOLVED exp#10 20260515-honest-fp-io
   fitness_uses_it: true                   # fitness_score: mota - 5e-5*fp_tracks_honest_v2 - 0.002*fp_per_frame  (K = old 5e-4 ÷10; weight preserved on current nets)
   invariant:       honest <= #FP frames == num_false_positives (verified 615/615)
   retired_crit3:   true                   # 'clean honest≈gamed' RETIRED — gamed structurally undercounts; honest>gamed on clean is correct (logged change, exp#10)
-  baseline_ref:    STALE                  # fitness changed -> must re-pin (next: honest-fp-repin2)
+  baseline_ref:    RE-PINNED              # honest-fp-repin2 done: fit 0.5706, honest_v2 908 (front-matter baseline_ref)
 ```
 
 > Bootstrap has not yet run. `sigma` is the prior 0.003 until measured;
