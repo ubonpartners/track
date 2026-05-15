@@ -324,6 +324,7 @@ def evaluate_pair_logger(
     n_frames_with_records = 0
     n_dropped_no_gt_track = 0
     n_dropped_no_gt_det = 0
+    n_phantom_neg = 0   # honest-fp-train-adopt: (real track, IoU==0 det)
     n_pos = 0
     n_neg = 0
 
@@ -421,7 +422,25 @@ def evaluate_pair_logger(
             ]
             det_best_gt, det_best_iou = best_iou_match(det_box, gt_curr)
             if det_best_gt is None or det_best_iou < det_match_iou:
-                n_dropped_no_gt_det += 1
+                # honest-fp-train-adopt (20260515): the track here is
+                # GT-aligned (real). If the detection overlaps NO real
+                # object (IoU==0 with every GT — the resolved honest
+                # ruler's phantom definition), this is exactly the
+                # gaming vector: absorbing a phantom onto a real track.
+                # Emit it as a NEGATIVE example so the match-NN learns
+                # NOT to do that (training signal aligned with the
+                # de-gamed fitness). The ambiguous gray zone
+                # 0<IoU<det_match_iou stays DROPPED — loose-but-near-
+                # real detections are NOT what honest fitness penalises;
+                # labelling them 0 would teach rejection of imprecise
+                # real detections and hurt MOTA/recall.
+                if det_best_gt is None or det_best_iou <= 0.0:
+                    kept_indices.append(r_idx)
+                    kept_labels.append(0)
+                    n_neg += 1
+                    n_phantom_neg += 1
+                else:
+                    n_dropped_no_gt_det += 1
                 continue
             det_gt_id = int(det_best_gt.track_id)
 
@@ -489,6 +508,7 @@ def evaluate_pair_logger(
         "positive_rate": (float(n_pos) / float(n_total)) if n_total > 0 else None,
         "n_dropped_no_gt_track": n_dropped_no_gt_track,
         "n_dropped_no_gt_det": n_dropped_no_gt_det,
+        "n_phantom_neg": n_phantom_neg,
         "n_frames_with_trace": n_frames_with_trace,
         "n_frames_with_records": n_frames_with_records,
         "n_frames_total": len(frames),
@@ -631,6 +651,7 @@ def _build_summary(
         per_seq_metrics[seq_name] = m
         for k in ("n_pairs", "n_positives", "n_negatives",
                   "n_dropped_no_gt_track", "n_dropped_no_gt_det",
+                  "n_phantom_neg",
                   "n_frames_with_trace", "n_frames_with_records",
                   "n_frames_total"):
             try:
@@ -649,6 +670,7 @@ def _build_summary(
         "positive_rate": (total_pos / total_pairs) if total_pairs > 0 else None,
         "n_dropped_no_gt_track": int(totals.get("n_dropped_no_gt_track", 0)),
         "n_dropped_no_gt_det": int(totals.get("n_dropped_no_gt_det", 0)),
+        "n_phantom_neg": int(totals.get("n_phantom_neg", 0)),
     }
 
     generation_ok = [g for g in generation_results if g.get("ok")]

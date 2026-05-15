@@ -1333,7 +1333,13 @@ Entry schema (copy for each new experiment):
     dominated past 'wins' (F5d ship, DAgger STOP_AFTER) are SUSPECT and
     must be re-audited under honest fitness before reuse.
 
-### 20260515-nn-vs-nonn-metric   [win(measurement) — MAJOR; reframes campaign]
+### 20260515-nn-vs-nonn-metric   [win(measurement) — confirms de-gaming; expected]
+# NOTE (user, calibrated framing): this is NOT surprising — the NN faithfully
+# optimised the OLD objective it was given (pair-log labels served the gamed
+# metric); the no-NN heuristic optimises nothing so is metric-neutral.
+# Inverting the objective predictably inverts the comparison. Result =
+# confirmation the de-gamed metric works + quantifies how much of the NN's
+# "value" was the old objective. Motivates (does not surprise) the retrain.
 - selected: user question — does the NN help more/less under the de-gamed
   metric? Decomposed no-NN→state-only→match-only→both, full176 within-batch.
 - preflight: hit a self-inflicted bug — build_eval.py emitted
@@ -1360,8 +1366,10 @@ Entry schema (copy for each new experiment):
 - artifacts: RESEARCH_OUT/20260515-nn-vs-nonn-metric/
 
 --- DONE: honest-fp-repin2 (baseline pinned 68aeb7c); dagger-reaudit-honest
-    (STOP_AFTER=1 confirmed real); nn-vs-nonn-metric (NN is a gaming
-    artifact under honest fitness — MAJOR).
+    (STOP_AFTER=1 confirmed real); nn-vs-nonn-metric (expected: NN
+    optimised the OLD objective so is net-negative under honest fitness;
+    no-NN is metric-neutral. Confirms the de-gaming; motivates the
+    retrain — user chose honest-fp-train-adopt).
 
 --- next: AWAIT USER STEER on the campaign pivot (NN is net-negative
     honestly; legacy no-NN fitNEW 0.5826 > iter1 0.5706). Options:
