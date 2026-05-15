@@ -1468,11 +1468,32 @@ Entry schema (copy for each new experiment):
 - artifacts: RESEARCH_OUT/20260515-honest-fp-train-adopt/ (analyze_v2.log,
   eval_iter1_honest_v2.json)
 
+### 20260515-honest-fp-train-adopt-v3   [win(measurement) — predicted over-merge]
+- change: src/pair_log.py 3108cbd — v2 precise negative + UNCONDITIONAL
+  FP+FP-merge positive (phantom track + phantom det → label 1).
+  Pair-log: 157591 merge-positives vs 7966 phantom-negs (~20:1, blunt).
+- prior: P(v3 closes gap)=0.50
+- evidence (within-batch full176): v3 fitNEW 0.5700 — REGRESSED below
+  v2 (0.5758) and ≈ pinned iter1 (0.5706). vs v2: ΔMOTA −0.0053
+  (0.6213→0.6160), honest_v2 839→849 (UP, opposite of intended). The
+  157k blunt merge-positives over-biased the match-NN toward merging
+  in general → MOTA cost, no honest_v2 reduction. Symmetric v1 mistake.
+- prediction check: the watch-point (flagged pre-completion) HELD —
+  blunt positive over-merges, exactly like blunt negative over-rejected.
+- update: PRIMARY not met; v3 < v2. v2 (precise negative only) remains
+  best NN (0.5758), still −0.0068 < no-NN 0.5826. Match-NN relabel now
+  4 cycles deep; best still below the metric-neutral heuristic.
+- decision: not promoted; v2 is the best NN. Fork to user (4th heavy
+  cycle; diminishing returns vs no-NN).
+- artifacts: RESEARCH_OUT/20260515-honest-fp-train-adopt/ (analyze_v3.log,
+  eval_iter1_honest_v3.json)
+
 --- DONE: repin2 (68aeb7c); dagger-reaudit (STOP1 real); nn-vs-nonn
-    (NN net-neg honestly, expected); train-adopt v1 (blunt → MOTA −0.020,
-    not promoted); train-adopt v2 (precise → MOTA fixed +0.0016, best NN
-    0.5758, gap to no-NN halved to −0.0068, not promoted — needs the
-    positive half).
+    (NN net-neg honestly, expected); train-adopt v1 (blunt neg → MOTA
+    −0.020); v2 (precise neg → MOTA fixed, BEST NN 0.5758, −0.0068 vs
+    no-NN); v3 (precise neg + blunt 157k FP+FP pos → over-merge,
+    regressed to 0.5700, < v2). None promoted; v2 best; no-NN 0.5826
+    still tops all.
 
 --- next: honest-fp-train-adopt-v3 [user-approved order] — KEEP v2's
     precise negative, ADD the missing POSITIVE half: in src/pair_log.py
