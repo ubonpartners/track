@@ -206,10 +206,10 @@ After producing a new `.bin`, before flipping the yaml pointer:
   K-seed-fit-pick, not a single-seed sweep. See
   `feedback_track_phase20c_failed.md` and
   `project_a1_pw_sweep_was_seed_luck.md`.
-- **Stale eval yaml** — only three eval yamls are kept in
-  `/mldata/config/track/eval/`: `eval_ship_baseline.yaml`,
-  `uc_v11_pre_F5d.yaml`, `uc_v11_no_nn.yaml`. Anything else under that
-  directory was deleted on 2026-05-15.
+- **Stale eval yaml** — only two eval yamls are kept in
+  `/mldata/config/track/eval/`: `eval_ship_baseline.yaml` and
+  `uc_v11_no_nn.yaml`. Anything else under that directory was deleted
+  on 2026-05-15.
 
 ---
 

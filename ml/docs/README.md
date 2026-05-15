@@ -132,7 +132,6 @@ UTC timestamp. The same provenance is also written to a sibling
 | Pair-log emission yamls           | `ml/configs/pair_log_config_*.yaml`                        |
 | Eval yamls (default subsets)      | `ml/configs/eval_base_*.yaml`                              |
 | Production tracker yaml           | `/mldata/config/track/trackers/uc_v11.yaml`                |
-| Pre-F5d ship snapshot             | `/mldata/config/track/eval/uc_v11_pre_F5d.yaml`            |
 | No-NN baseline                    | `/mldata/config/track/eval/uc_v11_no_nn.yaml`              |
 | Canonical "ship status" eval     | `/mldata/config/track/eval/eval_ship_baseline.yaml`        |
 
@@ -283,15 +282,15 @@ in isolation are all misleading.
 
 ```bash
 # Drop the new bin into a fresh tracker yaml
-cp /mldata/config/track/eval/uc_v11_pre_F5d.yaml /tmp/uc_v11_candidate.yaml
+cp /mldata/config/track/trackers/uc_v11.yaml /tmp/uc_v11_candidate.yaml
 # Edit /tmp/uc_v11_candidate.yaml → utrack.nn_state_path: /path/to/new/state_head.bin
 
-# Compare against ship + pre-F5d + no-NN baselines on full-176 + JAAD val
+# Compare against ship + no-NN baselines on full-176 + JAAD val
 python track.py --eval /mldata/config/track/eval/eval_ship_baseline.yaml
 ```
 
-The orchestrator config sweeps 3 variants × 205 clips = 615 clip-runs
-(~10 min wall on a 4-worker queue). Results land in
+The orchestrator config sweeps 2 variants × 205 clips = 410 clip-runs
+(~7 min wall on a 4-worker queue). Results land in
 `/mldata/track_runs/eval_ship_baseline/results/results-<timestamp>.txt`
 with `__ovrfull176` and `__ovrjaadval` aggregate rows.
 
@@ -387,8 +386,11 @@ the actual lessons. Quick summary of the ones that bite hardest:
 6. Commit `/mldata/config` with a message describing the fitness/MOTA
    delta and how multi-seed variance was bounded.
 
-`uc_v11_pre_F5d.yaml` always remains the "what was the ship before
-this change?" snapshot — re-snapshot it before each new ship.
+Snapshot the prior ship yaml before each new ship if you need an A/B
+baseline — copy `uc_v11.yaml` to a versioned filename in
+`/mldata/config/track/eval/` and add it to `eval_ship_baseline.yaml`'s
+`tests:` map. The current pattern is to keep only the live ship and a
+no-NN reference under `track/eval/`.
 
 ---
 
