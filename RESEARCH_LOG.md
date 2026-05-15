@@ -391,6 +391,86 @@ a *structural* mechanism get more prior mass with wider `sd`.
     campaign is then run against.
   correlated_with: [honest-fp-track-metric, state-corpus-fp-boost,
                     fitness-shaped-trainer-loss, dagger-multiiter-regression]
+  status: validating   # 20260515: criterion-1 (decoupling) PASSED+reproduced
+                        # (gamed 0.33 -> honest 0.88); crit-2/3 + spatial
+                        # gate + training cascade outstanding. See Exp Log.
+
+# ---- children spawned by honest-fp-track-metric-definition (crit-2/3) ------
+
+- slug: honest-fp-cleanconfig-falsealarm
+  category: measurement
+  cost_class: cheap            # one 2-test eval, frozen corpus, no retrain
+  source: agent
+  primary_axis: measurement
+  depends_on: honest-fp-track-metric-definition
+  touches: [analysis: honest vs gamed fp_tracks on the CURRENT ship uc_v11]
+  mechanism: >
+    Criterion 3: the honest metric must NOT over-charge a well-behaved
+    tracker (routine short post-track tails / legitimate occlusion
+    bridges are not real FP). Run gamed vs honest on the current ship
+    config (uc_v11, v13+v23_pw05) on the frozen corpus. If honest
+    fp_tracks >> gamed for a clean tracker, the thresholds are too
+    aggressive and the metric would punish good behaviour — it must be
+    re-tuned (feeds honest-fp-threshold-sweep) before it can be frozen.
+  prior_p_win: 0.55            # P(a sane threshold band gives honest≈gamed clean)
+  prior_effect: {mean: 0.000, sd: 0.000}
+  prediction: >
+    Expect honest/gamed ratio on the clean ship to be MUCH closer to 1
+    than the iter2-gamed case; if it is still huge (e.g. >5x) the v0
+    thresholds (5/5/10 eval-frames) are too tight — quantify the gap and
+    hand the target band to the threshold sweep. Falsified-as-blocking
+    if no threshold band can make clean≈honest while still catching the
+    iter2 exploit (then the temporal-only def is insufficient — escalate
+    to the spatial gate / FP-frame metric).
+  correlated_with: [honest-fp-threshold-sweep, honest-fp-spatial-gate]
+  status: open
+
+- slug: honest-fp-threshold-sweep
+  category: measurement
+  cost_class: cheap            # re-score existing eval JSON at varied thresholds
+  source: agent
+  primary_axis: measurement
+  depends_on: honest-fp-track-metric-definition
+  touches: [_honest_fp_tracks l_lead/l_lag/g_max ; re-score, no re-eval]
+  mechanism: >
+    Criterion 2: the 0.33->0.88 decoupling fix and the clean≈honest
+    property must be STABLE across a sensible threshold range, not
+    knife-edge. _honest_fp_tracks can be re-evaluated at many
+    (l_lead,l_lag,g_max) settings from the SAME per-frame event data
+    (cheap — ideally cache the events frame so no re-eval is needed).
+  prior_p_win: 0.50
+  prior_effect: {mean: 0.000, sd: 0.000}
+  prediction: >
+    There exists a contiguous threshold band where (a) iter1→iter2
+    honest decoupling stays ~0.8-1.0 AND (b) clean-ship honest≈gamed.
+    Report the band + a recommended operating point. Falsified if the
+    two requirements have no overlapping band (def too weak -> spatial
+    gate / FP-frame metric).
+  correlated_with: [honest-fp-cleanconfig-falsealarm, honest-fp-spatial-gate]
+  status: open
+
+- slug: honest-fp-spatial-gate
+  category: measurement
+  cost_class: medium           # needs box geometry vs matched-GT extrapolation
+  source: agent
+  primary_axis: measurement
+  depends_on: honest-fp-track-metric-definition
+  touches: [_honest_fp_tracks: add spatial-excursion criterion to bridge rule]
+  mechanism: >
+    Documented follow-up to the temporal v0: a bridge is most clearly a
+    stitched-unrelated-FP when the box during the unmatched run is far
+    from the matched GT's extrapolated location (IoU/centroid gate),
+    not merely long. Adding the spatial gate should let the temporal
+    thresholds relax (fewer false alarms on legit long occlusions that
+    stay spatially consistent) while still catching teleport/merge.
+  prior_p_win: 0.45
+  prior_effect: {mean: 0.000, sd: 0.000}
+  prediction: >
+    With the spatial gate, the clean≈honest band widens (crit-3 easier)
+    while iter2 decoupling stays ~0.88. Falsified if the gate doesn't
+    separate legit-long-occlusion from teleport (then fall back to an
+    FP-frame / FP-track-seconds metric).
+  correlated_with: [honest-fp-cleanconfig-falsealarm, honest-fp-threshold-sweep]
   status: open
 
 - slug: poseflow-box-warp
@@ -767,7 +847,42 @@ Entry schema (copy for each new experiment):
   training-coupled to the new ruler
 - artifacts: RESEARCH_OUT/20260515-honest-fp-track-metric/
 
---- next: 20260515-honest-fp-track-metric-definition (constructive successor) ---
+### 20260515-honest-fp-track-metric-definition   [win(measurement, partial)]
+- selected: promoted by exp#1 (ruler confirmed gamed); campaign-fix rank #1
+- primary_axis: measurement (produces ruler; no tracker promotion)
+- prior: p_win=0.45, effect~N(0,0)
+- change: track_test.py _honest_fp_tracks() segment count, side-channel
+  (fitness untouched, §3); change.patch = git show of the two commits
+- preflight (§8.1): smoke one clip (gamed0→honest1, invariant ok); dict-agg
+  bug fixed pre-launch; 1st launch errored (missing logs/ redirect) caught
+  by liveness check, re-run; one 2-test sharded eval, frozen corpus, ~1m38s
+- eval: RESEARCH_OUT/20260515-honest-fp-track-metric-definition/eval/results-20260515-0930.json
+- evidence (full176, iter1→iter2; reproduced cross-run):
+    gamed fp_tracks 102→47 (−53.9%); FP-volume 98485→80835 (−17.9%);
+    honest fp_tracks 2703→2151 (−20.4%); MOTA 0.6147→0.5660.
+    decoupling |ΔFPvol|/|Δuniq|: gamed 0.33 → HONEST 0.88 (jaad 0.66→0.88).
+    breakdown: hidden FP is mostly lag-out+bridge inside matched tracks.
+- update: prediction held; gamed 0.33 reproduced independently across
+  exp#1 and exp#2 ⇒ P(exploit real & seg-def captures it) ≈ 0.95
+- prediction check: HELD (honest→0.88, gamed stays 0.33)
+- decision: win(measurement, partial) — criterion 1 PASSED+reproduced;
+  criteria 2 (threshold robustness) & 3 (no false-alarm on clean tracker)
+  + spatial gate + training cascade OUTSTANDING. Does NOT freeze the ruler.
+- promotion gate: n/a (measurement)
+- containment: all under RESEARCH_OUT/<slug>/ — verified y; track_test
+  side-channel committed (frozen fitness untouched)
+- baseline: unchanged; campaign stays in §3/§4.5 metric-fix track — no
+  fitness-measured tracker promotion until honest ruler frozen
+- bank curation: idea → status validating; spawned children
+  honest-fp-threshold-sweep (crit-2), honest-fp-cleanconfig-falsealarm
+  (crit-3), honest-fp-spatial-gate; state-corpus-fp-boost /
+  fitness-shaped-trainer-loss / dagger-multiiter-regression remain
+  training-coupled to the eventual frozen honest ruler
+- artifacts: RESEARCH_OUT/20260515-honest-fp-track-metric-definition/
+
+--- next: honest-fp-cleanconfig-falsealarm (crit-3, cheap) then
+    honest-fp-threshold-sweep (crit-2, cheap) — finish validating the
+    ruler before any fitness-measured tracker work (§3/§4.5) ---
 
 ## Progress curve
 

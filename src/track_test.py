@@ -355,13 +355,22 @@ def compute_metrics(gt, test,
         # however much FP it carries before/after/between its matched
         # section; that is the exploit. Here we additionally charge a unique
         # FP for each *material* unmatched segment.
+        # Store only summable scalars — display_results sum()s every result
+        # key across clips, so a nested dict here would crash aggregation.
         try:
             hfp = _honest_fp_tracks(df)
-            metrics_dict["fp_tracks_honest"] = hfp["honest_fp_tracks"]
-            metrics_dict["fp_tracks_honest_breakdown"] = hfp  # leadin/lagout/bridge/fully
+            metrics_dict["fp_tracks_honest"]  = hfp["honest_fp_tracks"]
+            metrics_dict["fp_honest_fully"]   = hfp["fully_unmatched"]
+            metrics_dict["fp_honest_leadin"]  = hfp["leadin"]
+            metrics_dict["fp_honest_lagout"]  = hfp["lagout"]
+            metrics_dict["fp_honest_bridge"]  = hfp["bridge"]
         except Exception as _e:  # never let instrumentation break the eval
-            metrics_dict["fp_tracks_honest"] = num_false_positive_tracks
-            metrics_dict["fp_tracks_honest_breakdown"] = {"error": repr(_e)}
+            logging.warning(f"honest-fp instrumentation failed: {_e!r}")
+            metrics_dict["fp_tracks_honest"]  = num_false_positive_tracks
+            metrics_dict["fp_honest_fully"]   = num_false_positive_tracks
+            metrics_dict["fp_honest_leadin"]  = 0
+            metrics_dict["fp_honest_lagout"]  = 0
+            metrics_dict["fp_honest_bridge"]  = 0
 
         all_gt_ids = df['OId'].dropna().unique()
         matched_gt_ids = df.loc[df['Type'] == 'MATCH', 'OId'].unique()
@@ -857,6 +866,8 @@ def _summary_metric_keys():
         "fn_per_obj", "switch_per_obj", "frag_per_obj", "motp",
         "num_frames", "num_objects", "num_false_positives",
         "num_misses", "num_switches",
+        "fp_tracks_honest", "fp_honest_fully", "fp_honest_leadin",
+        "fp_honest_lagout", "fp_honest_bridge",   # exp 20260515-honest-fp-metric-def
     ]
 
 
