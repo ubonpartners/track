@@ -1,9 +1,10 @@
 """Pipeline defensive-check helpers.
 
 Every long-running pipeline step (pair-log gen, build_pair_dataset,
-build_state_corpus, train_phase3, train_state_head, eval_head_fitness)
-imports from this module and runs validators at its entry point so we
-fail loud at the boundary instead of producing silently-wrong artefacts.
+build_state_corpus, train_phase3, train_state_head, and the unified
+`track.py --eval` closed-loop fitness eval) imports from this module
+and runs validators at its entry point so we fail loud at the boundary
+instead of producing silently-wrong artefacts.
 
 Design rule: every validator either succeeds silently or raises
 `PipelineCheckError` with a precise message that names the bad input.

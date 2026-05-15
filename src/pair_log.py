@@ -755,7 +755,7 @@ def run_track_analysis(config: Dict[str, Any]) -> Dict[str, Any]:
             f"modules were dead code, removed 2026-05-15). Got: {unknown}"
         )
 
-    workers = int(config.get("workers", config.get("num_workers", 1)))
+    workers = stuff.resolve_num_workers(config.get("workers", config.get("num_workers", 1)))
     if workers < 0:
         workers = 0
 

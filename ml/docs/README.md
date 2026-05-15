@@ -114,7 +114,7 @@ UTC timestamp. The same provenance is also written to a sibling
 | Train state-head decoupled GRU         | `ml.train.train_state_head_decoupled`        |
 | Export match NN to `.bin`              | `ml.export.export_phase3`                    |
 | Export state head to `.bin`            | `ml.export.export_decoupled_head`            |
-| Closed-loop fitness eval               | `ml.eval.eval_head_fitness`                  |
+| Closed-loop fitness eval               | `python track.py --eval <yaml>` (track_search.eval_track) |
 | Offline state-head eval (no tracker)   | `ml.eval.eval_decoupled_offline`             |
 | Permutation feature importance         | `ml.analysis.permute_match_features`         |
 | Cheap-filter sweep tool                | `ml.analysis.cheap_filter_analysis`          |

@@ -164,10 +164,10 @@ After producing a new `.bin`, before flipping the yaml pointer:
        cmp <(head -c $(stat -c%s /mldata/config/track/trackers/nn_state_v23_pw05.bin) \
              /tmp/re.bin) /mldata/config/track/trackers/nn_state_v23_pw05.bin
 
-2. **Closed-loop fitness** — run `ml.eval.eval_head_fitness` against the
-   full-176 corpus with `ml/configs/eval_ship_baseline.yaml`. Ship only
-   when fitness is within single-eval noise (±0.003) of the prior ship,
-   or better. The currently audited number is:
+2. **Closed-loop fitness** — run `python track.py --eval
+   /mldata/config/track/eval/eval_ship_baseline.yaml` against the full-176
+   corpus. Ship only when fitness is within single-eval noise (±0.003) of
+   the prior ship, or better. The currently audited number is:
 
        v13 + v23_pw05 + cFPt=7e-4 + δ=0.5:  0.5736  MOTA=0.6099  fp_tracks=68
        F5d (δ=0.7 + dd=0.70):               0.579   MOTA=0.611   fp_tracks=63

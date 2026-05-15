@@ -1,6 +1,8 @@
 
 import os
+import sys
 import copy
+import json
 import numpy as np
 import motmetrics as mm
 import pickle
@@ -537,18 +539,75 @@ def display_results(config, results, columns, sort_key):
 
     return results2
 
+# C-runtime log patterns that mean a NN bin was silently disabled —
+# tracker continued but the head we tried to evaluate wasn't actually
+# loaded. Eval results in that state would be invalid (they'd reflect
+# a no-NN tracker), so the eval must abort loudly. Patterns mirror what
+# ubon_cstuff's nn.c / nn_state.c / utrack.c emit at log_error level.
+_NN_LOAD_FAIL_PATTERNS = (
+    "failed to load",
+    "in_dim mismatch",
+    "in_dim out of range",
+    "short header",
+)
+
+
+def _capture_stderr_around(callable_):
+    """Run `callable_` while capturing fd-2 output (C-side log_error)
+    into a string. Returns (return_value, captured_text)."""
+    import tempfile
+    saved_fd = os.dup(2)
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="w+", suffix=".stderr", prefix="trackwf_",
+                delete=False) as ef:
+            err_path = ef.name
+        try:
+            ef_fd = os.open(err_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+            os.dup2(ef_fd, 2)
+            os.close(ef_fd)
+            try:
+                rv = callable_()
+            finally:
+                try: os.fsync(2)
+                except OSError: pass
+                os.dup2(saved_fd, 2)
+            try:
+                with open(err_path, "r", errors="replace") as f:
+                    captured = f.read()
+            except OSError:
+                captured = ""
+            return rv, captured
+        finally:
+            try: os.unlink(err_path)
+            except OSError: pass
+    finally:
+        try: os.close(saved_fd)
+        except OSError: pass
+
+
 def track_test_work_fn(params, mpwq_context, mpwq_progress_fn):
     logging.debug("Running here")
     trackset=ts.TrackSet()
     trackset_gt=ts.TrackSet(params["ds_path"])
     logging.debug(f"import create")
-    trackset.import_create(trackset_gt,
-                           track_min_interval=params["min_interval"],
-                           display=params["display"],
-                           config_file=params["config"],
-                           params=params,
-                           mpwq_context=mpwq_context,
-                           mpwq_progress_fn=mpwq_progress_fn)
+    def _do_import():
+        trackset.import_create(trackset_gt,
+                               track_min_interval=params["min_interval"],
+                               display=params["display"],
+                               config_file=params["config"],
+                               params=params,
+                               mpwq_context=mpwq_context,
+                               mpwq_progress_fn=mpwq_progress_fn)
+    _, captured_stderr = _capture_stderr_around(_do_import)
+    # Forward captured stderr so the main process still sees it.
+    if captured_stderr:
+        sys.stderr.write(captured_stderr)
+        sys.stderr.flush()
+    nn_load_fail = next(
+        (pat for pat in _NN_LOAD_FAIL_PATTERNS if pat in captured_stderr),
+        None,
+    )
     match_iou=0.45
     if "match_iou" in params:
         match_iou=params["match_iou"]
@@ -567,6 +626,12 @@ def track_test_work_fn(params, mpwq_context, mpwq_progress_fn):
     entry={"params":params,
            "result":result,
            "time":datetime.datetime.now()}
+    if nn_load_fail is not None:
+        # Surface to the parent — parent aggregator will abort.
+        entry["nn_load_fail"] = {
+            "pattern": nn_load_fail,
+            "captured_excerpt": captured_stderr[-1000:],
+        }
 
     logging.debug(f"done")
     return entry
@@ -677,6 +742,26 @@ def track_test(config, split=None, desc="track test"):
     for entry in results:
         output_results.append(entry)
 
+    nn_failures = [o for o in output_results if "nn_load_fail" in o]
+    if nn_failures:
+        # Loud, immediate abort. Silently producing a "no head" bench when
+        # the test was meant to evaluate a specific NN is the exact failure
+        # mode we don't want to ship past.
+        msgs = []
+        for f in nn_failures[:5]:
+            p = f["params"]
+            msgs.append(
+                f"  test={p['test_key']} clip={p['ds_key']} "
+                f"pattern={f['nn_load_fail']['pattern']!r}\n"
+                f"  excerpt: {f['nn_load_fail']['captured_excerpt'][:300]}"
+            )
+        more = "" if len(nn_failures) <= 5 else f"\n  ... and {len(nn_failures) - 5} more"
+        raise RuntimeError(
+            "NN bin failed to load in one or more workers — results would "
+            "silently reflect a NN-disabled tracker. Aborting eval.\n"
+            + "\n".join(msgs) + more
+        )
+
     for o in output_results:
         if "time" in o:
             o["result"]["time"]=(datetime.datetime.now()-o["time"]).total_seconds()
@@ -685,5 +770,104 @@ def track_test(config, split=None, desc="track test"):
 
     results2=display_results(config, output_results, columns, config["sort_key"])
     elapsed=time.time()-start_time
+    _write_eval_summary_json(config, output_results, results2, elapsed)
     print(f"All done: Evaluated {len(tests_to_run)} tests in {stuff.timestr(elapsed)}")
     return results2
+
+
+def _summary_metric_keys():
+    # Float keys exposed in the per-test summary. Aligns with what
+    # `eval_head_fitness` historically wrote so downstream JSON consumers
+    # (run_pipeline.sh, notebooks) keep working unchanged.
+    return [
+        "fitness", "mota", "idf1", "fp_tracks", "fp_per_frame",
+        "fn_per_obj", "switch_per_obj", "frag_per_obj", "motp",
+        "num_frames", "num_objects", "num_false_positives",
+        "num_misses", "num_switches",
+    ]
+
+
+def _result_subset(result, keys):
+    out = {}
+    for k in keys:
+        if k in result:
+            v = result[k]
+            if isinstance(v, (np.floating, np.integer)):
+                v = v.item()
+            out[k] = v
+    return out
+
+
+def _write_eval_summary_json(config, output_results, rollups, elapsed):
+    """Sidecar JSON next to the text results report.
+
+    Structure:
+        {
+          "elapsed_seconds": float,
+          "num_clips": int,
+          "tests": {
+            "<test_key>": {
+              "overall":   {fitness, mota, fp_tracks, ...},   # __ovr<group> when 1 group, else _arithmean
+              "groups":    {"<group>": {...}, ...},           # one per __ovr<group> rollup
+              "arithmean": {...},                              # _arithmean rollup
+              "clips":     {"<ds_key>": {...}, ...}            # raw per-clip metrics
+            }
+          }
+        }
+    """
+    if "results_location" not in config:
+        return
+    location = config["results_location"]
+    stuff.makedir(location)
+    keys = _summary_metric_keys()
+
+    tests_by_key = {}
+    for entry in rollups:
+        test_key = entry["params"]["test_key"]
+        ds_key = entry["params"]["ds_key"]
+        bucket = tests_by_key.setdefault(test_key, {
+            "overall": None, "groups": {}, "arithmean": None, "clips": {},
+        })
+        metrics = _result_subset(entry["result"], keys)
+        if ds_key.startswith("__ovr"):
+            group = ds_key[len("__ovr"):]
+            bucket["groups"][group] = metrics
+        elif ds_key.startswith("__mean("):
+            # per-group arithmetic mean — keep alongside the overall.
+            group = ds_key[len("__mean("):-1]
+            bucket["groups"].setdefault(group, {})
+            bucket["groups"][group + "_mean"] = metrics
+        elif ds_key == "_arithmean":
+            bucket["arithmean"] = metrics
+
+    # Per-clip raw rows.
+    for entry in output_results:
+        test_key = entry["params"]["test_key"]
+        ds_key = entry["params"]["ds_key"]
+        bucket = tests_by_key.setdefault(test_key, {
+            "overall": None, "groups": {}, "arithmean": None, "clips": {},
+        })
+        bucket["clips"][ds_key] = _result_subset(entry["result"], keys)
+
+    # "overall" is the single-group __ovr rollup when there is exactly one
+    # group, else the arithmetic mean across all clips. This mirrors what
+    # `eval_head_fitness` returned as `overall`.
+    for bucket in tests_by_key.values():
+        groups = bucket["groups"]
+        non_mean_groups = [k for k in groups if not k.endswith("_mean")]
+        if len(non_mean_groups) == 1:
+            bucket["overall"] = groups[non_mean_groups[0]]
+        else:
+            bucket["overall"] = bucket["arithmean"]
+
+    summary = {
+        "elapsed_seconds": elapsed,
+        "num_clips": len({e["params"]["ds_key"] for e in output_results}),
+        "tests": tests_by_key,
+    }
+
+    cur_time = datetime.datetime.now().strftime("%Y%m%d-%H%M")
+    out_path = os.path.join(location, f"results-{cur_time}.json")
+    with open(out_path, "w") as f:
+        json.dump(summary, f, indent=2, sort_keys=True)
+    logging.info(f"Wrote eval summary JSON: {out_path}")

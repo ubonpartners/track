@@ -118,15 +118,20 @@ def eval_track(yaml_file):
                       is visible, 2 × N workers when N > 1 GPUs are visible)
       columns:        list of "key,header,fmt" strings
       sort_key:       column to sort the report by (e.g. fitness or mota)
-      results_location: optional dir for the persisted .txt report
+      results_location: optional dir for the persisted .txt + .json
+                        reports. JSON sidecar is shaped for
+                        run_pipeline.sh consumption: top-level
+                        `tests[<key>]` → {overall, groups, arithmean, clips}.
 
-    Compared to ml/eval_head_fitness this:
+    Properties:
       - shares loaded detector engines across the work queue
         (no per-clip process spinup);
       - evaluates multiple tracker variants in a single run (cartesian
         product of tests × datasets);
       - surfaces dead workers fast via mp_workqueue's liveness check
-        instead of hanging on result_queue.get(timeout=300).
+        instead of hanging on result_queue.get(timeout=300);
+      - is the single supported evaluator (the previous
+        `ml.eval.eval_head_fitness` was retired 2026-05-15).
 
     Returns the aggregated results list (_overall + per-clip).
     """

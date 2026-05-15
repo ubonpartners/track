@@ -201,9 +201,19 @@ if [[ "$DO_EVAL" -eq 0 ]]; then
 fi
 
 echo "=== [6/6] eval ==="
-# Build the three eval yamls from EVAL_BASE
+# Build one combined eval yaml with three tracker tests and the full-176
+# dataset list, then run track.py --eval once. This replaces the three
+# sequential ml.eval.eval_head_fitness invocations: the unified evaluator
+# auto-shards across GPUs and shares the dataset load.
+SUBSET_PATH=ml/eval/eval_subset_full178.json
+DATASET_PATHS_YAML=ml/configs/pair_log_config_v6_with_pp22.yaml
+EVAL_YAML="$EVAL_OUTDIR/eval_combined.yaml"
+EVAL_RESULTS_DIR="$EVAL_OUTDIR/results"
+mkdir -p "$EVAL_RESULTS_DIR"
+
 python -c "
-import yaml
+import json, yaml, os
+
 base = yaml.safe_load(open('$EVAL_BASE'))
 # Strip flags that pre-dated this clean recipe — fresh eval should
 # mirror the canonical config exactly.
@@ -213,45 +223,81 @@ ut = base.setdefault('utrack', {})
 for k in ('match_clip_to_roi', 'include_pending_tracks_in_roi'):
     ut.pop(k, None)
 
-# full: ${TAG} match + ${TAG} state
-cfg = yaml.safe_load(yaml.safe_dump(base))
-cfg['utrack']['nn_path']       = '$PHASE3_BIN'
-cfg['utrack']['nn_state_path'] = '$STATE_HEAD_BIN'
-yaml.safe_dump(cfg, open('$EVAL_OUTDIR/eval_full.yaml', 'w'))
+# Build the three tracker config yamls (one per variant).
+def write_variant(name, nn_path, nn_state_path):
+    cfg = yaml.safe_load(yaml.safe_dump(base))
+    cfg['utrack']['nn_path']       = nn_path
+    cfg['utrack']['nn_state_path'] = nn_state_path
+    path = os.path.join('$EVAL_OUTDIR', f'eval_{name}.yaml')
+    yaml.safe_dump(cfg, open(path, 'w'))
+    return path
 
-# match-only: new match + shipped state
-cfg = yaml.safe_load(yaml.safe_dump(base))
-cfg['utrack']['nn_path']       = '$PHASE3_BIN'
-cfg['utrack']['nn_state_path'] = '/mldata/config/track/trackers/nn_state_v20_pw05.bin'
-yaml.safe_dump(cfg, open('$EVAL_OUTDIR/eval_match_only.yaml', 'w'))
-
-# state-only: shipped match + new state
-cfg = yaml.safe_load(yaml.safe_dump(base))
-cfg['utrack']['nn_path']       = '/mldata/config/track/trackers/nn_match_v10_face.bin'
-cfg['utrack']['nn_state_path'] = '$STATE_HEAD_BIN'
-yaml.safe_dump(cfg, open('$EVAL_OUTDIR/eval_state_only.yaml', 'w'))
-"
-
-print_metrics() {
-    local label="$1"; local path="$2"
-    python -c "
-import json
-d = json.load(open('$path'))
-a = d.get('aggregate') or d['overall']
-fm = a.get('fitness_mean') or a.get('fitness')
-fs = a.get('fitness_stdev', 0.0)
-mm = a.get('mota_mean') or a.get('mota')
-ft = a.get('fp_tracks_mean') or a.get('fp_tracks')
-print(f'$label: fitness={fm:.4f}+/-{fs:.4f}  MOTA={mm:.4f}  fp_tracks={ft}')"
+paths = {
+    'full':       write_variant('full',       '$PHASE3_BIN', '$STATE_HEAD_BIN'),
+    'match_only': write_variant('match_only', '$PHASE3_BIN', '/mldata/config/track/trackers/nn_state_v20_pw05.bin'),
+    'state_only': write_variant('state_only', '/mldata/config/track/trackers/nn_match_v10_face.bin', '$STATE_HEAD_BIN'),
 }
 
+# Resolve dataset paths for the full-176 subset.
+ds_cfg = yaml.safe_load(open('$DATASET_PATHS_YAML'))['dataset']
+clips = json.load(open('$SUBSET_PATH'))['clips']
+datasets = {}
+for clip in clips:
+    info = ds_cfg.get(clip)
+    if info is None:
+        raise SystemExit(f'clip {clip!r} missing from $DATASET_PATHS_YAML')
+    datasets[clip] = {'group': 'full176', 'path': info['trackset']}
+
+# Eval yaml understood by track.py --eval / track_search.eval_track.
+eval_yaml = {
+    'tests': {
+        name: {
+            'config': cfg_path,
+            'eval_min_framerate': 9.9,
+            'eval_rate_divisor': 1,
+            'match_iou': 0.45,
+            'min_interval': 0.199,
+        } for name, cfg_path in paths.items()
+    },
+    'datasets': datasets,
+    'num_workers': 'auto',
+    'columns': [
+        'num_frames,FR,{:5.0f}',
+        'fp_tracks,FPTr,{:5.0f}',
+        'fp_per_frame,FPpf,{:5.2f}',
+        'mota,MOTA,{:6.3f}',
+        'idf1,IDF1,{:6.3f}',
+        'fitness,FIT,{:6.3f}',
+    ],
+    'sort_key': 'fitness',
+    'results_location': '$EVAL_RESULTS_DIR',
+}
+yaml.safe_dump(eval_yaml, open('$EVAL_YAML', 'w'))
+print(f'wrote $EVAL_YAML with {len(eval_yaml[\"tests\"])} tests x {len(datasets)} datasets')
+"
+
+python track.py --eval "$EVAL_YAML"
+
+# Pick the newest JSON sidecar produced by track.py and print one summary
+# line per variant. The JSON shape is:
+#   { tests: { <variant>: { overall: {fitness, mota, fp_tracks, ...}, ... } } }
+EVAL_JSON=$(ls -t "$EVAL_RESULTS_DIR"/results-*.json | head -1)
+if [[ -z "$EVAL_JSON" || ! -s "$EVAL_JSON" ]]; then
+    echo "ERROR: no eval JSON produced under $EVAL_RESULTS_DIR" >&2
+    exit 1
+fi
+echo "  eval summary JSON: $EVAL_JSON"
+
 for variant in full match_only state_only; do
-    echo "--- eval ${TAG}_${variant} ---"
-    python -m ml.eval.eval_head_fitness \
-        --config "$EVAL_OUTDIR/eval_${variant}.yaml" \
-        --subset full --workers 2 --runs 1 \
-        --out "$EVAL_OUTDIR/${variant}.json" --quiet
-    print_metrics "${TAG}_${variant}" "$EVAL_OUTDIR/${variant}.json"
+    python -c "
+import json, sys
+j = json.load(open('$EVAL_JSON'))
+t = j['tests'].get('$variant')
+if not t or not t.get('overall'):
+    sys.exit('no overall row for $variant')
+o = t['overall']
+print(f'${TAG}_${variant}: fitness={o[\"fitness\"]:.4f}  MOTA={o[\"mota\"]:.4f}  fp_tracks={int(o[\"fp_tracks\"])}')
+"
 done
 
 echo "==== run_pipeline.sh tag=${TAG} done ===="
