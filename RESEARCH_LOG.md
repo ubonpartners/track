@@ -771,6 +771,68 @@ a *structural* mechanism get more prior mass with wider `sd`.
   status: open
   blocked_by: cheap-filter-delta-realign
 
+# ---- children spawned by honest-fp-train-adopt (training↔honest align) ----
+
+- slug: honest-fp-train-adopt-v3
+  category: corpus
+  cost_class: heavy            # 1 bootstrap cycle (pair-log regen+retrain+eval)
+  source: agent+user
+  primary_axis: fitness
+  depends_on: honest-fp-train-adopt   # after v2 (precise negative) result
+  mechanism: >
+    The COMPLETE honest-aligned match-NN target. v1/v2 added only the
+    NEGATIVE half (real track + IoU==0 phantom det → label 0: don't
+    absorb the cheat). USER-IDENTIFIED keystone: the POSITIVE half is
+    missing — (phantom track, phantom det) pairs are DROPPED at
+    pair_log.py:410-414 (first gate: track has no GT → continue), so the
+    match-NN is NEVER taught to MERGE FP+FP into one track. Honest
+    fitness REWARDS that merge (2 contiguous far-from-GT episodes → 1;
+    MOTA-neutral — phantoms touch no GT, frame-FP unchanged). Fix:
+    (phantom track, IoU==0-with-all-GT det) → label 1 (consolidate
+    phantoms). PLUS the state-NN analogue: build_state_corpus.py:958,
+    976-980 uses seed_match_iou=0.5 GT alignment, so a loose-near-real
+    (IoU 0.1-0.5, NOT a phantom under the IoU=0 ruler) track gets
+    drop_label=1 → state-NN over-drops near-real tracks = FN/MOTA loss
+    for zero honest-FP benefit (the v1 mechanism in state-NN form).
+    Apply the resolved-ruler IoU=0 distinction there too: hard-drop only
+    genuinely far-from-ALL-GT segments; never the loose gray zone.
+    Net target = the full honest-aligned signal (table in Exp Log).
+  prior_p_win: 0.50            # completes the signal both directions; but
+                               # no-NN may simply have little NN headroom
+  prior_effect: {mean: 0.004, sd: 0.008}
+  prediction: >
+    v3 honest-relabelled NN fitNEW > no-NN 0.5826 AND ≥ iter1 0.5706,
+    with ΔMOTA vs iter1 ≥ -0.005 and honest_v2 < 908 (ideally < no-NN's
+    786 via the FP+FP consolidation). Falsified if MOTA still regresses
+    (negative dose still too strong) or honest_v2 doesn't beat no-NN
+    (NN has no honest headroom → accept no-NN baseline).
+  correlated_with: [honest-fp-train-adopt, dagger-corpus-noNN-candidacy]
+  status: open
+  blocked_by: honest-fp-train-adopt   # need v2's precise-negative result first
+
+- slug: fitness-impact-weighted-loss
+  category: training
+  cost_class: heavy
+  source: agent
+  primary_axis: fitness
+  mechanism: >
+    train_phase3.py BCE (and the state-NN loss) weight every example
+    equally, but the honest fitness is a weighted sum (MOTA dominant ≫
+    0.35·honest-FP-runs/dur ≫ 0.002·fp_per_frame). Weight each training
+    example by its marginal honest-fitness impact (a phantom-absorption
+    that would become a long contaminating run, or a dropped near-real
+    track = MOTA loss, weigh heavily; trivial pairs light) so the
+    GRADIENT — not just the labels — tracks the objective.
+  prior_p_win: 0.30            # lower-confidence, more invasive; do AFTER
+                               # the structural label fixes (v3) land
+  prior_effect: {mean: 0.003, sd: 0.007}
+  prediction: >
+    Marginal gain on top of v3 (structural label alignment captures most
+    of it). Falsified if no gain beyond v3 within 2σ.
+  correlated_with: [honest-fp-train-adopt-v3]
+  status: open
+  blocked_by: honest-fp-train-adopt-v3
+
 # ---- killed (kept so a falsified mechanism cannot be silently revived) -----
 
 - slug: jaad-pair-upweight
