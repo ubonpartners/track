@@ -286,17 +286,19 @@ a *structural* mechanism get more prior mass with wider `sd`.
   prior_p_win: 0.70            # P(diagnosis shows material, detectable gaming)
   prior_effect: {mean: 0.000, sd: 0.000}   # not a tracker win; recalibrates the ruler
   prediction: >
-    Cheap pass over the current best tracker's ubtrk2 + GT on the frozen
-    corpus, counting (a)/(b)/(c). Expect a non-trivial fraction of
-    "matched" tracks to carry a detectable lead-in/lag-out or excursion;
-    expect the iter2 (low-fp_tracks, low-MOTA) run to show MORE gamed
-    merges than iter1 — that contrast is the discriminating test. If
-    gaming is immaterial (<~2% of fp_tracks delta explained), the
-    hypothesis is FALSIFIED and fitness is trustworthy as-is (itself a
-    very valuable result — it would re-validate every prior fp_tracks
-    "win"). If material, define an honest-FP metric.
+    DECISIVE CHEAP TEST (zero new compute — use existing iter1/2/3 eval
+    JSON): if fp_tracks is being gamed, the unique-FP count falls but the
+    actual FP *volume* does NOT — i.e. fp_tracks drops sharply while
+    `num_false_positives` / `fp_per_frame` stay ~flat (the FP frames are
+    just absorbed into fewer tracks). Real FP reduction drops BOTH
+    together. So compare iter1->iter2 (fp_tracks 103->48, -53%): if
+    num_false_positives / fp_per_frame fell by ≪53% (≈flat) that is the
+    smoking gun; if it fell ~proportionally, the FP reduction is real and
+    the hypothesis is FALSIFIED (fitness trustworthy — re-validates prior
+    fp_tracks wins). The heuristics (a)/(b)/(c) are the follow-up
+    attribution once the volume-vs-count decoupling is established.
   correlated_with: [dagger-multiiter-regression, adaptive-nn-prior, state-corpus-fp-boost]
-  status: open
+  status: confirmed   # 20260515: gaming material (decoupling 0.33); see Experiment Log
   handling_note: >
     Special scope. RESEARCH.md §2/§3 freeze the fitness formula and eval
     for a campaign — so the DIAGNOSIS (read-only audit of how gameable the
@@ -309,7 +311,87 @@ a *structural* mechanism get more prior mass with wider `sd`.
     verdict, not moving fitness. This is the highest-leverage idea in the
     bank: if the headline is gameable, prior fp_tracks-driven wins
     (incl. F5d ship, DAgger conservatism) may be partly illusory.
+  evidence_2026_05_15: >
+    CONFIRMED by experiment 20260515-honest-fp-track-metric (read-only,
+    iter1->iter2 of the optimized bootstrap, frozen corpus): unique
+    fp_tracks -53.4% (103->48) but FP *volume* num_FP only -17.9%
+    (98497->80909); decoupling ratio |ΔFPvol|/|Δfp_tracks| = 0.33;
+    misses +19.1% (recall collapsed), MOTA 0.6148->0.5654. The gameable
+    terms handed +0.0279 fitness credit that masked 56% of the -0.0494
+    MOTA collapse. Gaming is material and the optimizer already found it.
 
+- slug: honest-fp-track-metric-definition
+  category: measurement        # constructive successor to the (confirmed) diagnosis
+  cost_class: heavy            # metric def + TRAINING alignment + revalidation + re-pin
+  source: user
+  primary_axis: measurement
+  touches: [track_test: per-frame GT<->hyp match stream / fp_tracks accounting ;
+            build_state_corpus + fitness-shaped loss (training must follow the
+            new definition) ; campaign baseline re-pin]
+  depends_on: honest-fp-track-metric   # diagnosis CONFIRMED; this builds the fix
+  mechanism: >
+    Replace the gameable "1 unique FP iff the track NEVER matches any GT
+    over its whole life" with a SEGMENT-based count. Decompose each output
+    track into maximal contiguous matched / unmatched segments vs GT
+    (the per-frame TP/FP/IDSW stream motmetrics already produces), then
+    count a unique FP for each *material* unmatched segment:
+      - lead-in : unmatched run BEFORE the track's first GT match,
+                  length >= L_lead  -> +1 FP
+      - lag-out : unmatched run AFTER the track's last GT match,
+                  length >= L_lag   -> +1 FP
+      - bridge  : unmatched run BETWEEN two matched sections that is
+                  either longer than a legitimate occlusion gap
+                  (> G_max) OR spatially excursive (box far from the
+                  matched GT's extrapolated location, IoU/centroid gate)
+                  -> +1 FP   (this is the "stitch two unrelated things"
+                  case the optimizer exploited)
+      - a fully-unmatched track stays exactly 1 FP (unchanged).
+    Must degrade to ~the current metric in the clean / no-gaming limit
+    (a well-behaved tracker scores ~same fp_tracks under both).
+  training_cascade: >
+    Per user: "we might have to adjust the training etc to account for
+    this." The honest definition is NOT just an eval swap — every
+    training signal that references fp_tracks must be re-derived under
+    it or training optimises the OLD gameable target while we evaluate
+    on the honest one (a train/infer objective mismatch, the documented
+    hazard class). Concretely: build_state_corpus `fitness_fp_boost`
+    example weighting, the fitness-shaped-trainer-loss term, and the
+    DAgger relabel all currently reward whole-track-never-matched; they
+    must instead reward removing the lead-in/lag-out/bridge FP *frames*.
+    This couples honest-fp-track-metric-definition with
+    state-corpus-fp-boost and fitness-shaped-trainer-loss — they should
+    be designed together, not serially.
+  prior_p_win: 0.45            # P(a validated, robust, not-trivially-regameable def exists)
+  prior_effect: {mean: 0.000, sd: 0.000}   # measurement; payoff is a trustworthy ruler
+  prediction: >
+    Validation (NOT just "define and ship" — user flagged it needs
+    validation):
+      1. Re-scores the gaming contrast honestly: under the new def the
+         iter1->iter2 unique-FP delta TRACKS the FP-volume delta
+         (decoupling ratio -> ~1, from the gamed 0.33). If it still
+         shows the iter2 collapse, the def FAILED to capture the exploit.
+      2. Threshold robustness: sweep L_lead/L_lag/G_max + the spatial
+         gate; the verdict (gamed vs clean) must be stable across a
+         sensible range, not knife-edge.
+      3. No false alarms: a clean reference config's honest fp_tracks
+         ~= its old fp_tracks (legit short occlusion bridges NOT charged).
+      4. New exploit surface reviewed: trimming lead-in/lag-out is now
+         the optimizer's cheapest move — that is the DESIRED behaviour
+         (it removes real FP frames), confirm no perverse residual.
+    FALSIFIED if no threshold set satisfies (1)&(3) simultaneously
+    (the segment criterion can't separate gaming from legit occlusion)
+    -> fall back to an FP-frame / FP-track-seconds metric instead.
+  handling_note: >
+    Campaign-resetting + training-coupled. On a validated def: freeze it
+    as the new honest ruler, re-derive the training targets under it,
+    re-pin the baseline by re-measuring, and re-judge open fp_tracks
+    results (RESEARCH.md §3/§4.5). Sequenced AFTER the (confirmed)
+    diagnosis; co-designed with the training-objective ideas. It does
+    not promote a tracker — it produces the ruler the rest of the
+    campaign is then run against.
+  correlated_with: [honest-fp-track-metric, state-corpus-fp-boost,
+                    fitness-shaped-trainer-loss, dagger-multiiter-regression]
+  status: open
 
 - slug: poseflow-box-warp
   category: inference          # ubon_cstuff motion-warp change; no NN retrain
@@ -653,7 +735,39 @@ Entry schema (copy for each new experiment):
 > - artifacts: RESEARCH_OUT/20260515-cheap-filter-delta-realign/
 > ```
 
---- (no real experiments yet — bootstrap §11 then first pick above) ---
+### 20260515-honest-fp-track-metric   [win(measurement)]
+- selected: rank #1 (info,max); runner-up cheap-filter-delta-realign EV=0.0020;
+  reason=cheap read-only audit of the ruler every fitness idea is judged by
+- primary_axis: measurement
+- prior: p_win=0.70 (P material+detectable gaming), effect~N(μ0=0, τ0=0)
+- change: none (read-only); tooling=RESEARCH_OUT/20260515-honest-fp-track-metric/audit.py
+- preflight (§8.1): active-path re-checked=y (iter1/2/3 `full` JSON carry
+  num_FP/misses/switches/frames); redundant steps cut=NO eval/pipeline/retrain
+  (pure arithmetic on existing artifacts); wall-clock est=seconds;
+  launch liveness=immediate; smoke=n/a (read-only)
+- eval: existing iter1/2/3 results-*.json (optimized bootstrap, frozen corpus)
+- evidence (iter1→iter2, the −53% fp_tracks drop):
+    fp_tracks −53.4% (103→48) but num_FP only −17.9% (98497→80909);
+    fp_per_frame −17.9%; misses +19.1%; switches −29.2%;
+    MOTA 0.6148→0.5654; fitness 0.5610→0.5395.
+    decoupling |ΔFPvol|/|Δfp_tracks| = 0.33; gameable terms gave +0.0279
+    fitness credit masking 56% of the −0.0494 MOTA collapse.
+- update: decisive pre-registered test; H2(trustworthy)=FALSIFIED,
+  H1(gaming)=supported by 3 independent signals; posterior P(metric
+  materially gameable) ≈ 0.97
+- prediction check: HELD decisively (predicted ≪53% FPvol drop ⇒ smoking gun)
+- decision: win(measurement) — verdict delivered; NOT promotable (handling_note)
+- promotion gate: n/a (measurement; does not promote a tracker)
+- containment: artifacts only under RESEARCH_OUT/<slug>/ — verified y
+- baseline: unchanged; triggers campaign-fix track (RESEARCH.md §3/§4.5):
+  prior fp_tracks-dominated wins (F5d ship, DAgger) now SUSPECT pending re-audit
+- bank curation: honest-fp-track-metric → confirmed (evidence block added);
+  honest-fp-track-metric-definition promoted to next pick; state-corpus-fp-boost
+  / fitness-shaped-trainer-loss / dagger-multiiter-regression flagged
+  training-coupled to the new ruler
+- artifacts: RESEARCH_OUT/20260515-honest-fp-track-metric/
+
+--- next: 20260515-honest-fp-track-metric-definition (constructive successor) ---
 
 ## Progress curve
 
@@ -661,5 +775,12 @@ Chain of **confirmed within-batch Δfit** through promotions (immune to
 corpus drift — see RESEARCH.md §4.4). Empty until the first confirmed win.
 
 ```
-baseline (bootstrap) ──> [no confirmed wins yet]
+baseline (bootstrap) ──> [no confirmed tracker wins yet]
+
+measurement track:
+  20260515 honest-fp-track-metric  [win(measurement)]
+    => fitness `fp_tracks` term materially gameable (decoupling 0.33,
+       P≈0.97). Campaign pivots to honest-metric-definition before
+       further fitness-measured tracker work is trusted. Prior
+       fp_tracks-dominated wins (F5d ship, DAgger) flagged SUSPECT.
 ```
