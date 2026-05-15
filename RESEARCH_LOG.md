@@ -29,14 +29,25 @@ ev_floor:          0.0005  # fitness per cheap-unit; below => consider stop
 cost_units:        {cheap: 1, medium: 8, heavy: 30}
 objective_order:   [fitness, idf1, speed, simplicity]  # lexicographic; fitness never bought
 artifact_root:     RESEARCH_OUT          # one folder per experiment under here; zero scatter
-baseline_ref:      null   # set at bootstrap: {fitness, mota, idf1, fp_tracks, speed, provenance}
+baseline_ref:                            # PINNED 20260515 honest-fp-frame-metric-repin
+  source:    clean bootstrap iter1 (ml/orchestration/bootstrap_recipe.sh STOP_AFTER=1)
+  git_sha:   {track: 08daed2, stuff: d02eda8, ubon_cstuff: 57b21b1}
+  group:     full176 / test=full
+  fitness:   0.5463
+  mota:      0.6181
+  idf1:      0.5758
+  fp_tracks: 139
+  num_false_positives: 98394
+  fp_frames_honest:    8403   # frozen ruler; clean_frac 0.0854 (in exp#6 ship band)
+  provenance: RESEARCH_OUT/20260515-honest-fp-frame-metric/baseline_ref.json
+  # full detail: {fitness, mota, idf1, fp_tracks, num_FP, fp_frames_honest, speed→num_frames 86140}
 promotion_gate:    [candidate_confirmed, full_pipeline_clean, overall_better_metrics]
 honest_ruler:                            # FROZEN exp#6 20260515-honest-fp-frame-metric
   metric:          fp_frames_honest      # src.track_test._honest_fp_frames_core
   theta:           0.5                    # box-diagonals; joint-OK band θ∈[0.3,0.6]
   nm_policy:       track                  # never-matched mirrors gamed (=1 each)
-  status:          frozen                 # live==offline gate PASS (smoke 3/3, 0 mismatch)
-  fitness_uses_it: false                  # side-channel until clean full-pipeline re-pin (§3/§4.5)
+  status:          frozen                 # live==offline PASS; re-pin PASS (clean_frac 0.085 on a FRESH tracker, in exp#6 ship band — generalises)
+  fitness_uses_it: false                  # side-channel; campaign next = honest-fp-train-adopt (§3/§4.5)
   change_is:       logged_experiment_event # editing θ/nm re-opens the ruler — never silent
 ```
 
@@ -1107,17 +1118,55 @@ Entry schema (copy for each new experiment):
 - artifacts: RESEARCH_OUT/20260515-honest-fp-frame-metric/ (smoke.yaml,
   verify_live.py, eval_smoke/, dump_smoke/, logs/)
 
---- next: honest-fp-frame-metric-repin (GATED) — one clean full-pipeline
-    cycle (retrain → build → eval, STOP_AFTER=1) with the now-frozen
-    side-channel ruler reported beside fitness, to (a) re-pin baseline_ref
-    {fitness,mota,idf1,fp_tracks,fp_frames_honest,speed,provenance} and
-    (b) confirm the fresh-corpus clean fp_frames_honest reproduces the
-    exp#6 band (clean_frac ~0.06–0.16) — falsified ⇒ corpus-sensitive,
-    re-open formulation. Pre-flight §8.1 on the pipeline entrypoint
-    (fail-fast liveness). THEN honest-fp-train-adopt: switch the training
-    objective from gamed fp_tracks to the frozen ruler (campaign reset —
-    its own pre-registered experiment, K-seed). fitness stays untouched
-    until the re-pin cycle promotes the ruler (§3/§4.5). ---
+### 20260515-honest-fp-frame-metric-repin   [win(measurement) — GATED]
+- selected: pre-registered child of wire-live (reproducible baseline +
+  generalisation check of the frozen ruler)
+- primary_axis: measurement
+- prior: p_win=0.85 (residual = clean_frac on a fresh tracker/corpus)
+- change: NONE to code — ran the clean reproducible pipeline
+  `bootstrap_recipe.sh` (STOP_AFTER=1) end-to-end; the frozen
+  side-channel ruler is emitted by the real mp pipeline eval.
+- preflight (§8.1): verified all pinned configs + yolo env (torch
+  2.11/CUDA/8 GPU) before launch; criteria pre-registered in
+  repin_hypothesis.md BEFORE running; analysis script pre-written.
+  PROCESS NOTE: launched with both run_in_background AND `nohup &` →
+  harness tracked the instant-return launcher (bogus early "exit 0");
+  recovered via a pid-waiter but its completion signal was not
+  surfaced → ~10 min idle. Fix: background long jobs with
+  run_in_background ONLY, never also `&`/`nohup`.
+- eval: /tmp/run_pipeline_iter1/results/results-20260515-1059.json
+  (copied to eval_repin/ for containment); full176, test=full, 176 clips
+- evidence: end-to-end wiring PASS (fp_frames_honest+breakdown in the
+  real pipeline JSON over 176 clips). fitness 0.5463 mota 0.6181 idf1
+  0.5758 fp_tracks 139 num_FP 98394 fp_frames_honest 8403 →
+  **clean_frac 0.0854** — *inside* the exp#6 ship band 0.06–0.16
+  despite being a DIFFERENT (fresh bootstrap) tracker ⇒ the frozen
+  ruler GENERALISES, not tracker/corpus-sensitive. Non-degenerate:
+  nm 85 / 8403 (1%); signal = lead 939 / lag 4094 / bridge 3285.
+- update: all 3 pre-registered criteria PASS; P(ruler generalises)
+  0.85→~0.95. baseline_ref PINNED in front-matter (provenanced,
+  reproducible by re-running the recipe).
+- prediction check: HELD — clean_frac landed in the ship band on an
+  independent tracker (stronger than the pre-registered ≤0.30 bar)
+- decision: win(measurement). Frozen ruler validated as a generalising
+  side-channel measurement; baseline pinned. fitness still UNTOUCHED.
+- baseline: PINNED (was null) — see front-matter baseline_ref
+- bank curation: honest-fp-frame-metric-repin → confirmed; spawn child
+  honest-fp-train-adopt (campaign reset — its own experiment)
+- artifacts: RESEARCH_OUT/20260515-honest-fp-frame-metric/ (repin_*,
+  baseline_ref.json, eval_repin/, logs/repin_*.log)
+
+--- next: honest-fp-train-adopt (GATED, campaign reset) — the training
+    objective currently optimises the GAMED fp_tracks term (exp#1: it is
+    materially gameable, decoupling 0.33). Now that an honest ruler is
+    frozen + baseline pinned, switch the training/selection objective to
+    charge FP via fp_frames_honest instead of fp_tracks (fitness_score is
+    the touch point — this is the FIRST sanctioned fitness change, §3/§4.5
+    lifted only because the ruler cleared exp#6 + wire-live + re-pin).
+    Own pre-registered experiment: K-seed≥3, within-batch vs the pinned
+    baseline_ref, promotion gate [candidate_confirmed, full_pipeline_clean,
+    overall_better_metrics]. Pre-flight §8.1; background with
+    run_in_background ONLY (no `&`/nohup — see re-pin process note). ---
 
 ## Progress curve
 
@@ -1139,7 +1188,14 @@ measurement track:
   20260515 honest-fp-frame-metric  [win(measurement) — VALIDATION]
     => FRAME formulation PASSES the joint gate (first to do so):
        nm='track' θ∈[0.3,0.6] clean_frac 0.16/0.06, crit-1 0.99/0.86,
-       predicted crossover present, P 0.55→~0.90. Candidate frozen
-       honest ruler θ=0.5/nm='track'. Next: wire-live + freeze +
-       clean re-pin + training adoption (fitness untouched until then).
+       predicted crossover present, P 0.55→~0.90. Frozen ruler
+       θ=0.5/nm='track'; wired live (live==offline 0 mismatch).
+  20260515 honest-fp-frame-metric-repin  [win(measurement) — BASELINE PINNED]
+    => clean reproducible bootstrap iter1: ruler emitted by the real
+       pipeline over 176 clips, clean_frac 0.085 — INSIDE the exp#6
+       ship band on a DIFFERENT tracker ⇒ ruler generalises. baseline_ref
+       PINNED {fit 0.5463, mota 0.6181, idf1 0.5758, fp_tracks 139,
+       fp_frames_honest 8403}. fitness still untouched. Next gated:
+       honest-fp-train-adopt (campaign reset — first sanctioned
+       fitness change, K-seed vs pinned baseline).
 ```
