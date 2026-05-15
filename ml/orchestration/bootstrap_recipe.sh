@@ -20,19 +20,28 @@
 # All inputs are pinned: tracker config, dataset, hyperparameters. Rerun
 # anytime to reproduce. Provenance is self-describing — no archaeology.
 #
+# DEFAULT = ONE iteration. Empirically, DAgger iterations 2/3 *regress*
+# fitness hard, repeatedly (e.g. 2026-05-15 optimized run: full-config
+# fitness iter1 0.5610 -> iter2 0.5395, MOTA 0.615 -> 0.565; the same
+# direction was seen in earlier runs). The pair-log relabel under the
+# iter-1 NN appears to bias the corpus rather than refine it. Until the
+# regression mechanism is understood (see RESEARCH_LOG idea
+# `dagger-multiiter-regression`), only iteration 1 is run by default.
+# Multi-iter is still available via --stop-after for investigation.
+#
 # Usage:
-#   ml/orchestration/bootstrap_recipe.sh                   # run end-to-end (~3-4h)
-#   ml/orchestration/bootstrap_recipe.sh --stop-after 1    # stop after iter 1
-#   ml/orchestration/bootstrap_recipe.sh --stop-after 2    # stop after iter 2 (old default)
-#   ml/orchestration/bootstrap_recipe.sh --start-at 2      # iter 2+iter 3 (assumes iter 1 done)
-#   ml/orchestration/bootstrap_recipe.sh --start-at 3      # iter 3 only (assumes iter 1+2 done)
+#   ml/orchestration/bootstrap_recipe.sh                   # iter 1 only (default; ~15 min)
+#   ml/orchestration/bootstrap_recipe.sh --stop-after 2    # iter 1+2 (investigation only)
+#   ml/orchestration/bootstrap_recipe.sh --stop-after 3    # iter 1+2+3 (investigation only)
+#   ml/orchestration/bootstrap_recipe.sh --start-at 2      # iter 2+   (assumes iter 1 done)
+#   ml/orchestration/bootstrap_recipe.sh --start-at 3      # iter 3 only (assumes 1+2 done)
 
 set -euo pipefail
 
 cd /home/mark/stuff/ubonpartners/track
 
 START_AT=1
-STOP_AFTER=3
+STOP_AFTER=1   # was 3 — DAgger iters 2/3 empirically regress fitness (see header)
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --start-at)  START_AT="$2"; shift 2;;

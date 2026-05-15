@@ -118,18 +118,21 @@ a *structural* mechanism get more prior mass with wider `sd`.
   category: inference
   cost_class: cheap
   touches: [uc_v11.yaml: utrack.nn_lambda]
+  primary_axis: idf1
   mechanism: >
     nn_lambda (ship 0.05) blends the learned match-NN cost with the
-    geometric/heuristic cost. It is the single knob that says "how much do
-    we trust the NN vs geometry". If the NN generalised well, more weight
-    helps; if it overfits the corpus, more weight hurts JAAD (cross-domain).
-    A sweep is a cheap, high-information probe of NN trust.
-  prior_p_win: 0.30
-  prior_effect: {mean: 0.002, sd: 0.007}
+    geometric/heuristic cost. Documented finding
+    `project_nn_lambda_idf1_dial.md` (2026-05-15): λ is effectively the
+    IDF1 dial — it trades identity consistency against fitness rather than
+    moving fitness much. So this is targeted at the **IDF1 axis** (§2.1):
+    find a λ that lifts IDF1 at statistically-similar fitness.
+  prior_p_win: 0.35
+  prior_effect: {mean: 0.001, sd: 0.005}   # fitness ~flat by the documented finding
   prediction: >
-    Sweep {0.0,0.05(control),0.10,0.20}. 0.0 ~= no-NN (sanity anchor).
-    Expect a hump; JAAD vs full176 may peak at different lambda (overfit
-    signature). A JAAD/full176 split in the optimum is itself the finding.
+    Sweep {0.0,0.05(control),0.10,0.20} in ONE eval. 0.0 ~= no-NN anchor.
+    Per the IDF1-dial finding: fitness ~flat (|Δfit|<2σ), IDF1 monotone-ish
+    in λ. Win if some λ gives Δidf1 ≥ +2σ_idf1 at similar fitness with
+    guards intact. JAAD vs full176 optimum split is an overfit signature.
   correlated_with: [match-nn-retrain-at-ship-delta]
   status: open
 
@@ -215,44 +218,319 @@ a *structural* mechanism get more prior mass with wider `sd`.
   status: open
   blocked_by: cheap-filter-delta-realign   # run the cheap probe first; it gates this
 
-- slug: dagger-iter4
+- slug: dagger-multiiter-regression
+  category: corpus
+  cost_class: medium       # diagnostic: reuse the already-produced iter1/2/3 artefacts
+  source: user
+  primary_axis: fitness    # understanding -> recover the lost ~0.02 fitness
+  touches: [analysis only: bootstrap iter1/2/3 pair-logs + corpora + evals]
+  mechanism: >
+    "dagger-iter4" (go deeper) is KILLED — the opposite is true. Direct
+    evidence (2026-05-15 optimized run, frozen corpus, within-batch):
+    full-config fitness iter1 0.5610 -> iter2 0.5395 (-0.0215, >>2sigma),
+    MOTA 0.6148 -> 0.5654; earlier runs showed the same direction. DAgger
+    iters 2/3 *regress hard and repeatably*. Hypothesised mechanism: the
+    pair-log relabel under the iter-1 NN collapses/【biases】 the candidate
+    distribution (the NN only surfaces pairs it already likes -> the next
+    corpus is self-confirming, not corrective; classic DAgger-without-
+    expert-correction failure). This idea is to *diagnose* it, not to run
+    more iters. Default is now ONE iteration (bootstrap_recipe.sh
+    STOP_AFTER=1); multi-iter only for this investigation.
+  prior_p_win: 0.60        # P(produces an actionable root-cause finding)
+  prior_effect: {mean: 0.000, sd: 0.004}   # diagnostic; payoff is via downstream fixes
+  prediction: >
+    Compare iter1 vs iter2 pair-logs from the same run: expect iter2 to
+    show (a) lower pair diversity / entropy, (b) collapsed score
+    distribution toward the iter1-NN's preferred region, (c) fewer
+    hard-negative pairs. If confirmed, the fix is corpus-side (keep iter0
+    non-NN candidate generation; never relabel candidacy with the learned
+    NN — only relabel *targets*), feeding a concrete corpus idea. If the
+    diversity story is falsified, escalate to a class-balance / label-noise
+    hypothesis. Either way it produces a child idea, not a dead end.
+  correlated_with: [scene-density-pair-rebalance, match-nn-retrain-at-ship-delta]
+  status: open
+
+# ---- user-seeded ideas (2026-05-15) ---------------------------------------
+
+- slug: poseflow-box-warp
+  category: inference          # ubon_cstuff motion-warp change; no NN retrain
+  cost_class: medium           # C rebuild + 1 eval; NO training loop added
+  source: user
+  primary_axis: fitness
+  touches: [ubon_cstuff: optical-flow box warp (motiontrack/box_prediction)]
+  mechanism: >
+    The OF box-warp currently displaces a box by the mean motion of 5
+    fixed grid points inside it. Fixed grid points sit on background /
+    occluder pixels in crowds, biasing the warp. Pose keypoints track the
+    actual articulated person; the upper body (head/shoulders/torso) is
+    far less often occluded than legs in dense scenes. Use a top-weighted
+    average of available pose keypoints for the warp when pose exists;
+    fall back to the existing 5-point scheme only when pose is absent.
+    `pose_kp_visible` is already a tracked feature, so the signal exists.
+  prior_p_win: 0.35
+  prior_effect: {mean: 0.004, sd: 0.008}
+  prediction: >
+    Gains concentrate in crowded/occlusion families (MOT20, dense PP22):
+    fewer ID switches, idf1 up, fp_tracks ~flat-to-down; ~flat where pose
+    is sparse (some JAAD). Risk: pose jitter on low-res far targets adds
+    warp noise -> guard mota/idf1. Falsified if no crowded-family lift.
+  correlated_with: [adaptive-nn-prior, ocm-why-no-gain]
+  status: open
+
+- slug: adaptive-nn-prior
+  category: inference          # runtime prior schedule; NO extra training loop
+  cost_class: medium
+  source: user
+  primary_axis: fitness
+  touches: [ubon_cstuff: nn_state/utrack prior injection ; maybe uc_v11 knob]
+  mechanism: >
+    The NN scheme was designed to be "learning over time" by updating an
+    injected prior belief; in practice a *fixed* prior is injected, so the
+    Bayesian-adaptivity the design intended is unused. Make the prior
+    adapt at *inference* (no retrain, no DAgger loop — hard constraint):
+    (a) strengthen a track's prior with clean accumulated history
+    (age/observation-count), (b) set the *starting* prior from scene
+    density (dense scene => higher FP-track base rate => more conservative
+    start). Scene density is already computed (SceneStats / scene_*).
+    Initial track generation stays non-NN (constraint honoured).
+  prior_p_win: 0.40
+  prior_effect: {mean: 0.005, sd: 0.010}
+  prediction: >
+    fp_tracks down in dense families (MOT20/PP22) without hurting sparse;
+    fitness up via the -0.0005*fp_tracks term. Risk: over-conservative
+    start suppresses slow-to-confirm real tracks -> mota/idf1 guard.
+    Falsified if the density-conditioned start shows no fp_tracks/density
+    interaction.
+  correlated_with: [state-corpus-fp-boost, dagger-multiiter-regression, poseflow-box-warp]
+  status: open
+
+- slug: literature-feature-scan
+  category: match_nn
+  cost_class: cheap            # web research + writing child bank entries; no eval
+  source: user
+  primary_axis: fitness        # generator: spawns concrete feature ideas
+  touches: [RESEARCH_LOG bank (generates children) ]
+  mechanism: >
+    The match-NN input set (16 OBS + 5 DET + 19 PAIR) is fixed. The
+    tracking-by-detection literature has association cues that may be
+    absent or weak here: camera-motion-compensated IoU / GMC (BoT-SORT),
+    observation-centric momentum done right (OC-SORT), low-score-detection
+    recovery (ByteTrack), appearance-gallery / long-term ReID memory,
+    velocity-direction consistency, size/scale priors. A structured
+    literature pass enumerates candidates, each with a mechanism + citation,
+    and emits them as child bank entries (not a single blob).
+  prior_p_win: 0.60            # P(yields >=1 child with prior_p_win >= 0.3)
+  prior_effect: {mean: 0.004, sd: 0.010}   # option value of the best child
+  prediction: >
+    Produces >=3 child ideas, each with mechanism + citation + a
+    feature-importance plan (zero-out screen first, §ablation). The scan
+    "wins" if >=1 child clears prior_p_win 0.3 after mechanism review.
+  correlated_with: [ocm-why-no-gain, feature-ablation-prune]
+  status: open
+
+- slug: ocm-why-no-gain
+  category: match_nn
+  cost_class: cheap            # uses existing pair-log + ml.analysis tooling
+  source: user
+  primary_axis: simplicity     # likely outcome: justified removal of ocm_cos
+  touches: [analysis: ocm_cos in pair-log ; ml.analysis.permute_match_features]
+  mechanism: >
+    OC-SORT's observation-centric momentum is a strong cue elsewhere, yet
+    `ocm_cos` ranks 13/16 in the v13 OBS feature audit (FEATURE_AUDIT.md)
+    and is a documented drop-candidate. Hypotheses: (a) `ocm_cos` is
+    degenerate in our pipeline (mostly zero/constant — detector cadence or
+    a compute bug), or (b) it is collinear with kf_d2 / track_speed /
+    kf_score so the NN extracts no marginal value. Diagnose with: value
+    distribution + NaN/zero rate in the pair-log; permutation importance;
+    pairwise collinearity vs the motion features; compare our formula to
+    the OC-SORT reference.
+  prior_p_win: 0.65            # P(produces a clear degenerate-or-redundant verdict)
+  prior_effect: {mean: 0.001, sd: 0.004}
+  prediction: >
+    Outcome A (degenerate): fixing the computation gives a real fitness
+    lever -> spawn a fix idea. Outcome B (collinear/low-value): confirms
+    redundancy -> feeds feature-ablation-prune as a simplicity removal.
+    Falsified-as-uninformative only if ocm_cos is mid-importance AND
+    independent, which the audit already makes unlikely.
+  correlated_with: [feature-ablation-prune, literature-feature-scan]
+  status: open
+
+- slug: feature-ablation-prune
+  category: match_nn
+  cost_class: medium           # zero-out screen is cheap; retrain-without confirm = medium
+  source: user
+  primary_axis: simplicity
+  touches: [train_phase3 / build_pair_dataset feature set ; eval]
+  mechanism: >
+    Wide NN input (16+5+19) has documented low-value dims. FEATURE_AUDIT
+    bottom-4 OBS = {ocm_cos, det_subbox_conf, det_fiqa_score, track_speed};
+    DET-tower det_conf is redundant with PAIR pre_thr_score. Pruning
+    fitness-neutral features = a simplicity-axis win (fewer params, smaller
+    feature pipeline, less overfit surface, marginally faster) per §2.1.
+    Method: cheap screen first — zero the feature in BOTH train inputs and
+    eval and check fitness stays within 2sigma; only then pay for a
+    retrain-without-the-column to confirm and to realise the param saving.
+  prior_p_win: 0.55            # P(>=1 feature prunes fitness-neutral)
+  prior_effect: {mean: 0.000, sd: 0.004}   # neutral by design; payoff is simplicity
+  prediction: >
+    Zero-out screen on the audit bottom-4 + det_conf: expect >=2 to be
+    fitness-neutral (|Δfit|<2σ, guards intact). Those become a simplicity
+    win after the confirming retrain (record params↓, LOC↓). A feature
+    whose zeroing *improves* fitness was actively harmful -> fitness win.
+    Falsified if every audited-low feature is actually load-bearing.
+  correlated_with: [ocm-why-no-gain, literature-feature-scan, remove-cheap-filter-machinery]
+  status: open
+
+# ---- agent-proposed, grounded in documented history (2026-05-15) ----------
+
+- slug: fitness-shaped-trainer-loss
+  category: state_nn           # also applies to match_nn; start with state head
+  cost_class: heavy            # retrain + K-seed + corpus-drift exposed
+  source: agent
+  primary_axis: fitness
+  touches: [train_state_head_decoupled / train_phase3 loss ; build_*_corpus weights]
+  mechanism: >
+    Documented as THE next angle in EXPERIMENT_HISTORY ("D1/D2 follow-up:
+    fitness-shaped per-sample weights") and feedback memories
+    (`feedback_track_training_objective`: BCE/AUC don't optimise fitness;
+    `feedback_track_eval_metric`: judge by fitness not val-AUC). The heads
+    train on BCE; the eval is fitness (mota - .0005*fp_tracks -
+    .002*fp_per_frame). Per-sample weights that mirror the fitness
+    cost (counterfactual: how much does this example's error move
+    fp_tracks/mota) align the surrogate with the true objective, and the
+    cross-domain JAAD gap is structurally a fitness-weighting artefact
+    (lower fp_track base rate there), not a data-volume one (D1/D2
+    falsified volume).
+  prior_p_win: 0.35
+  prior_effect: {mean: 0.006, sd: 0.014}
+  prediction: >
+    K=3-seed medians, within-corpus vs same-corpus BCE control. Expect
+    fp_tracks down and fitness up, with the JAAD/full176 gap narrowing
+    (the discriminating prediction — a pure data effect would not narrow
+    it). Falsified if fitness-shaping moves val-AUC but not fitness, or
+    widens the domain gap.
+  correlated_with: [state-corpus-fp-boost, dagger-multiiter-regression]
+  status: open
+
+- slug: scene-density-pair-rebalance
   category: corpus
   cost_class: heavy
-  touches: [bootstrap_recipe.sh: a 4th DAgger pass]
+  source: agent
+  primary_axis: fitness
+  touches: [build_pair_dataset: per-scene pair sampling/weight ; NO extra loop]
   mechanism: >
-    bootstrap_recipe.sh runs 3 DAgger iterations and explicitly flags iter3
-    as an open question ("does another pass help or are we at the head's
-    representational ceiling?"). A 4th pass tests for residual DAgger gain.
-    Heavy; corpus-drift exposed => must compare iter4 vs iter3 built from
-    the same iter3-NN pair-log, within-corpus, K-seed.
-  prior_p_win: 0.20
-  prior_effect: {mean: 0.003, sd: 0.012}
+    `project_pair_log_scene_skew`: the top-5 scenes are 36% of all pairs,
+    so the bootstrap corpus is structurally dense-crowd-biased — the head
+    over-fits crowded static-cam scenes and under-serves sparse / dashcam.
+    Cap or inverse-frequency-weight per-scene pair contribution at
+    corpus-build time (single pass, NO added training loop, initial
+    candidate generation stays non-NN — honours the same constraint as
+    adaptive-nn-prior). NOTE: naive JAAD up-weight was already FALSIFIED
+    (`project_d1_jaad_test_promotion`); this is scene-frequency
+    rebalancing of the *whole* corpus, a different mechanism, and must
+    cite that it is not the killed D1 idea.
+  prior_p_win: 0.30
+  prior_effect: {mean: 0.004, sd: 0.012}
   prediction: >
-    iter3->iter4 within-corpus Δfit. If |Δfit| < 2σ we have evidence the
-    head is at its representational ceiling and DAgger depth is exhausted —
-    a valuable negative result that kills further-iteration ideas.
-  correlated_with: [match-nn-retrain-at-ship-delta]
+    Within-corpus, K-seed. Expect modest full176 change but a narrowed
+    JAAD/full176 gap if the skew story holds. Falsified (and demoted
+    toward the D1 kill) if rebalancing behaves like the failed JAAD
+    up-weight (no gap change).
+  correlated_with: [fitness-shaped-trainer-loss, dagger-multiiter-regression]
   status: open
+
+- slug: remove-cheap-filter-machinery
+  category: inference
+  cost_class: medium
+  source: agent
+  primary_axis: simplicity
+  touches: [ubon_cstuff utrack_match.c + build_pair_dataset.py cheap-filter (~150 LOC)]
+  mechanism: >
+    EXPERIMENT_HISTORY records the cheap-filter machinery (~150 LOC across
+    the C matcher and the training-side mirror) "buys no measurable
+    performance" and `project_cheap_filter_speed_neutral`: it saves no
+    wall time either. If a fitness-neutral check confirms, deleting the
+    whole mechanism is a pure simplicity win (§2.1 axis 4): less code, one
+    fewer train/infer-coupled knob (removes the δ-mismatch class of bugs
+    entirely). Gated behind cheap-filter-delta-realign: if δ turns out to
+    matter, the machinery can't be removed, so resolve that cheap probe
+    first.
+  prior_p_win: 0.50           # P(simplicity win: fitness-neutral removal)
+  prior_effect: {mean: 0.000, sd: 0.004}
+  prediction: >
+    With cheap-filter disabled/removed: |Δfit|<2σ, guards intact, ~0 speed
+    change (consistent with the speed-neutral finding) -> simplicity win,
+    record LOC↓ ≈150 and one knob removed. Falsified if removal regresses
+    fitness beyond 2σ (then δ *did* matter — promote cheap-filter-delta
+    work instead).
+  correlated_with: [cheap-filter-delta-realign, feature-ablation-prune]
+  status: open
+  blocked_by: cheap-filter-delta-realign
+
+# ---- killed (kept so a falsified mechanism cannot be silently revived) -----
+
+- slug: jaad-pair-upweight
+  category: corpus
+  source: agent
+  status: killed
+  killed_by: project_d1_jaad_test_promotion.md (2026-05-15)
+  mechanism: >
+    Adding / up-weighting JAAD pairs to close the cross-domain gap.
+    FALSIFIED: D1/D2 showed the gap is not a data-volume problem. Listed
+    here per RESEARCH.md §7.2 so it cannot be resurrected under a new slug;
+    the legitimate successors are fitness-shaped-trainer-loss and
+    scene-density-pair-rebalance (different mechanisms, must cite this kill).
 ```
 
 ### Current ranking (recompute each iteration)
 
-| Rank | slug | EV | cost | P(win) | prior Δfit | note |
-|---|---|---|---|---|---|---|
-| 1 | cheap-filter-delta-realign | 0.0020 | cheap | 0.45 | +0.004 | high info; gates the heavy NN retrain |
-| 2 | dedup-iou-sweep | 0.0011 | cheap | 0.35 | +0.003 | F5d showed surface still live here |
-| 3 | new-track-thr-sweep | 0.0006 | cheap | 0.30 | +0.002 | direct fp_tracks lever |
-| 4 | nn-lambda-sweep | 0.0006 | cheap | 0.30 | +0.002 | probes NN trust / overfit |
-| 5 | track-buffer-seconds-sweep | 0.0006 | cheap | 0.30 | +0.002 | idf1↔fp_tracks trade |
-| 6 | state-corpus-fp-boost | 0.00018 | medium | 0.35 | +0.004 | metric-aligned; seed-sensitive |
-| 7 | match-nn-retrain-at-ship-delta | 0.00008 | heavy | 0.40 | +0.006 | blocked by #1 |
-| 8 | state-head-poswfit-kseed | 0.00006 | medium | 0.25 | +0.002 | likely confirms "not a lever" |
-| 9 | dagger-iter4 | 0.00002 | heavy | 0.20 | +0.003 | ceiling probe |
+Non-fitness-primary ideas (`idf1`/`speed`/`simplicity`/diagnostic) have
+`prior_effect.mean≈0` by design, so the fitness-only EV in §7.1 understates
+them; they are ranked by **information / option value** per the §7.1
+tie-breaker and flagged `(info)`.
 
-First pick = **cheap-filter-delta-realign**: top EV, and win-or-lose it
-sharply updates `match-nn-retrain-at-ship-delta` and `nn-lambda-sweep`
-(highest information value). It is also the gate on the most expensive idea
-in the bank, so resolving it cheaply first is correct sequencing.
+| Rank | slug | EV | cost | P(win) | axis | note |
+|---|---|---|---|---|---|---|
+| 1 | cheap-filter-delta-realign | 0.0020 | cheap | 0.45 | fitness | gates remove-cheap-filter + match-nn-retrain |
+| 2 | literature-feature-scan | 0.0024(info) | cheap | 0.60 | gen | cheap generator; high option value |
+| 3 | ocm-why-no-gain | 0.0013(info) | cheap | 0.65 | simplicity | audit already flags ocm_cos low; near-certain verdict |
+| 4 | dedup-iou-sweep | 0.0011 | cheap | 0.35 | fitness | F5d showed surface still live |
+| 5 | feature-ablation-prune | (info) | medium | 0.55 | simplicity | bottom-4 named in FEATURE_AUDIT |
+| 6 | new-track-thr-sweep | 0.0006 | cheap | 0.30 | fitness | direct fp_tracks lever |
+| 7 | nn-lambda-sweep | (info) | cheap | 0.35 | idf1 | documented IDF1 dial |
+| 8 | track-buffer-seconds-sweep | 0.0006 | cheap | 0.30 | fitness | idf1↔fp_tracks trade |
+| 9 | dagger-multiiter-regression | (info) | medium | 0.60 | fitness | diagnose the −0.02 iter2 regression |
+| 10 | adaptive-nn-prior | 0.00025 | medium | 0.40 | fitness | design intent unused; honours no-loop rule |
+| 11 | poseflow-box-warp | 0.00018 | medium | 0.35 | fitness | crowded-family motion fix |
+| 12 | state-corpus-fp-boost | 0.00018 | medium | 0.35 | fitness | metric-aligned; seed-sensitive |
+| 13 | remove-cheap-filter-machinery | (info) | medium | 0.50 | simplicity | ~150 LOC; blocked by #1 |
+| 14 | fitness-shaped-trainer-loss | 0.00009 | heavy | 0.35 | fitness | documented "next angle" |
+| 15 | match-nn-retrain-at-ship-delta | 0.00008 | heavy | 0.40 | fitness | blocked by #1 |
+| 16 | scene-density-pair-rebalance | 0.00005 | heavy | 0.30 | fitness | structural skew; not the killed D1 |
+| 17 | state-head-poswfit-kseed | 0.00006 | medium | 0.25 | fitness | likely confirms "not a lever" |
+| — | jaad-pair-upweight | — | — | — | killed | falsified by project_d1 |
+
+First pick = **cheap-filter-delta-realign**: top fitness-EV, cheap, and it
+*gates two* heavier ideas (remove-cheap-filter-machinery,
+match-nn-retrain-at-ship-delta) — maximal information value. Run the
+cheap generators/diagnostics (#2 literature-feature-scan, #3
+ocm-why-no-gain) early too: they are ~zero compute and spawn/curate the
+rest of the bank.
+
+### Curation note — 2026-05-15 (DAgger multi-iter regression)
+
+Direct evidence from the 2026-05-15 optimized bootstrap (frozen corpus,
+within-batch), `full` config: fitness **iter1 0.5610 → iter2 0.5395**
+(−0.0215 ≫ 2σ), MOTA 0.6148 → 0.5654, fp_tracks 103 → 48 (the head got
+far more conservative — buying fp_tracks by collapsing recall). Same
+direction in earlier runs. Consequences applied:
+
+- `dagger-iter4` ("go deeper") **killed** — the data falsifies the
+  premise; replaced by the diagnostic `dagger-multiiter-regression`.
+- `bootstrap_recipe.sh` default changed **STOP_AFTER 3 → 1**; multi-iter
+  is now investigation-only.
+- `nn-lambda-sweep` re-tagged to the **IDF1 axis** per
+  `project_nn_lambda_idf1_dial.md` (λ moves IDF1, not fitness).
 
 ---
 
