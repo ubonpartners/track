@@ -336,6 +336,7 @@ def evaluate_pair_logger(
     n_phantom_neg = 0   # honest-fp-train-adopt-v2: kept phantom-negs
     n_phantom_neg_seen = 0      # passed precise gate (pre-subsample)
     n_phantom_neg_dropped = 0   # dropped by subsample (dose)
+    n_fpfp_merge_pos = 0        # v3: (phantom track, phantom det)→label 1
     n_pos = 0
     n_neg = 0
 
@@ -421,9 +422,6 @@ def evaluate_pair_logger(
 
             track_id_int: int = int(rec["track_id"])
             track_gt_id = track_gt_history.get(track_id_int)
-            if track_gt_id is None:
-                n_dropped_no_gt_track += 1
-                continue
 
             det_box = [
                 float(rec["det_x0"]),
@@ -432,6 +430,28 @@ def evaluate_pair_logger(
                 float(rec["det_y1"]),
             ]
             det_best_gt, det_best_iou = best_iou_match(det_box, gt_curr)
+            det_is_phantom = det_best_gt is None or det_best_iou <= 0.0
+
+            if track_gt_id is None:
+                # honest-fp-train-adopt-v3 (20260515): POSITIVE half.
+                # The track is a phantom (never GT-aligned). If the det
+                # is ALSO a phantom (IoU==0 with every GT — the resolved
+                # honest ruler), MERGING them is honest-fitness-positive:
+                # two contiguous far-from-GT episodes → one (MOTA-
+                # neutral; phantoms touch no GT, frame-FP unchanged).
+                # Teach the match-NN to consolidate (label 1). v1/v2 had
+                # only the negative half; the match-NN signal is now
+                # complete. A phantom track + real/loose det stays
+                # DROPPED (ambiguous; not the FP+FP-merge vector).
+                if det_is_phantom:
+                    kept_indices.append(r_idx)
+                    kept_labels.append(1)
+                    n_pos += 1
+                    n_fpfp_merge_pos += 1
+                else:
+                    n_dropped_no_gt_track += 1
+                continue
+
             if det_best_gt is None or det_best_iou < det_match_iou:
                 # honest-fp-train-adopt-v2 (20260515): the track here is
                 # GT-aligned (real). A detection overlapping NO real
@@ -534,6 +554,7 @@ def evaluate_pair_logger(
         "n_phantom_neg": n_phantom_neg,
         "n_phantom_neg_seen": n_phantom_neg_seen,
         "n_phantom_neg_dropped": n_phantom_neg_dropped,
+        "n_fpfp_merge_pos": n_fpfp_merge_pos,
         "n_frames_with_trace": n_frames_with_trace,
         "n_frames_with_records": n_frames_with_records,
         "n_frames_total": len(frames),
@@ -677,7 +698,7 @@ def _build_summary(
         for k in ("n_pairs", "n_positives", "n_negatives",
                   "n_dropped_no_gt_track", "n_dropped_no_gt_det",
                   "n_phantom_neg", "n_phantom_neg_seen",
-                  "n_phantom_neg_dropped",
+                  "n_phantom_neg_dropped", "n_fpfp_merge_pos",
                   "n_frames_with_trace", "n_frames_with_records",
                   "n_frames_total"):
             try:
@@ -699,6 +720,7 @@ def _build_summary(
         "n_phantom_neg": int(totals.get("n_phantom_neg", 0)),
         "n_phantom_neg_seen": int(totals.get("n_phantom_neg_seen", 0)),
         "n_phantom_neg_dropped": int(totals.get("n_phantom_neg_dropped", 0)),
+        "n_fpfp_merge_pos": int(totals.get("n_fpfp_merge_pos", 0)),
     }
 
     generation_ok = [g for g in generation_results if g.get("ok")]

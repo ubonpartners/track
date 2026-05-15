@@ -1448,24 +1448,45 @@ Entry schema (copy for each new experiment):
   remains best honest config (standing open Q). Escalate per pre-reg.
 - artifacts: RESEARCH_OUT/20260515-honest-fp-train-adopt/
 
---- DONE: repin2 (68aeb7c); dagger-reaudit (STOP1 real); nn-vs-nonn
-    (NN net-neg honestly, expected); honest-fp-train-adopt v1 (blunt
-    relabel: FP-suppression works but over-doses → MOTA −0.020, not
-    promoted).
+### 20260515-honest-fp-train-adopt-v2   [win(measurement) — partial; on-path]
+- change: src/pair_log.py 546607c — PRECISE (track∩det IoU>0.1) + dosed
+  phantom-negatives. Negatives cut 55526→7949 (precise gate, subsample
+  untriggered). bootstrap STOP_AFTER=1; eval under de-gamed fitness.
+- prior: P(v2 beats no-NN)=0.45
+- evidence (within-batch full176): v2 fitNEW 0.5758 — between pinned
+  iter1 0.5706 and no-NN 0.5826. vs iter1: ΔfitNEW +0.0052, **ΔMOTA
+  +0.0016** (v1's −0.0204 collapse FIXED — precision hypothesis
+  CONFIRMED), ΔIDF1 +0.0024, honest_v2 908→839, num_FP −2585. Best NN
+  config so far; gap to no-NN HALVED (old-NN −0.012 → v2 −0.0068).
+- update: PRIMARY (beat no-NN 0.5826) NOT met by −0.0068; GUARDS PASS;
+  DIRECTIONAL PASS. Residual precisely attributable: v2 has only the
+  NEGATIVE half; honest_v2 839 > no-NN 786 because the NN is never
+  taught to MERGE FP+FP (user keystone). Expected on-path progress, not
+  a failure. P(v3 closes the gap) ≈ 0.50.
+- decision: not promoted (baseline stays pinned iter1; no-NN still best).
+  Proceed to v3 (pre-registered, user-approved order).
+- artifacts: RESEARCH_OUT/20260515-honest-fp-train-adopt/ (analyze_v2.log,
+  eval_iter1_honest_v2.json)
 
---- next: AWAIT USER STEER — v1 relabel validated the concept but the
-    blunt 55k-negative dose cost MOTA. Options:
-    (A) honest-fp-train-adopt-v2 [recommended] — emit phantom-negative
-    ONLY for PLAUSIBLE-absorption pairs (det near THAT track's
-    predicted pos = the real lead/lag/bridge vector) + subsample / BCE
-    down-weight so negatives don't swamp positives. Precise+dosed →
-    keep the honest_v2 drop, recover MOTA. Heavy (~25min cycle).
-    (B) re-pin baseline to no-NN (0.5826) and optimise from there —
-    accept the NN has no honest headroom over the heuristic.
-    (C) state-NN corpus relabel and/or dagger-corpus-noNN-candidacy.
-    (D) nn_lambda down-weight (band-aid, cheap eval-only test of the
-    over-suppression hypothesis before another retrain).
-    run_in_background ONLY; one heavy pipeline at a time. ---
+--- DONE: repin2 (68aeb7c); dagger-reaudit (STOP1 real); nn-vs-nonn
+    (NN net-neg honestly, expected); train-adopt v1 (blunt → MOTA −0.020,
+    not promoted); train-adopt v2 (precise → MOTA fixed +0.0016, best NN
+    0.5758, gap to no-NN halved to −0.0068, not promoted — needs the
+    positive half).
+
+--- next: honest-fp-train-adopt-v3 [user-approved order] — KEEP v2's
+    precise negative, ADD the missing POSITIVE half: in src/pair_log.py
+    the first gate drops (phantom track, *) pairs (track_gt_id is None →
+    continue, ~line 414); instead, when the det is ALSO a phantom
+    (IoU==0 with all GT) emit label 1 — teach the match-NN to MERGE
+    FP+FP (consolidate phantoms → fewer honest episodes; MOTA-neutral,
+    phantoms touch no GT). Targets exactly the honest_v2 839>786 gap.
+    Isolated from the state-NN fix (that = v4) for clean attribution
+    (RESEARCH §isolate-variables). Same pre-reg criteria. Heavy ~25min,
+    run_in_background ONLY, one heavy pipeline at a time. Then v4
+    (state-NN honest-ruler align: build_state_corpus.py:958/976-980
+    only hard-drop IoU==0 segs, not loose-near-real), then
+    fitness-impact-weighted-loss. ---
 
 ## Progress curve
 
