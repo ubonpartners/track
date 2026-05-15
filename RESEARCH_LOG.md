@@ -1296,16 +1296,29 @@ Entry schema (copy for each new experiment):
   honest-fp-train-adopt → folded in (fitness already switched).
 - artifacts: RESEARCH_OUT/20260515-honest-fp-iou0/
 
---- next: honest-fp-repin2 (GATED) — clean full-pipeline cycle
-    (bootstrap_recipe.sh STOP_AFTER=1, run_in_background ONLY) under the
-    NEW fitness; re-pin baseline_ref {fitness(new), mota, idf1, fp_tracks
-    (old), fp_tracks_honest_v2, num_FP, provenance}; confirm end-to-end
-    'roughly similar weight' (new fitness ≈ old-style fitness on the
-    baseline within a few %), live==offline on 176 clips, honest ≤ num_FP.
-    THEN training/selection runs against the de-gamed fitness; prior
-    fp_tracks-dominated 'wins' (F5d ship, DAgger) re-audit under it.
-    §8.1 pre-flight; fitness now CHANGED so the freeze is lifted —
-    baseline_ref is stale until this completes. ---
+--- status: fitness DE-GAMED + duration-normalised, committed e950fef
+    (exp#10 RESOLVED; calib K=0.35 ep/s; correctness gate PASS). The
+    honest-FP measurement campaign is COMPLETE. Optimization loop resumes
+    against the de-gamed fitness. NOTE: every idea-bank prior was set vs
+    the OLD gamed fitness — treat priors as provisional; fp_tracks-
+    dominated past 'wins' (F5d ship, DAgger STOP_AFTER) are SUSPECT and
+    must be re-audited under honest fitness before reuse.
+
+--- next: (1) honest-fp-repin2 RUNNING (bootstrap STOP_AFTER=1,
+    run_in_background) — pins baseline_ref {fitness(new), mota, idf1,
+    fp_tracks(old), fp_tracks_honest_v2, num_FP, duration, provenance};
+    confirm new≈old-style weight (~few %), live==offline, honest≤num_FP.
+    (2) THEN dagger-reaudit-honest [first optimization pick, EV-top,
+    pre-registered RESEARCH_OUT/20260515-dagger-reaudit-honest/] —
+    `bootstrap_recipe.sh --start-at 2 --stop-after 3` reusing the pinned
+    iter1, eval iter1/2/3 under honest fitness within-batch: is the
+    STOP_AFTER=1 default (old gamed −0.0215 iter1→2) a gaming artifact?
+    Decisive either way; marginal cost iter2+iter3 (~30m). (3) THEN work
+    the bank cheap→costly vs the pinned baseline (dedup-iou-sweep,
+    cheap-filter-delta-realign, nn-lambda-sweep; user-seeded poseflow-
+    box-warp, ablation-study), priors re-judged vs de-gamed fitness,
+    RESEARCH.md promotion gate. run_in_background ONLY (re-pin lesson),
+    one heavy pipeline at a time. ---
 
 ## Progress curve
 
