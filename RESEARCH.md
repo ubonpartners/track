@@ -475,9 +475,11 @@ while not should_stop():                       # §10 stop conditions
     apply_change(idea)                         # edit uc_v11.yaml, or run the pipeline
     save_diff(slug)
 
-    # one eval call, candidate + control as two tests, frozen corpus
-    metrics = run_eval(slug)                   # subagent §12; returns results-<ts>.json
+    preflight(slug, idea)                      # §8.1 — MANDATORY gate before any long run
+    metrics = run_eval(slug)                   # subagent §12; one eval call,
+    #   candidate + control as tests, frozen corpus; returns results-<ts>.json
     #   seed-sensitive idea => K-seed medians (§4.2)
+    #   launch is liveness-checked, not fire-and-forget (§8.1)
 
     decision = decide(slug, metrics)           # §5
     posterior = bayes_update(idea, metrics)    # §7.2, written explicitly
@@ -499,6 +501,58 @@ while not should_stop():                       # §10 stop conditions
 
 One experiment in flight at a time (the eval already saturates all GPUs;
 parallel experiments would contend and break the within-batch invariant).
+
+### 8.1 Pre-flight (mandatory before every experiment)
+
+A long run that fails in the first 10 seconds but is only discovered an
+hour later (timeout) is the single most expensive mistake in this loop.
+Before committing to *any* eval or pipeline run, do a final review — this
+gate is not optional, and it is itself logged in the experiment entry.
+
+1. **Re-check the code & setup against the active path.** Grep the
+   *actually-executed* code/config path for the knob or function the
+   change touches and confirm it is live and spelled right — yaml keys
+   silently ignored by dead code paths have burned us before
+   (`feedback_verify_config_knobs.md`). Confirm every input exists and
+   resolves: frozen eval yaml parses; corpus paths, NN bins, TRT engines
+   present; control config is the *current* baseline; artifact dir created
+   with `results_location` / `TMPDIR` / logs redirected into it (§9);
+   enough free disk + GPUs idle.
+
+2. **Reduce execution time — omit redundant steps.** Estimate wall-clock
+   before launching (`feedback_time_is_primary.md`,
+   `feedback_preflight_long_runs.md`) and ask what can be skipped without
+   changing the result:
+   - config-only change ⇒ **no retrain, no C rebuild** — just the eval;
+   - only the metric/analysis changed, not the tracker ⇒ reuse cached
+     ubtrk2 / pair-log (`--no-regen`); don't regenerate the corpus;
+   - candidate **and** control in **one** eval call (shared dataset load),
+     never sequential passes;
+   - `num_workers: auto` (all GPUs); `runs=1` unless two candidates differ
+     by < σ (`feedback_eval_runs_default.md`);
+   - rebuild `ubon_cstuff` only if a C source actually changed; reuse the
+     existing engine/bins otherwise;
+   - DAgger: **1 iteration by default** (iters 2/3 regress — §4 evidence);
+     multi-iter only for the explicit investigation idea.
+   If a cheaper equivalent measurement exists, take it and record why.
+
+3. **Fail fast, don't fire-and-forget.** After launch, verify within
+   ~1–2 min that it is *actually progressing* — worker processes spawned,
+   GPUs busy, the progress bar advancing, no immediate traceback / NN-load
+   abort / config reject — before walking away. Never sleep on a long
+   timeout hoping it worked.
+
+4. **Smoke-test when risk is non-trivial.** If the change touches a new
+   or rarely-exercised code path, a schema, the first use of a knob, new
+   C code, or anything where a silent-wrong or late failure is plausible:
+   run a **tiny** smoke first (1–2 clips, or one short pipeline step) and
+   confirm it produces a sane, well-formed result *before* committing to
+   the full frozen-corpus run or the full pipeline. The minutes spent
+   here are cheap against an hour-long dead run.
+
+Only when 1–4 pass does the experiment proceed to the full run. The
+preflight outcome (what was checked, what was skipped to save time, smoke
+result if any) goes in `decision.md`.
 
 ---
 
@@ -635,6 +689,7 @@ falsifiable prediction, with the reference cited in its bank entry.
 | Headline metric | `fitness` (`track_test.fitness_score`), `__ovr` rollup |
 | Guards | `mota`, `idf1`, `fp_tracks`, per-family fitness |
 | Artifact rule | one folder per experiment (`RESEARCH_OUT/<slug>/`); zero scatter; outside-write ⇒ errored |
+| Pre-flight | mandatory §8.1 gate: re-check active path/setup, cut redundant steps, liveness-check the launch, smoke-test if risky |
 | Evaluator | single: `python track.py --eval <frozen yaml>` (GPU-sharded) |
 | Corpus | frozen `eval_ship_baseline.yaml` (full176 + jaad_val) |
 | Comparison | within-batch only (candidate vs control in one eval) |

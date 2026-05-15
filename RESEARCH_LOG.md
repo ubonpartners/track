@@ -614,6 +614,8 @@ Entry schema (copy for each new experiment):
 - primary_axis: <fitness|idf1|speed|simplicity>
 - prior: p_win=<>, effect~N(μ0=<>, τ0=<>)
 - change: <one line + path to change.patch>
+- preflight (§8.1): active-path re-checked=<y/n>; redundant steps cut=<what skipped & why>;
+    wall-clock est=<>; launch liveness-confirmed=<y/n @ ~t>; smoke=<n/a | result>
 - eval: <path to results-<ts>.json>; corpus=eval_ship_baseline (frozen)
 - evidence (within-batch vs same-batch control):
     fitness Δ=<>   mota Δ=<>   idf1 Δ=<>   fp_tracks Δ=<>
