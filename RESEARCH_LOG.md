@@ -908,11 +908,41 @@ Entry schema (copy for each new experiment):
   (crit-1 pass, crit-3 fail@v0)
 - artifacts: RESEARCH_OUT/20260515-honest-fp-cleanconfig-falsealarm/
 
---- next: honest-fp-spatial-gate (now critical-path, medium) — add the
-    spatial-excursion criterion to the bridge/lag rule so legit occlusion
-    (spatially consistent) is NOT charged while teleport/merge IS; then
-    honest-fp-threshold-sweep jointly. Ruler stays unfrozen; no
-    fitness-measured tracker promotion until crit-2&3 pass (§3/§4.5) ---
+### 20260515-honest-fp-spatial-gate   [win(measurement)]
+- selected: critical-path pick after crit-3 (temporal-only false-alarmed 31x)
+- primary_axis: measurement
+- prior: p_win=0.70 (spatial gate makes def freezable), effect~N(0,0)
+- change: _honest_fp_tracks spatial-excursion gate + per-frame hyp
+  centroid capture in compute_metrics (HId==track_id verified);
+  side-channel only, frozen fitness untouched
+- preflight (§8.1): logs/ pre-created; smoke 1 clip (v0 honest1 -> spatial0,
+  legit bridge forgiven, invariant ok); 2 sharded evals reuse prior
+  cfg/yaml, no retrain, ~1m32s+1m39s; liveness-confirmed
+- eval: RESEARCH_OUT/20260515-honest-fp-spatial-gate/eval/{ship,iter1v2}/results-*.json
+- evidence (full176, θ=2.0):
+    crit-3 clean ship honest/gamed 31.0x -> 0.8x (gamed83 honest68;
+      lag/bridge false alarms 1098/1364 -> 11/2) — PASSED
+    crit-1 iter1->iter2 honest -44.3% vs FP-vol -17.9% -> decoupling
+      0.88(v0) -> 0.40 — REGRESSED (gate too forgiving @θ=2.0)
+- update: gamed 0.33 reproduced a 4th time (exploit P≈0.99). spatial-gate
+  v1@θ2.0 freezable P≈0.05; some θ-band satisfies both P≈0.35;
+  need FP-frame metric P≈0.45
+- prediction check: HALF held (clean fixed; decoupling did NOT stay)
+- decision: win(measurement) — pinpoints a real θ tension (crit-3 vs
+  crit-1); prevents freezing a ruler that re-admits the exploit
+- baseline: unchanged; ruler NOT frozen; campaign stays §3/§4.5
+- nuance: honest<gamed possible (SWITCH treated as matched-assoc, not
+  pure FP) — defensible, breaks the naive invariant, must be documented
+- bank curation: honest-fp-spatial-gate → confirmed(caveat);
+  honest-fp-threshold-sweep → DECISIVE next, prior↓0.35, joint objective;
+  added contingency honest-fp-frame-metric; honest-fp-track-metric-
+  definition stays validating
+- artifacts: RESEARCH_OUT/20260515-honest-fp-spatial-gate/
+
+--- next: honest-fp-threshold-sweep (DECISIVE, cheap) — joint (θ,l_lead,
+    l_lag,g_max) search for clean honest/gamed∈~[0.7,2] AND iter1→iter2
+    decoupling≥~0.8 simultaneously; if no band exists pivot to
+    honest-fp-frame-metric. Ruler unfrozen; no tracker promotion (§3/§4.5) ---
 
 ## Progress curve
 

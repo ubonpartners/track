@@ -132,60 +132,117 @@ def compute_detection_metrics(gt, test,
                 metrics_dict[f"det_p_{cl_name}_{s}"]=p_curve[cl][index]
                 metrics_dict[f"det_r_{cl_name}_{s}"]=r_curve[cl][index]
 
-def _honest_fp_tracks(df, l_lead=5, l_lag=5, g_max=10):
-    """Segment-based unique-FP count over a motmetrics events frame.
+def _honest_fp_tracks(df, hyp_cd_frames=None,
+                       l_lead=5, l_lag=5, g_max=10, theta=2.0):
+    """Segment-based unique-FP count over a motmetrics events frame, with
+    a spatial-excursion gate.
 
-    Robust-unique-FP definition (experiment
-    20260515-honest-fp-track-metric-definition). For each hypothesis
-    track HId, order its events by frame and split into matched vs FP
-    frames (Type=='FP' is unmatched; MATCH/SWITCH/transfer-family count
-    as associated-to-a-GT). Then charge a unique FP for each *material*
-    unmatched segment:
-      - lead-in : FP run BEFORE the first matched frame, length >= l_lead
-      - lag-out : FP run AFTER  the last  matched frame, length >= l_lag
-      - bridge  : FP run BETWEEN two matched frames, length >= g_max
-      - a never-matched track stays exactly 1 FP (== the gamed metric).
-    Thresholds are in *evaluated frames* (~0.1 s each at the eval
-    framerate); they are the validation knobs for the threshold-
-    robustness sweep. Spatial-excursion gate is a documented follow-up;
-    this temporal v0 already captures the user's core proposal.
+    Robust-unique-FP definition (experiments
+    20260515-honest-fp-track-metric-definition / -spatial-gate). Per
+    hypothesis track HId, order its events by frame and split into
+    matched vs FP frames (Type=='FP' = unmatched; MATCH/SWITCH/transfer
+    family = associated-to-a-GT). Charge a unique FP for each unmatched
+    segment that is BOTH temporally material AND spatially excursive:
+      - lead-in : FP run BEFORE first match, len >= l_lead
+      - lag-out : FP run AFTER  last  match, len >= l_lag
+      - bridge  : FP run BETWEEN two matches, len >= g_max
+      - never-matched track: always 1 FP (== the gamed metric).
 
-    Invariant: honest_fp_tracks >= gamed fp_tracks (partial-match tracks
-    score 0 under the gamed metric but may score >0 here).
+    Spatial gate (crit-3 showed temporal-only false-alarms 31x on a
+    clean tracker because gaming and *legitimate occlusion* share the
+    same temporal signature — only spatial info separates them):
+    a segment counts only if the hyp box during the run deviates from
+    the expected continuation by > theta box-diagonals —
+      - bridge : expected = linear interp between the bounding matched
+                 frames' hyp centroids (a legit occlusion bridge coasts
+                 along that line; a stitched/teleport FP excursions off);
+      - lead/lag: expected = the adjacent matched frame's hyp centroid
+                 (a benign short coast stays near it; latching a
+                 different FP object moves far).
+    `hyp_cd_frames[frameid][hid] = (cx, cy, diag)` (pixels), frameid ==
+    motmetrics auto-id == that list's index. If centroids are missing
+    the segment falls back to temporal-only (conservative: charged if
+    temporally material), which also gives the old behaviour when
+    hyp_cd_frames is None.
+
+    Invariant: honest_fp_tracks >= gamed fp_tracks.
     """
     MATCHED = {"MATCH", "SWITCH", "TRANSFER", "MIGRATE", "ASCEND"}
     sub = df[df["HId"].notna() & (df["Type"] != "RAW")]
     honest = 0
     fully = lead = lag = bridge = 0
+
+    def cd(frameid, hid):
+        if hyp_cd_frames is None or frameid >= len(hyp_cd_frames):
+            return None
+        return hyp_cd_frames[frameid].get(hid)
+
+    def excursive(run_fids, hid, ref_a, ref_b):
+        """True if any box in run_fids deviates > theta diagonals from the
+        a->b interpolation (ref_b=None => constant ref_a). None ref => fall
+        back to temporal (treat as excursive)."""
+        if ref_a is None:
+            return True
+        (fa, ca) = ref_a
+        cb = ref_b[1] if ref_b else None
+        fb = ref_b[0] if ref_b else None
+        worst = 0.0
+        for fid in run_fids:
+            c = cd(fid, hid)
+            if c is None:
+                return True            # missing geometry -> conservative
+            if cb is not None and fb != fa:
+                w = (fid - fa) / (fb - fa)
+                ex, ey = ca[0] + w * (cb[0] - ca[0]), ca[1] + w * (cb[1] - ca[1])
+                diag = 0.5 * (ca[2] + cb[2]) or 1.0
+            else:
+                ex, ey, diag = ca[0], ca[1], (ca[2] or 1.0)
+            d = ((c[0] - ex) ** 2 + (c[1] - ey) ** 2) ** 0.5 / diag
+            worst = max(worst, d)
+        return worst > theta
+
     for hid, g in sub.groupby("HId"):
+        hid = int(hid)
         g = g.sort_index(level=0)
+        fids = list(g.index.get_level_values(0))
         types = list(g["Type"])
         is_fp = [t == "FP" for t in types]
         matched_pos = [i for i, t in enumerate(types) if t in MATCHED]
         if not matched_pos:
-            honest += 1            # never matched anything — 1 FP (unchanged)
-            fully += 1
+            honest += 1; fully += 1            # never matched -> 1 FP
             continue
         first_m, last_m = matched_pos[0], matched_pos[-1]
-        lead_n = sum(1 for i in range(0, first_m) if is_fp[i])
-        lag_n = sum(1 for i in range(last_m + 1, len(types)) if is_fp[i])
-        if lead_n >= l_lead:
+
+        lead_fids = [fids[i] for i in range(0, first_m) if is_fp[i]]
+        if len(lead_fids) >= l_lead and excursive(
+                lead_fids, hid, (fids[first_m], cd(fids[first_m], hid)), None):
             honest += 1; lead += 1
-        if lag_n >= l_lag:
+
+        lag_fids = [fids[i] for i in range(last_m + 1, len(types)) if is_fp[i]]
+        if len(lag_fids) >= l_lag and excursive(
+                lag_fids, hid, (fids[last_m], cd(fids[last_m], hid)), None):
             honest += 1; lag += 1
-        run = 0
-        for i in range(first_m + 1, last_m):
+
+        # bridges: FP runs bounded by the matched frames either side
+        run_fids = []
+        anchor_a = (fids[first_m], cd(fids[first_m], hid))
+        for i in range(first_m + 1, last_m + 1):
             if is_fp[i]:
-                run += 1
-            else:
-                if run >= g_max:
-                    honest += 1; bridge += 1
-                run = 0
+                run_fids.append(fids[i])
+            elif types[i] in MATCHED:
+                if len(run_fids) >= g_max:
+                    anchor_b = (fids[i], cd(fids[i], hid))
+                    if excursive(run_fids, hid, anchor_a, anchor_b):
+                        honest += 1; bridge += 1
+                if not is_fp[i]:
+                    anchor_a = (fids[i], cd(fids[i], hid))
+                run_fids = []
     return {
         "honest_fp_tracks": int(honest),
         "fully_unmatched": int(fully),
         "leadin": int(lead), "lagout": int(lag), "bridge": int(bridge),
-        "thresholds": {"l_lead": l_lead, "l_lag": l_lag, "g_max": g_max},
+        "thresholds": {"l_lead": l_lead, "l_lag": l_lag,
+                        "g_max": g_max, "theta": theta},
     }
 
 
@@ -233,6 +290,11 @@ def compute_metrics(gt, test,
 
     frame_events=[]
     frame_index=0
+    # Per-acc.update() hyp centroids for the honest-FP spatial gate
+    # (exp 20260515-honest-fp-spatial-gate). One dict per accumulator
+    # frame, keyed by hyp track_id == motmetrics HId (auto_id order ==
+    # update-call order == this list's index). Cheap; only read post-loop.
+    hyp_cd_frames=[]
 
     if show_pbar:
         pbar=tqdm(total=int(duration/time_incr),
@@ -304,6 +366,13 @@ def compute_metrics(gt, test,
 
             acc.update(gt_dets[:,0].astype('int').tolist() if len(gt_dets)>0 else [], \
                     t_dets[:,0].astype('int').tolist() if len(t_dets)>0 else [], C)
+            # capture hyp centroids for this accumulator frame (mot_obj
+            # rows are [track_id, l, t, w, h] in pixels)
+            cd={}
+            for r in t_dets:
+                tid=int(r[0]); l,tp,w,h=float(r[1]),float(r[2]),float(r[3]),float(r[4])
+                cd[tid]=(l+w*0.5, tp+h*0.5, (w*w+h*h)**0.5)
+            hyp_cd_frames.append(cd)
         t+=time_incr
         if show_pbar:
             pbar.update(1)
@@ -358,7 +427,7 @@ def compute_metrics(gt, test,
         # Store only summable scalars — display_results sum()s every result
         # key across clips, so a nested dict here would crash aggregation.
         try:
-            hfp = _honest_fp_tracks(df)
+            hfp = _honest_fp_tracks(df, hyp_cd_frames=hyp_cd_frames)
             metrics_dict["fp_tracks_honest"]  = hfp["honest_fp_tracks"]
             metrics_dict["fp_honest_fully"]   = hfp["fully_unmatched"]
             metrics_dict["fp_honest_leadin"]  = hfp["leadin"]
