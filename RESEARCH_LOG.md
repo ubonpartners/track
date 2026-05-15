@@ -46,8 +46,8 @@ honest_ruler:                            # FROZEN exp#6 20260515-honest-fp-frame
   metric:          fp_frames_honest      # src.track_test._honest_fp_frames_core
   theta:           0.5                    # box-diagonals; joint-OK band θ∈[0.3,0.6]
   nm_policy:       track                  # never-matched mirrors gamed (=1 each)
-  status:          frozen                 # live==offline PASS; re-pin PASS (clean_frac 0.085 on a FRESH tracker, in exp#6 ship band — generalises)
-  fitness_uses_it: false                  # side-channel; campaign next = honest-fp-train-adopt (§3/§4.5)
+  status:          frozen-INTERIM         # live==offline+re-pin PASS, generalises — BUT exp#7: FRAGMENTATION-BLIND (volume only; does not capture multiplicity fp_tracks exists for)
+  fitness_uses_it: false                  # side-channel; honest-fp-train-adopt ON HOLD until a fragmentation-aware ruler passes (exp#7) — §3/§4.5
   change_is:       logged_experiment_event # editing θ/nm re-opens the ruler — never silent
 ```
 
@@ -1156,17 +1156,63 @@ Entry schema (copy for each new experiment):
 - artifacts: RESEARCH_OUT/20260515-honest-fp-frame-metric/ (repin_*,
   baseline_ref.json, eval_repin/, logs/repin_*.log)
 
---- next: honest-fp-train-adopt (GATED, campaign reset) — the training
-    objective currently optimises the GAMED fp_tracks term (exp#1: it is
-    materially gameable, decoupling 0.33). Now that an honest ruler is
-    frozen + baseline pinned, switch the training/selection objective to
-    charge FP via fp_frames_honest instead of fp_tracks (fitness_score is
-    the touch point — this is the FIRST sanctioned fitness change, §3/§4.5
-    lifted only because the ruler cleared exp#6 + wire-live + re-pin).
-    Own pre-registered experiment: K-seed≥3, within-batch vs the pinned
-    baseline_ref, promotion gate [candidate_confirmed, full_pipeline_clean,
-    overall_better_metrics]. Pre-flight §8.1; background with
-    run_in_background ONLY (no `&`/nohup — see re-pin process note). ---
+### 20260515-honest-fp-episode-count   [win(measurement) — FALSIFICATION]
+- selected: campaign correction — user objection (CORRECT): fp_frames_honest
+  is gaming-resistant but a denoised FP-VOLUME measure; it does NOT recover
+  the user-facing FRAGMENTATION semantics fp_tracks exists for (tracks are
+  what a user sees; same FP as 2 stretches > 1). exp#6 passed the gate by
+  abandoning that semantic — Goodhart on our own ruler (§4.5).
+- primary_axis: measurement
+- prior: p_win=0.55 (synthesis: count semantics + the exp#6-validated
+  per-frame gate, no length knob — strictly stronger than exp#5)
+- change: add pure side-channel `_honest_fp_episodes_core` (count units:
+  standalone phantoms + each connected excursive-FP run inside a matched
+  track = 1 track-equiv; per-frame gate identical to exp#6; g_gap, NO
+  length threshold). fitness untouched.
+- preflight (§8.1): criteria pre-registered BEFORE running; chain gate
+  PASS (|dFPvol|/|dGamed|=0.331); 40-cell offline sweep on the cached chain
+- evidence (full176): NO joint band. Same monotone-opposite pathology as
+  exp#5 — where crit-1∈[0.8,1.25] (θ∈[0.3,0.6]) clean honest/gamed = 6.7–22×
+  (false alarm); where clean∈[0.7,2] (θ≥1.5) crit-1 collapses to ~0.42–0.45.
+  Invariant across g_gap∈{0,1,2,5}.
+- update: pre-registered falsification MET. P(joint band, EPISODE)
+  0.55→~0.03. COUNT family now falsified TWICE (exp#5 segment, exp#7
+  episode) via independent aggregations.
+- prediction check: HELD — the falsification branch. MECHANISM (the value):
+  frame-SUM is a graded response (benign=few frames, phantom=many → ratio
+  ~1); a discrete per-episode count destroys gradation (a 3-frame jitter
+  blip and a 300-frame phantom both = "1"), clean trackers emit many short
+  blips → clean explodes; suppressing them needs a persistence threshold,
+  which exp#5 proved fights θ. ⇒ TRILEMMA: self-consistency geometry yields
+  ≤2 of {count/fragmentation semantics, gaming-resistance, clean-robustness}.
+- decision: EPISODE not adopted. Interim ruler stays exp#6
+  fp_frames_honest (frozen, volume-only, explicitly flagged
+  FRAGMENTATION-BLIND). honest-fp-train-adopt ON HOLD (do not train toward
+  a fragmentation-blind ruler).
+- baseline: unchanged (pinned baseline_ref stands; ruler interim)
+- bank curation: honest-fp-episode-count → confirmed(count family
+  FALSIFIED ×2); spawn honest-fp-iou-gt (DECISIVE next) + decomposed-
+  honest-fitness (cheaper fallback)
+- artifacts: RESEARCH_OUT/20260515-honest-fp-episode-count/
+
+--- next: honest-fp-iou-gt (DECISIVE) — the trilemma's blind spot is the
+    REFERENCE MODEL: a crude linear interp of the hyp's own motion mislabels
+    legit non-linear/occluded motion as excursive, forcing the
+    persistence-threshold compromise that kills count formulations. Replace
+    the reference with GROUND TRUTH: charge an FP frame by distance/IoU to
+    the actual GT boxes present that frame ("far from EVERY real object?").
+    GT knows the object's location through detector-missed occlusions, so
+    benign coasts are near-GT (not charged) and phantoms far-from-all-GT
+    (charged) — short OR long → episodes countable on a GT-grounded gate may
+    finally get all 3. Caveat: cached dumps have NO GT geometry → needs ONE
+    new instrumented eval dump (cheap eval, not a free sweep); §8.1
+    pre-flight, background run_in_background ONLY. CHEAPER FALLBACK to weigh
+    first: decomposed honest fitness = fp_frames_honest (volume; B+C,
+    validated) + raw standalone-phantom-track count (already honest — a
+    merge can't cut it without truly deleting the phantom — = the
+    user-facing multiplicity for things users mostly see as separate hits);
+    no new dump. honest-fp-train-adopt stays ON HOLD; fitness UNTOUCHED
+    until a fragmentation-aware honest ruler passes (§3/§4.5). ---
 
 ## Progress curve
 
@@ -1195,7 +1241,14 @@ measurement track:
        pipeline over 176 clips, clean_frac 0.085 — INSIDE the exp#6
        ship band on a DIFFERENT tracker ⇒ ruler generalises. baseline_ref
        PINNED {fit 0.5463, mota 0.6181, idf1 0.5758, fp_tracks 139,
-       fp_frames_honest 8403}. fitness still untouched. Next gated:
-       honest-fp-train-adopt (campaign reset — first sanctioned
-       fitness change, K-seed vs pinned baseline).
+       fp_frames_honest 8403}. fitness still untouched.
+  20260515 honest-fp-episode-count  [win(measurement) — FALSIFICATION]
+    => user objection (correct): fp_frames_honest is FRAGMENTATION-BLIND
+       (volume, not the multiplicity fp_tracks exists for). Synthesis
+       (count semantics + exp#6 per-frame gate) FALSIFIED — no joint band;
+       COUNT family dead ×2 (exp#5/#7). TRILEMMA: self-consistency
+       geometry gives ≤2 of {count semantics, gaming-resistance,
+       clean-robustness}. Ruler = exp#6 INTERIM (volume-only);
+       train-adopt ON HOLD. Next: honest-fp-iou-gt (GT-grounded gate)
+       / decomposed honest fitness (volume + standalone-phantom count).
 ```

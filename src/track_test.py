@@ -370,6 +370,115 @@ def _honest_fp_frames_core(events_by_hid, cd_frames,
     }
 
 
+def _honest_fp_episodes_core(events_by_hid, cd_frames,
+                             theta=0.5, g_gap=0):
+    """Episode-COUNT honest-FP (experiment 20260515-honest-fp-episode-
+    count). Restores the user-facing FRAGMENTATION semantics `fp_tracks`
+    exists for — tracks are what a user is presented with, so the same
+    FP volume shown as 2 distinct wrong stretches is worse than 1 — while
+    inheriting the exp#6-validated PER-FRAME spatial gate.
+
+        honest = (# standalone phantom tracks, never matched)
+               + (every connected run of spatially-excursive FP frames
+                  hidden inside a matched track's lead/lag/bridge,
+                  each counted ONCE as a track-equivalent)
+
+    i.e. "a contaminated stretch of an otherwise-real track is, for
+    scoring, its own FP track." This is a FIX of fp_tracks (count units,
+    fragmentation-sensitive), not the frame-volume surrogate
+    `_honest_fp_frames_core`:
+      - gaming-resistant: merging an FP run onto a matched track no
+        longer hides it — it still scores 1 episode, exactly as the
+        standalone FP track would have;
+      - no false alarm: a benign occlusion coast is non-excursive every
+        frame (exp#6 property) -> 0 episodes regardless of LENGTH, so the
+        exp#5 length-threshold pathology cannot recur (no length knob).
+
+    `g_gap` = max consecutive non-excursive FP frames tolerated inside
+    one episode (0 = strict; a MATCHED frame always ends an episode = the
+    real object was re-acquired, so later excursive FP is a NEW distinct
+    wrong stretch the user sees). Same pure inputs/logic for the live
+    path and the offline sweep (no reimplementation); same dump contract
+    as `_honest_fp_core`. Side-channel only; does not touch `fitness`.
+    """
+
+    def cd(frameid, hid):
+        if cd_frames is None or frameid >= len(cd_frames):
+            return None
+        return cd_frames[frameid].get(hid)
+
+    def exc(c, ex, ey, diag):
+        if c is None:
+            return True                       # no geometry -> conservative
+        diag = diag or 1.0
+        d = ((c[0] - ex) ** 2 + (c[1] - ey) ** 2) ** 0.5 / diag
+        return d > theta
+
+    def episodes(flags):
+        """# maximal True-runs in `flags`, bridging <= g_gap Falses."""
+        n = 0
+        in_ep = False
+        gap = 0
+        for f in flags:
+            if f:
+                if not in_ep:
+                    n += 1
+                    in_ep = True
+                gap = 0
+            elif in_ep:
+                gap += 1
+                if gap > g_gap:
+                    in_ep = False
+        return n
+
+    total = nm = lead = lag = bridge = 0
+    for hid, seq in events_by_hid.items():
+        fids = [f for f, _ in seq]
+        is_fp = [tc == 0 for _, tc in seq]
+        matched_pos = [i for i, (_, tc) in enumerate(seq) if tc == 1]
+        if not matched_pos:
+            total += 1; nm += 1            # standalone phantom = 1 result
+            continue
+        first_m, last_m = matched_pos[0], matched_pos[-1]
+
+        ca = cd(fids[first_m], hid)
+        lf = [(ca is None or exc(cd(fids[i], hid), ca[0], ca[1], ca[2]))
+              for i in range(0, first_m) if is_fp[i]]
+        e = episodes(lf); total += e; lead += e
+
+        cz = cd(fids[last_m], hid)
+        gf = [(cz is None or exc(cd(fids[i], hid), cz[0], cz[1], cz[2]))
+              for i in range(last_m + 1, len(seq)) if is_fp[i]]
+        e = episodes(gf); total += e; lag += e
+
+        fa, anch_a = fids[first_m], cd(fids[first_m], hid)
+        run = []
+        for i in range(first_m + 1, last_m + 1):
+            if is_fp[i]:
+                run.append(i)
+            else:
+                fb, anch_b = fids[i], cd(fids[i], hid)
+                bf = []
+                for j in run:
+                    if anch_a is None or anch_b is None or fb == fa:
+                        bf.append(True)
+                        continue
+                    w = (fids[j] - fa) / (fb - fa)
+                    ex = anch_a[0] + w * (anch_b[0] - anch_a[0])
+                    ey = anch_a[1] + w * (anch_b[1] - anch_a[1])
+                    dg = 0.5 * (anch_a[2] + anch_b[2])
+                    bf.append(exc(cd(fids[j], hid), ex, ey, dg))
+                e = episodes(bf); total += e; bridge += e
+                fa, anch_a = fb, anch_b
+                run = []
+    return {
+        "honest_fp_episodes": int(total),
+        "nm": int(nm), "leadin": int(lead),
+        "lagout": int(lag), "bridge": int(bridge),
+        "thresholds": {"theta": theta, "g_gap": g_gap},
+    }
+
+
 # ===== FROZEN honest ruler (exp#6 20260515-honest-fp-frame-metric) =====
 # The FRAME formulation is the first honest-FP measure to PASS the joint
 # gate (segment-COUNT was FALSIFIED, exp#5). These two constants ARE the
