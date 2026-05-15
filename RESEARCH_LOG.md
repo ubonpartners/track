@@ -1297,6 +1297,34 @@ Entry schema (copy for each new experiment):
   honest-fp-train-adopt → folded in (fitness already switched).
 - artifacts: RESEARCH_OUT/20260515-honest-fp-iou0/
 
+### 20260515-dagger-reaudit-honest   [win(measurement/diagnostic)]
+- selected: first optimization-loop pick post de-gaming; EV-top
+  (STOP_AFTER=1 default rested on a gamed-fitness conclusion, near-free
+  to re-audit, decision-relevant)
+- primary_axis: measurement/diagnostic (iter1 already the baseline)
+- prior: P(gaming-artifact, regression mostly vanishes honestly)=0.55
+- method: bootstrap --start-at 2 --stop-after 3 on the pinned iter1;
+  eval iter1/2/3 (full) under the de-gamed fitness, within-batch full176
+- evidence: ΔfitNEW(iter1→iter2)=−0.0127 (>2σ) → H_real-regression.
+  Visible in NON-gameable MOTA (0.620→0.595→0.565) & IDF1 → NOT a
+  gaming artifact. fitNEW 0.5706/0.5579/0.5323; best=iter1=baseline.
+  SECONDARY: old gamed fitness UNDER-stated it (ΔfitOLD(1→3)=−0.018 vs
+  ΔfitNEW=−0.038) — later iters dropped old_fp 121→82→49 and the gamed
+  metric rewarded that, masking ~half the MOTA collapse. Validates the
+  de-gaming (it exposes a regression the gamed metric hid).
+- update: P(gaming-artifact) 0.55→~0.03 (falsified by MOTA/IDF1). bank
+  dagger-multiiter-regression p_win(actionable) 0.60 → confirmed.
+- prediction check: FALSIFIED (gaming-artifact) → H_real-regression
+  branch taken, as the pre-registered rule prescribed
+- decision: KEEP STOP_AFTER=1 (confirmed under honest fitness; no
+  pipeline change). Diagnostic win, not a tracker promotion.
+- baseline: unchanged (iter1 = best, already pinned)
+- bank curation: dagger-multiiter-regression → confirmed(regression
+  REAL & honest, gamed metric masked ½ its severity); spawn child
+  dagger-corpus-noNN-candidacy (keep iter0 non-NN candidacy; relabel
+  TARGETS only — the real MOTA-recovery lever)
+- artifacts: RESEARCH_OUT/20260515-dagger-reaudit-honest/
+
 --- status: fitness DE-GAMED + duration-normalised, committed e950fef
     (exp#10 RESOLVED; calib K=0.35 ep/s; correctness gate PASS). The
     honest-FP measurement campaign is COMPLETE. Optimization loop resumes
@@ -1305,21 +1333,24 @@ Entry schema (copy for each new experiment):
     dominated past 'wins' (F5d ship, DAgger STOP_AFTER) are SUSPECT and
     must be re-audited under honest fitness before reuse.
 
---- next: (1) honest-fp-repin2 RUNNING (bootstrap STOP_AFTER=1,
-    run_in_background) — pins baseline_ref {fitness(new), mota, idf1,
-    fp_tracks(old), fp_tracks_honest_v2, num_FP, duration, provenance};
-    confirm new≈old-style weight (~few %), live==offline, honest≤num_FP.
-    (2) THEN dagger-reaudit-honest [first optimization pick, EV-top,
-    pre-registered RESEARCH_OUT/20260515-dagger-reaudit-honest/] —
-    `bootstrap_recipe.sh --start-at 2 --stop-after 3` reusing the pinned
-    iter1, eval iter1/2/3 under honest fitness within-batch: is the
-    STOP_AFTER=1 default (old gamed −0.0215 iter1→2) a gaming artifact?
-    Decisive either way; marginal cost iter2+iter3 (~30m). (3) THEN work
-    the bank cheap→costly vs the pinned baseline (dedup-iou-sweep,
-    cheap-filter-delta-realign, nn-lambda-sweep; user-seeded poseflow-
-    box-warp, ablation-study), priors re-judged vs de-gamed fitness,
-    RESEARCH.md promotion gate. run_in_background ONLY (re-pin lesson),
-    one heavy pipeline at a time. ---
+--- DONE: (1) honest-fp-repin2 — baseline RE-PINNED (68aeb7c, fit 0.5706
+    honest_v2 908). (2) dagger-reaudit-honest — H_real-regression
+    (STOP_AFTER=1 confirmed; gamed metric had masked ½ the severity).
+
+--- next: work the bank cheap→costly vs the pinned iter1 baseline
+    (within-batch, RESEARCH.md promotion gate), priors RE-JUDGED vs the
+    de-gamed fitness:
+    (3a) cheap-filter-delta-realign [next, cheap, p0.45] — eval iter1
+    config at utrack.match_cheap_filter_delta ∈ {0.5,0.6,0.7=control}
+    on full176; train/infer distribution-mismatch hypothesis (NN trained
+    @0.5, ship infers @0.7). Eval-only, no retrain. Then dedup-iou-sweep,
+    nn-lambda-sweep, new-track-thr-sweep (all cheap config sweeps).
+    (3b) STRUCTURAL: dagger-corpus-noNN-candidacy [child of dagger-
+    reaudit; the real MOTA-recovery lever — keep iter0 non-NN candidacy,
+    relabel TARGETS only; heavier, full retrain]. (3c) user-seeded
+    poseflow-box-warp, ablation-study.
+    run_in_background ONLY; one heavy pipeline at a time; promote only on
+    full-pipeline-clean + overall-better vs baseline_ref. ---
 
 ## Progress curve
 
