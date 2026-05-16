@@ -78,6 +78,8 @@ def summary_string(r):
         s+=f" FNPo:{r['fn_per_obj']:5.3f}"
     if 'fp_tracks' in r:
         s+=f" FPTr:{r['fp_tracks']}"
+    if 'fp_tracks_honest_v2' in r:
+        s+=f" FPh2:{r['fp_tracks_honest_v2']}"
     if 'switch_per_obj' in r:
         s+=f" SWPo:{r['switch_per_obj']:5.3f}"
     if 'frag_per_obj' in r:
@@ -1462,10 +1464,19 @@ def track_test(config, split=None, desc="track test"):
     columns=config["columns"]
     output_results=[]
 
+    # Optional family allow-list. Absent/empty => use all families.
+    include_families=config.get("include_families")
+    if isinstance(include_families,str):
+        include_families=[f.strip() for f in include_families.split(",") if f.strip()]
+    if include_families:
+        include_families=set(include_families)
+
     tests_to_run=[]
 
     for _,ds_key in enumerate(datasets):
         dataset=datasets[ds_key]
+        if include_families and dataset.get("family") not in include_families:
+            continue
         if split is not None:
             if "split" in dataset:
                 if dataset["split"]!=split:
