@@ -1,5 +1,6 @@
 
 import os
+import sys
 import copy
 import json
 import numpy as np
@@ -36,8 +37,22 @@ def _box_in_ignore(box, ignore_boxes, frac_thresh):
             return True
     return False
 
+# fitness penalises the honest FP-track count (de-gamed: IoU==0 run-count,
+# GT-grounded, parameter-free), length-normalised by VIDEO DURATION so
+# the penalty is sequence-length AND frame-rate invariant — honest_v2 is
+# an EPISODE count that scales with duration (a 2s phantom is 1 run at
+# 10 or 30 fps), not with sampling density. Aggregate rows sum
+# Σhonest/Σduration. K calibrated so the aggregate honest penalty
+# matches the old 5e-4*fp_tracks penalty on the shipped networks. Old
+# fp_tracks is still reported alongside for comparison.
+_FP_TRACK_COEF = 0.35   # per honest-FP episode per second of video
 def fitness_score(r):
-    return r["mota"]-0.0005*r["fp_tracks"]-0.0*r["fp_tracks_frac"]-0.002*r["fp_per_frame"]
+    h = r.get("fp_tracks_honest_v2")
+    if h is None:                       # legacy rows w/o the honest field
+        h = r["fp_tracks"] * 10.0       # scale-match so fitness stays sane
+    dur = r.get("duration", 0) or 0
+    h_rate = h / dur if dur > 0 else 0.0
+    return r["mota"] - _FP_TRACK_COEF * h_rate - 0.002 * r["fp_per_frame"]
 
 def summary_string(r):
     s=f" MOTA:{r['mota']:6.5f}"
@@ -53,6 +68,8 @@ def summary_string(r):
         s+=f" FNPo:{r['fn_per_obj']:5.3f}"
     if 'fp_tracks' in r:
         s+=f" FPTr:{r['fp_tracks']}"
+    if 'fp_tracks_honest_v2' in r:
+        s+=f" FPh2:{int(r['fp_tracks_honest_v2'])}"
     if 'switch_per_obj' in r:
         s+=f" SWPo:{r['switch_per_obj']:5.3f}"
     if 'frag_per_obj' in r:
@@ -133,6 +150,92 @@ def compute_detection_metrics(gt, test,
                 metrics_dict[f"det_p_{cl_name}_{s}"]=p_curve[cl][index]
                 metrics_dict[f"det_r_{cl_name}_{s}"]=r_curve[cl][index]
 
+
+# tcode: 0 = FP (unmatched), 1 = matched-to-a-GT (MATCH/SWITCH/transfer
+# family). Rows that are neither are not emitted for an HId.
+_MATCHED_TYPES = {"MATCH", "SWITCH", "TRANSFER", "MIGRATE", "ASCEND"}
+
+
+def _events_by_hid_from_df(df):
+    """Compact per-HId event sequence from a motmetrics events frame:
+    {hid:int -> [(frameid:int, tcode:int), ...] sorted by frameid}."""
+    sub = df[df["HId"].notna() & (df["Type"] != "RAW")]
+    out = {}
+    for hid, g in sub.groupby("HId"):
+        g = g.sort_index(level=0)
+        seq = []
+        for fid, typ in zip(g.index.get_level_values(0), g["Type"]):
+            if typ == "FP":
+                seq.append((int(fid), 0))
+            elif typ in _MATCHED_TYPES:
+                seq.append((int(fid), 1))
+        if seq:
+            out[int(hid)] = seq
+    return out
+
+
+def _honest_fp_runs_core(events_by_hid, cd_frames, gt_cd_frames):
+    """De-gamed honest FP-track ruler.
+
+    honest_fp_tracks = number of contiguous runs of FP frames whose box
+    overlaps NO real GT object (IoU == 0 with every GT box that frame, or
+    no GT that frame), where a matched frame ends a run. Parameter-free.
+
+    Rationale: "no overlap with any real object" is the simplest
+    definition of a false detection. Run-COUNT (not frame-SUM): a short
+    spurious blip is ONE unique FP; an FP run welded onto a
+    GT-matched track is still counted (the gaming the old fp_tracks
+    hid). GT-grounded so box-jitter / occlusion-coast on a real track
+    stays on/over its real object (IoU>0) and is NOT counted.
+
+    cd_frames[frameid][hid]    = (cx,cy,diag,l,t,w,h) for the hyp box
+    gt_cd_frames[frameid][gid] = same for the GT box
+    """
+
+    def _iou(a, b):
+        ix = min(a[3] + a[5], b[3] + b[5]) - max(a[3], b[3])
+        iy = min(a[4] + a[6], b[4] + b[6]) - max(a[4], b[4])
+        if ix <= 0 or iy <= 0:
+            return 0.0
+        inter = ix * iy
+        ua = a[5] * a[6] + b[5] * b[6] - inter
+        return inter / ua if ua > 0 else 0.0
+
+    def contaminating(frameid, hid):
+        c = cd_frames[frameid].get(hid) if (
+            cd_frames is not None and frameid < len(cd_frames)) else None
+        if c is None or len(c) < 7:
+            return True                       # no/old geom -> conservative
+        gts = (gt_cd_frames[frameid] if (gt_cd_frames is not None
+               and frameid < len(gt_cd_frames)) else None)
+        if not gts:
+            return True                       # zero real objects -> spurious
+        return all(_iou(c, v) <= 0.0 for v in gts.values())
+
+    total = nm = inrun = 0
+    for hid, seq in events_by_hid.items():
+        matched = any(tc == 1 for _, tc in seq)
+        runs = 0
+        cur = False
+        for fid, tc in seq:
+            if tc == 1:                       # matched frame ends a run
+                cur = False
+                continue
+            if contaminating(fid, hid):
+                if not cur:
+                    runs += 1
+                    cur = True
+            else:
+                cur = False
+        total += runs
+        if matched:
+            inrun += runs
+        else:
+            nm += runs
+    return {"honest_fp_tracks_v2": int(total),
+            "nm": int(nm), "inrun": int(inrun)}
+
+
 def compute_metrics(gt, test,
                     max_duration=1000,
                     frame_metrics=False,
@@ -177,6 +280,12 @@ def compute_metrics(gt, test,
 
     frame_events=[]
     frame_index=0
+    # Per-acc.update() hyp/gt box geometry for the honest-FP ruler. One
+    # dict per accumulator frame, keyed by track_id == motmetrics HId/OId
+    # (auto_id order == update-call order == this list's index).
+    # {tid:(cx,cy,diag,l,t,w,h)} in pixels.
+    hyp_cd_frames=[]
+    gt_cd_frames=[]
 
     if show_pbar:
         pbar=tqdm(total=int(duration/time_incr),
@@ -248,6 +357,18 @@ def compute_metrics(gt, test,
 
             acc.update(gt_dets[:,0].astype('int').tolist() if len(gt_dets)>0 else [], \
                     t_dets[:,0].astype('int').tolist() if len(t_dets)>0 else [], C)
+            # capture hyp/gt box geometry for this accumulator frame
+            # (mot_obj rows are [track_id, l, t, w, h] in pixels)
+            cd={}
+            for r in t_dets:
+                tid=int(r[0]); l,tp,w,h=float(r[1]),float(r[2]),float(r[3]),float(r[4])
+                cd[tid]=(l+w*0.5, tp+h*0.5, (w*w+h*h)**0.5, l, tp, w, h)
+            hyp_cd_frames.append(cd)
+            gd={}
+            for r in gt_dets:
+                gid=int(r[0]); l,tp,w,h=float(r[1]),float(r[2]),float(r[3]),float(r[4])
+                gd[gid]=(l+w*0.5, tp+h*0.5, (w*w+h*h)**0.5, l, tp, w, h)
+            gt_cd_frames.append(gd)
         t+=time_incr
         if show_pbar:
             pbar.update(1)
@@ -260,6 +381,8 @@ def compute_metrics(gt, test,
 
     if use_c_metrics:
         metrics_dict=c_mota.get_results()
+        # duration normalises the honest-FP-episode rate; frame-rate invariant.
+        metrics_dict["duration"]=duration
     else:
         mh = mm.metrics.create()
         summary = mh.compute(acc, metrics=['num_frames', 'idf1', 'idp', 'idr', \
@@ -273,6 +396,9 @@ def compute_metrics(gt, test,
                         name='acc')
 
         metrics_dict=summary.loc['acc'].to_dict()
+        # video duration in seconds; fitness uses it to length-normalise
+        # the honest FP-track episode count (frame-rate invariant).
+        metrics_dict["duration"]=duration
 
         # add some extra metrics like
         # 'fp_tracks' - number of detected track IDs that correspond to no GT
@@ -290,6 +416,27 @@ def compute_metrics(gt, test,
         # Finally
         num_false_positive_tracks = len(false_positive_track_ids)
         metrics_dict["fp_tracks"]=num_false_positive_tracks
+
+        # De-gamed honest FP-track count (IoU==0 run-count, GT-grounded,
+        # parameter-free). THIS drives `fitness`. Old fp_tracks is kept
+        # for reporting/comparison only.
+        try:
+            ev_by_hid = _events_by_hid_from_df(df)
+            hrn = _honest_fp_runs_core(ev_by_hid, hyp_cd_frames, gt_cd_frames)
+            metrics_dict["fp_tracks_honest_v2"] = hrn["honest_fp_tracks_v2"]
+            metrics_dict["fp_h2_nm"]            = hrn["nm"]
+            metrics_dict["fp_h2_inrun"]         = hrn["inrun"]
+        except Exception:
+            # logging.warning has no handler in spawn workers — write to
+            # fd 2 which the eval captures.
+            import traceback as _tb
+            sys.stderr.write("honest-fp compute FAILED: "
+                             + _tb.format_exc() + "\n"); sys.stderr.flush()
+            # Fall back to the old gamed count so fitness degrades
+            # gracefully (failure is already loud on stderr).
+            metrics_dict["fp_tracks_honest_v2"] = num_false_positive_tracks
+            metrics_dict["fp_h2_nm"]            = num_false_positive_tracks
+            metrics_dict["fp_h2_inrun"]         = 0
 
         all_gt_ids = df['OId'].dropna().unique()
         matched_gt_ids = df.loc[df['Type'] == 'MATCH', 'OId'].unique()
@@ -705,8 +852,10 @@ def track_test(config, split=None, desc="track test"):
 def _summary_metric_keys():
     """Float keys exposed in the per-test summary JSON sidecar."""
     return [
-        "fitness", "mota", "idf1", "fp_tracks", "fp_per_frame",
-        "fn_per_obj", "switch_per_obj", "frag_per_obj", "motp",
+        "fitness", "mota", "idf1", "fp_tracks",
+        "fp_tracks_honest_v2", "fp_h2_nm", "fp_h2_inrun",
+        "fp_per_frame", "fn_per_obj", "switch_per_obj", "frag_per_obj",
+        "motp", "duration",
         "num_frames", "num_objects", "num_false_positives",
         "num_misses", "num_switches",
     ]
