@@ -1,6 +1,7 @@
 
 import os
 import copy
+import json
 import numpy as np
 import motmetrics as mm
 import pickle
@@ -694,5 +695,99 @@ def track_test(config, split=None, desc="track test"):
 
     results2=display_results(config, output_results, columns, config["sort_key"])
     elapsed=time.time()-start_time
+    _write_eval_summary_json(config, output_results, results2, elapsed)
     print(f"All done: Evaluated {len(tests_to_run)} tests in {stuff.timestr(elapsed)}")
     return results2
+
+
+def _summary_metric_keys():
+    """Float keys exposed in the per-test summary JSON sidecar."""
+    return [
+        "fitness", "mota", "idf1", "fp_tracks", "fp_per_frame",
+        "fn_per_obj", "switch_per_obj", "frag_per_obj", "motp",
+        "num_frames", "num_objects", "num_false_positives",
+        "num_misses", "num_switches",
+    ]
+
+
+def _result_subset(result, keys):
+    out = {}
+    for k in keys:
+        if k in result:
+            v = result[k]
+            if isinstance(v, (np.floating, np.integer)):
+                v = v.item()
+            out[k] = v
+    return out
+
+
+def _write_eval_summary_json(config, output_results, rollups, elapsed):
+    """Sidecar JSON next to the text results report. No-op without
+    `results_location` in the config.
+
+    Structure:
+        {
+          "elapsed_seconds": float,
+          "num_clips": int,
+          "tests": {
+            "<test_key>": {
+              "overall":   {fitness, mota, fp_tracks, ...},  # __ovr<group> if 1 group, else _arithmean
+              "groups":    {"<group>": {...}, ...},          # one per __ovr<group>; "<group>_mean" for __mean(<group>)
+              "arithmean": {...},                             # _arithmean rollup
+              "clips":     {"<ds_key>": {...}, ...}           # raw per-clip metrics
+            }
+          }
+        }
+    """
+    if "results_location" not in config:
+        return
+    location = config["results_location"]
+    stuff.makedir(location)
+    keys = _summary_metric_keys()
+
+    tests_by_key = {}
+    for entry in rollups:
+        test_key = entry["params"]["test_key"]
+        ds_key = entry["params"]["ds_key"]
+        bucket = tests_by_key.setdefault(test_key, {
+            "overall": None, "groups": {}, "arithmean": None, "clips": {},
+        })
+        metrics = _result_subset(entry["result"], keys)
+        if ds_key.startswith("__ovr"):
+            group = ds_key[len("__ovr"):]
+            bucket["groups"][group] = metrics
+        elif ds_key.startswith("__mean("):
+            group = ds_key[len("__mean("):-1]
+            bucket["groups"].setdefault(group, {})
+            bucket["groups"][group + "_mean"] = metrics
+        elif ds_key == "_arithmean":
+            bucket["arithmean"] = metrics
+
+    for entry in output_results:
+        test_key = entry["params"]["test_key"]
+        ds_key = entry["params"]["ds_key"]
+        bucket = tests_by_key.setdefault(test_key, {
+            "overall": None, "groups": {}, "arithmean": None, "clips": {},
+        })
+        bucket["clips"][ds_key] = _result_subset(entry["result"], keys)
+
+    # "overall" is the single-group __ovr rollup when there is exactly one
+    # group, else the arithmetic mean across all clips.
+    for bucket in tests_by_key.values():
+        groups = bucket["groups"]
+        non_mean_groups = [k for k in groups if not k.endswith("_mean")]
+        if len(non_mean_groups) == 1:
+            bucket["overall"] = groups[non_mean_groups[0]]
+        else:
+            bucket["overall"] = bucket["arithmean"]
+
+    summary = {
+        "elapsed_seconds": elapsed,
+        "num_clips": len({e["params"]["ds_key"] for e in output_results}),
+        "tests": tests_by_key,
+    }
+
+    cur_time = datetime.datetime.now().strftime("%Y%m%d-%H%M")
+    out_path = os.path.join(location, f"results-{cur_time}.json")
+    with open(out_path, "w") as f:
+        json.dump(summary, f, indent=2, sort_keys=True)
