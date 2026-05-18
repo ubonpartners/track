@@ -6,6 +6,24 @@ import stuff
 import src.track_test as track_test
 
 
+def _is_int_param_value(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _normalise_param_value(value, is_int):
+    numeric_value = float(value)
+    if is_int:
+        return int(round(numeric_value))
+    return round(numeric_value, 3)
+
+
+def _normalise_param_vec(param_vec, param_is_int):
+    return [
+        _normalise_param_value(value, is_int)
+        for value, is_int in zip(param_vec, param_is_int)
+    ]
+
+
 def _set_nested_param(config_dict, key, value):
     matches = []
 
@@ -64,6 +82,7 @@ def search_test(
     config,
     params,
     param_vec,
+    param_is_int,
     param_min,
     param_max,
     all_results,
@@ -71,6 +90,8 @@ def search_test(
     logfile=None,
     desc="search result",
 ):
+    param_vec = _normalise_param_vec(param_vec, param_is_int)
+
     # check if the parameters are within the min and max range
     if any(p < min_v or p > max_v for p, min_v, max_v in zip(param_vec, param_min, param_max)):
         return -10000, None
@@ -88,7 +109,7 @@ def search_test(
         c["config"] = stuff.load_dictionary(c["config"])
     for i, p in enumerate(params):
         c = config["tests"][result_test_opt_key]
-        _set_nested_param(c["config"], p, param_vec[i])
+        _set_nested_param(c["config"], p, _normalise_param_value(param_vec[i], param_is_int[i]))
     results = track_test.track_test(config, split=split, desc=desc)
 
     val = None
@@ -161,6 +182,7 @@ def search_track(yaml_file):
     param_step = []
     param_min = []
     param_max = []
+    param_is_int = []
 
     results = {}
 
@@ -181,13 +203,17 @@ def search_track(yaml_file):
     for p in config["search_params"]:
         param_names.append(p)
         param_initial.append(None)
+        param_is_int.append(False)
 
     test_dict = stuff.load_dictionary(config["tests"]["search_config"]["config"])
     _update_initial_parameters(param_names, param_initial, test_dict, logfile, "base config")
 
     for i, p in enumerate(config["search_params"]):
+        if param_initial[i] is not None:
+            param_is_int[i] = _is_int_param_value(param_initial[i])
         if "initial" in config["search_params"][p]:
-            param_initial[i] = float(config["search_params"][p]["initial"])
+            raw_initial = config["search_params"][p]["initial"]
+            param_initial[i] = _normalise_param_value(raw_initial, param_is_int[i])
             search_log(logfile, f"Setting parameter {p} initial value to {param_initial[i]} from search config")
         assert param_initial[i] is not None, f"Parameter {p} missing initial value"
         param_step.append(float(config["search_params"][p]["step"]))
@@ -201,11 +227,12 @@ def search_track(yaml_file):
         assert v >= param_min[i], f"{p} : Initial value {v} is less than min {param_min[i]}"
         assert v <= param_max[i], f"{p} : Initial value {v} is more than max {param_max[i]}"
 
-    param_initial = [round(v, 3) for v in param_initial]
+    param_initial = _normalise_param_vec(param_initial, param_is_int)
     score_best, best_full_result = search_test(
         config,
         param_names,
         param_initial,
+        param_is_int,
         param_min,
         param_max,
         results,
@@ -237,6 +264,7 @@ def search_track(yaml_file):
                     config,
                     param_names,
                     vec_best,
+                    param_is_int,
                     param_min,
                     param_max,
                     results,
@@ -262,13 +290,14 @@ def search_track(yaml_file):
         vec_up = copy.copy(vec_best)
         vec_down = copy.copy(vec_best)
         vec_up[index] += step_multiplier * param_step[index]
-        vec_up = [round(v, 3) for v in vec_up]
         vec_down[index] -= step_multiplier * param_step[index]
-        vec_down = [round(v, 3) for v in vec_down]
+        vec_up = _normalise_param_vec(vec_up, param_is_int)
+        vec_down = _normalise_param_vec(vec_down, param_is_int)
         score_up, full_result_up = search_test(
             config,
             param_names,
             vec_up,
+            param_is_int,
             param_min,
             param_max,
             results,
@@ -280,6 +309,7 @@ def search_track(yaml_file):
             config,
             param_names,
             vec_down,
+            param_is_int,
             param_min,
             param_max,
             results,
