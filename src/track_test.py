@@ -617,10 +617,19 @@ def track_test(config, split=None, desc="track test"):
     columns=config["columns"]
     output_results=[]
 
+    # Optional family allow-list. Absent/empty => use all families.
+    include_families=config.get("include_families")
+    if isinstance(include_families,str):
+        include_families=[f.strip() for f in include_families.split(",") if f.strip()]
+    if include_families:
+        include_families=set(include_families)
+
     tests_to_run=[]
 
     for _,ds_key in enumerate(datasets):
         dataset=datasets[ds_key]
+        if include_families and dataset.get("family") not in include_families:
+            continue
         if split is not None:
             if "split" in dataset:
                 if dataset["split"]!=split:
