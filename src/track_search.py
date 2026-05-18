@@ -118,9 +118,13 @@ def eval_track(yaml_file):
                       is visible, 2 × N workers when N > 1 GPUs are visible)
       columns:        list of "key,header,fmt" strings
       sort_key:       column to sort the report by (e.g. fitness or mota)
-      results_location: optional dir for the persisted .txt report
+      results_location: optional dir for the persisted .txt + .json
+                        reports. JSON sidecar shape:
+                        `tests[<key>]` → {overall, groups, arithmean, clips}.
+      include_families: optional list (or comma-string) — restrict the
+                        run to datasets whose `family` is in the list.
 
-    Compared to bench/eval_head_fitness this:
+    Properties:
       - shares loaded detector engines across the work queue
         (no per-clip process spinup);
       - evaluates multiple tracker variants in a single run (cartesian
