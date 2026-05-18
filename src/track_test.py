@@ -41,6 +41,8 @@ def fitness_score(r):
 
 def summary_string(r):
     s=f" MOTA:{r['mota']:6.5f}"
+    if 'idf1' in r:
+        s+=f" IDF1:{r['idf1']:6.5f}"
     if 'fitness' in r:
         s+=f" Fit:{r['fitness']:6.5f}"
     if 'fp_per_frame' in r:
