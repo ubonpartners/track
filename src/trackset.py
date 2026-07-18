@@ -758,6 +758,9 @@ class TrackSet:
         between bracketing frames by track id, so a sparse ground-truth track
         renders continuously — no per-frame filling here.
 
+        The MEVA dataset lives at /mldata/downloaded_datasets/other/MEVA
+        (annotations/ + videos/ + krtd/ + map/, alongside MOT17/MOT20/JAAD).
+
         geom_path:  path to `<clip>.geom.yml`.
         types_path: `<clip>.types.yml` (defaults to the sibling of geom_path).
         video_path: the source video (mp4/avi). When given, its exact
