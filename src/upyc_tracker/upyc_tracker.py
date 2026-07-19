@@ -64,7 +64,10 @@ class upyc_tracker:
         # By default we trim auxiliary outputs for faster metric runs.
         # If debug is enabled, preserve the full configured detector/tracker output.
         if debug_enable is False:
-            params["main_jpeg"]["enabled"]=False
+            # whole-frame preview stream (renamed main_jpeg -> thumbnail_stream)
+            for _k in ("thumbnail_stream", "main_jpeg"):
+                if _k in params:
+                    params[_k]["enabled"]=False
             if "faces" in params:
                 params["faces"]["embeddings_enabled"]=False
                 params["faces"]["jpegs_enabled"]=False
