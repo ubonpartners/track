@@ -1,4 +1,5 @@
 import src.trackset as ts
+import src.trackset_import as tsi
 import src.track_test as track_test
 import src.track_search as track_search
 import os
@@ -161,6 +162,9 @@ if __name__ == '__main__':
     parser.add_argument('--personpath22', action='store_true', help='make PersonPath22 sequences')
     parser.add_argument('--personpath22-amodal', action='store_true', help='use amodal (occluded) boxes for PersonPath22 instead of visible')
     parser.add_argument('--jaad', action='store_true', help='make JAAD sequences')
+    parser.add_argument('--otw', action='store_true', help='make Out the Window (OTW) sequences')
+    parser.add_argument('--egohumans', action='store_true', help='make EgoHumans sequences')
+    parser.add_argument('--meva', action='store_true', help='make MEVA sequences')
     parser.add_argument('--cevo', action='store_true', help='make new CEVO videos')
     parser.add_argument('--test', type=str, default=None, help='test yaml file')
     parser.add_argument('--search', type=str, default=None, help='search config yaml file')
@@ -179,20 +183,29 @@ if __name__ == '__main__':
     stuff.makedir(log_dir)
     stuff.configure_root_logger(opt.logging, log_dir=log_dir)
     if opt.caltech:
-        ts.convert_caltech_pedestrian()
+        tsi.convert_caltech_pedestrian()
         exit()
     if opt.mot:
-        ts.convert_mot()
+        tsi.convert_mot()
         exit()
     if opt.personpath22:
         variant = "amodal" if opt.personpath22_amodal else "visible"
-        ts.convert_personpath22(anno_variant=variant)
+        tsi.convert_personpath22(anno_variant=variant)
         exit()
     if opt.jaad:
-        ts.convert_jaad()
+        tsi.convert_jaad()
+        exit()
+    if opt.otw:
+        tsi.convert_otw()
+        exit()
+    if opt.egohumans:
+        tsi.convert_egohumans()
+        exit()
+    if opt.meva:
+        tsi.convert_meva()
         exit()
     if opt.cevo:
-        ts.convert_cevo()
+        tsi.convert_cevo()
         exit()
     if opt.track:
         test_track(opt.trackset, opt.config, display=opt.display, output=opt.output, proxy=opt.proxy, metrics=opt.metrics, save_trackset=opt.save_trackset)
