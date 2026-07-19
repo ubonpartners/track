@@ -111,7 +111,9 @@ class upyc_tracker:
         self.frame_indexes=[]
         for i,r in enumerate(self.track_results):
             if r['result_type']!=upyc.TRACK_FRAME_SKIP_FRAMERATE:
-                self.frame_times.append(r["time"])
+                # upyc renamed the frame's session media stamp from "time"
+                # to "media_stamp" in the epoch-clock rework
+                self.frame_times.append(r.get("media_stamp", r.get("time")))
                 self.frame_indexes.append(i)
 
         if h264_file_temp is not None:
