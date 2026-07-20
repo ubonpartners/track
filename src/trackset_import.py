@@ -112,6 +112,7 @@ class TrackSetImportersMixin:
             "height": height,
             "classes": ["person", "vehicle", "other"],
             "original_video": video_path,
+            "box_convention": "visible",
         }
         self.frames = []
         self.frame_times = []
@@ -653,6 +654,7 @@ class TrackSetImportersMixin:
             "height": frame_height,
             "classes": ["person", "vehicle", "other"],
             "original_video": video_path,
+            "box_convention": "fullbody",
         }
         self.frames = []
         self.frame_times = []
@@ -692,6 +694,7 @@ class TrackSetImportersMixin:
                 "width": frame_width,
                 "height": frame_height,
                 "classes": ["person", "vehicle", "other"],
+                "box_convention": "fullbody",
             }
 
         for frame_id in range(1, seq_length):
@@ -1289,6 +1292,9 @@ def convert_cevo():
         output_video_path=output_folder+"/video/"+s
         print("Processing",folder,s,"....")
         ts=trackset.TrackSet(input)
+        # cevo GT draws visible/partial-extent boxes (e.g. seated people
+        # boxed minimally) — declare it so consumers can match conventions
+        ts.metadata["box_convention"]="visible"
         ts.export_yaml(output_path, output_video_path)
 
 
