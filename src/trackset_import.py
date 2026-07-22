@@ -1454,6 +1454,9 @@ def convert_autolabel_folder(src_folder, output_folder, shard="",
             # point the annotation at the dataset-local video copy
             d = json.load(open(out_anno))
             d.setdefault("metadata", {})["original_video"] = out_video
+            # fully-autolabelled: annotation completeness only above the
+            # detector-reliability knee (normalized height)
+            d["metadata"]["min_annotated_person_height"] = 0.045
             with open(out_anno, "w") as fh:
                 json.dump(d, fh, indent=4)
             done += 1
