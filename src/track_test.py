@@ -83,6 +83,18 @@ def summary_string(r):
         s+=f" FmAP:{r['det_ap_face']:0.3f}"
     return s
 
+def annotation_floors(gt_metadata):
+    """Per-class annotation completeness floors from GT metadata:
+    min_annotated_height: {class_name: normalized_height}. The legacy
+    scalar min_annotated_person_height is read as {"person": v}.
+    Absent class = fully annotated (no floor)."""
+    floors = dict(gt_metadata.get("min_annotated_height") or {})
+    legacy = gt_metadata.get("min_annotated_person_height")
+    if legacy and "person" not in floors:
+        floors["person"] = float(legacy)
+    return {k: float(v) for k, v in floors.items()}
+
+
 def compute_detection_metrics(gt, test,
                               metrics_dict,
                               classes_for_det_map=["person","face"]):
@@ -116,6 +128,15 @@ def compute_detection_metrics(gt, test,
                     if cl is not None:
                         det_obj.append(tu.Object(box=d["box"],cl=d["class"],conf=d["confidence"]))
 
+                floors = annotation_floors(gt.metadata)
+                if floors:
+                    def _keep(o):
+                        fl = floors.get(classes_for_det_map[o.cl]
+                                        if 0 <= o.cl < len(classes_for_det_map)
+                                        else "", 0.0)
+                        return not (fl > 0 and (o.box[3] - o.box[1]) < fl)
+                    gt_obj = [o for o in gt_obj if _keep(o)]
+                    det_obj = [o for o in det_obj if _keep(o)]
                 gts = sorted(gt_obj,key=lambda x: x.confidence,reverse=True)
                 dets = sorted(det_obj,key=lambda x: x.confidence,reverse=True)
                 gt_matched=[-1]*len(gts)
@@ -291,13 +312,16 @@ def compute_metrics(gt, test,
     # should not be counted as false positives.
     ignore_cl_idx = (gt.metadata["classes"].index("other")
                      if "other" in gt.metadata["classes"] else None)
-    # Dataset-declared annotation floor: below this normalized height the
-    # GT makes no completeness claim (autolabelled/augmented datasets).
-    # GT below it is ignored AND unmatched sub-floor predictions are not
-    # charged as FP (nobody annotated that zone). Combined with the
-    # caller's min_person_height: the effective GT floor is the max.
-    meta_floor = float(gt.metadata.get("min_annotated_person_height", 0.0))
-    min_person_height = max(min_person_height, meta_floor)
+    # Dataset-declared annotation floors: below the per-class normalized
+    # height the GT makes no completeness claim (autolabelled/augmented
+    # datasets). GT below it is ignored AND unmatched sub-floor
+    # predictions are not charged as FP (nobody annotated that zone).
+    # The caller's min_person_height combines with the person floor.
+    floors = annotation_floors(gt.metadata)
+    if min_person_height > 0:
+        floors["person"] = max(floors.get("person", 0.0),
+                               min_person_height)
+    eval_floors = {c: floors[c] for c in floors if c in classes_to_test}
     # Threshold: drop a test detection if >=50% of its area falls inside any
     # ignore region. Matches the standard "don't care" behaviour in MOTChallenge.
     ignore_overlap_frac = 0.5
@@ -321,24 +345,27 @@ def compute_metrics(gt, test,
         # when missed, and dets matching them are not FP. Same don't-care
         # semantics as crowd boxes.
         small_ignore = []
-        if min_person_height > 0:
+        if eval_floors:
             kept_gt = []
             for g in gt_obj:
-                if (classes_to_test[g.cl] == "person"
-                        and (g.box[3] - g.box[1]) < min_person_height):
+                fl = eval_floors.get(classes_to_test[g.cl], 0.0)
+                if fl > 0 and (g.box[3] - g.box[1]) < fl:
                     small_ignore.append(g.box)
                 else:
                     kept_gt.append(g)
             gt_obj = kept_gt
 
-        if meta_floor > 0:
-            gt_person_boxes_all = [g.box for g in gt_obj]
+        meta_only = annotation_floors(gt.metadata)
+        if meta_only:
+            gt_boxes_all = [g.box for g in gt_obj]
             kept_t = []
             for det in test_obj:
-                h = det.box[3] - det.box[1]
-                if (h < meta_floor
+                fl = meta_only.get(classes_to_test[det.cl]
+                                   if det.cl < len(classes_to_test)
+                                   else "", 0.0)
+                if (fl > 0 and (det.box[3] - det.box[1]) < fl
                         and not any(coord.box_iou(det.box, gb) >= match_iou
-                                    for gb in gt_person_boxes_all)):
+                                    for gb in gt_boxes_all)):
                     continue  # sub-floor unmatched pred: unannotated zone
                 kept_t.append(det)
             test_obj = kept_t
