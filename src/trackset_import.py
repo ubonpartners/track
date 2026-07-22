@@ -1545,6 +1545,33 @@ def reduce_dataset(folder, n=50, group_fn=None, manifest=None):
     return out
 
 
+def apply_reduction(folder, manifest=None, n=50):
+    """Prune a converted dataset to its reduced_N selection: clips NOT in
+    the manifest move to <folder>_unreduced/{annotation,video} (same-fs
+    rename — instant and reversible; delete that dir to reclaim space).
+    Runs reduce_dataset first if the manifest doesn't exist yet."""
+    import shutil
+    manifest = manifest or os.path.join(folder, f"reduced_{n}.json")
+    if not os.path.isfile(manifest):
+        reduce_dataset(folder, n=n, manifest=manifest)
+    keep = set(json.load(open(manifest)))
+    arch = folder.rstrip("/") + "_unreduced"
+    stuff.makedir(arch + "/annotation/")
+    stuff.makedir(arch + "/video/")
+    moved = 0
+    for sub, ext in (("annotation", ".json"), ("video", ".mp4")):
+        d = os.path.join(folder, sub)
+        for f in sorted(os.listdir(d)):
+            stem, e = os.path.splitext(f)
+            if e != ext or stem in keep:
+                continue
+            shutil.move(os.path.join(d, f), os.path.join(arch, sub, f))
+            moved += 1
+    # keep the manifest with the reduced set
+    print(f"apply_reduction: kept {len(keep)}, moved {moved} files "
+          f"-> {arch}")
+
+
 def fix_cevo25_vfr_times(folder="/mldata/tracking/cevo_april25"):
     """Restamp cevo_april25 GT frame_times from the video's real decoded
     PTS. Most of these cameras record variable frame rate (intervals
