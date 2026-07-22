@@ -355,18 +355,22 @@ def compute_metrics(gt, test,
                     kept_gt.append(g)
             gt_obj = kept_gt
 
-        meta_only = annotation_floors(gt.metadata)
-        if meta_only:
+        if eval_floors:
+            # detections below the floor are ignored symmetrically with
+            # GT (both the dataset-declared annotation floors and the
+            # caller/search-config min size). A sub-floor det that
+            # genuinely matches a remaining above-floor GT still counts
+            # (dropping it would fabricate an FN at the boundary).
             gt_boxes_all = [g.box for g in gt_obj]
             kept_t = []
             for det in test_obj:
-                fl = meta_only.get(classes_to_test[det.cl]
-                                   if det.cl < len(classes_to_test)
-                                   else "", 0.0)
+                fl = eval_floors.get(classes_to_test[det.cl]
+                                     if det.cl < len(classes_to_test)
+                                     else "", 0.0)
                 if (fl > 0 and (det.box[3] - det.box[1]) < fl
                         and not any(coord.box_iou(det.box, gb) >= match_iou
                                     for gb in gt_boxes_all)):
-                    continue  # sub-floor unmatched pred: unannotated zone
+                    continue
                 kept_t.append(det)
             test_obj = kept_t
 
