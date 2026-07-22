@@ -541,6 +541,20 @@ class TrackSet(TrackSetImportersMixin):
         if params is not None:
             for p in params:
                 param_dict[p]=params[p]
+        # main_config_override: deep-merge overrides into the loaded tracker
+        # config. Lets a search/eval yaml disable aux stages (faces/clip/
+        # audio jpegs+embeddings) for offline runs without editing the
+        # tracker config file itself. Nested dicts merge key-by-key; any
+        # other value replaces.
+        override=param_dict.pop("main_config_override", None)
+        if override:
+            def _deep_merge(dst, src):
+                for k, v in src.items():
+                    if isinstance(v, dict) and isinstance(dst.get(k), dict):
+                        _deep_merge(dst[k], v)
+                    else:
+                        dst[k]=v
+            _deep_merge(param_dict, override)
         param_dict["original_trackset"]=video
         tracker=trackers.create_tracker(param_dict,
                                         track_min_interval=track_min_interval,
