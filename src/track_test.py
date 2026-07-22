@@ -291,6 +291,13 @@ def compute_metrics(gt, test,
     # should not be counted as false positives.
     ignore_cl_idx = (gt.metadata["classes"].index("other")
                      if "other" in gt.metadata["classes"] else None)
+    # Dataset-declared annotation floor: below this normalized height the
+    # GT makes no completeness claim (autolabelled/augmented datasets).
+    # GT below it is ignored AND unmatched sub-floor predictions are not
+    # charged as FP (nobody annotated that zone). Combined with the
+    # caller's min_person_height: the effective GT floor is the max.
+    meta_floor = float(gt.metadata.get("min_annotated_person_height", 0.0))
+    min_person_height = max(min_person_height, meta_floor)
     # Threshold: drop a test detection if >=50% of its area falls inside any
     # ignore region. Matches the standard "don't care" behaviour in MOTChallenge.
     ignore_overlap_frac = 0.5
@@ -323,6 +330,18 @@ def compute_metrics(gt, test,
                 else:
                     kept_gt.append(g)
             gt_obj = kept_gt
+
+        if meta_floor > 0:
+            gt_person_boxes_all = [g.box for g in gt_obj]
+            kept_t = []
+            for det in test_obj:
+                h = det.box[3] - det.box[1]
+                if (h < meta_floor
+                        and not any(coord.box_iou(det.box, gb) >= match_iou
+                                    for gb in gt_person_boxes_all)):
+                    continue  # sub-floor unmatched pred: unannotated zone
+                kept_t.append(det)
+            test_obj = kept_t
 
         if ignore_cl_idx is not None or small_ignore:
             ignore_boxes = ([o.box for o in gt.objects_at_time(t) or []

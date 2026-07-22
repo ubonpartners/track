@@ -192,6 +192,11 @@ def augment_trackset_file(anno_path, video_path=None, min_conf=0.55,
     doc["frames"] = [by_time[k] for k in sorted(by_time)]
     if "frame_times" in doc:
         doc["frame_times"] = sorted(by_time)
+    # completeness floor: autolabel cannot reliably add tracks below the
+    # measured detector knee, so added-track completeness only holds
+    # above it (normalized height; ~58/1280)
+    meta["min_annotated_person_height"] = max(
+        float(meta.get("min_annotated_person_height", 0.0)), 0.045)
     meta["autolabel_augmented"] = {
         "tracks_added": added, "min_conf": min_conf,
         "dup_iou": dup_iou, "max_dup_frac": max_dup_frac,
