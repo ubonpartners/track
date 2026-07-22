@@ -243,6 +243,7 @@ def compute_metrics(gt, test,
                     classes_for_det_map=["person","face"],
                     eval_rate_divisor=1,
                     eval_min_framerate=30.0,
+                    min_person_height=0.0,
                     show_pbar=False):
     assert match_iou<0.9 and match_iou>0.1, f"stupid match_iou {match_iou}"
     start_time=min(gt.first_frame_time(), test.first_frame_time())
@@ -307,9 +308,27 @@ def compute_metrics(gt, test,
         if gt_obj is None:
             break
 
-        if ignore_cl_idx is not None:
-            ignore_boxes = [o.box for o in gt.objects_at_time(t) or []
-                            if o.cl == ignore_cl_idx]
+        # Sub-minimum persons (normalized height < min_person_height,
+        # i.e. [0-1]^2 units; 0.045 ~= the measured detector-recall knee
+        # ~= 58/1280 in 1280-square units) become ignore regions: not FN
+        # when missed, and dets matching them are not FP. Same don't-care
+        # semantics as crowd boxes.
+        small_ignore = []
+        if min_person_height > 0:
+            kept_gt = []
+            for g in gt_obj:
+                if (classes_to_test[g.cl] == "person"
+                        and (g.box[3] - g.box[1]) < min_person_height):
+                    small_ignore.append(g.box)
+                else:
+                    kept_gt.append(g)
+            gt_obj = kept_gt
+
+        if ignore_cl_idx is not None or small_ignore:
+            ignore_boxes = ([o.box for o in gt.objects_at_time(t) or []
+                             if o.cl == ignore_cl_idx]
+                            if ignore_cl_idx is not None else [])
+            ignore_boxes = ignore_boxes + small_ignore
             if ignore_boxes:
                 gt_person_boxes = [g.box for g in gt_obj]
                 kept = []
@@ -683,6 +702,7 @@ def track_test_work_fn(params, mpwq_context, mpwq_progress_fn):
     eval_min_framerate=params.get("eval_min_framerate", 30.0)
     logging.debug(f"compute metrics")
     result=compute_metrics(trackset_gt, trackset,
+                           min_person_height=params.get("min_person_height", 0.0),
                            max_duration=params["max_duration"],
                            match_iou=match_iou,
                            eval_rate_divisor=eval_rate_divisor,
@@ -781,7 +801,7 @@ def track_test(config, split=None, desc="track test"):
                 if not "max_duration" in params:
                     params["max_duration"]=1000
                 # copy some parameters from top level to each test config
-                params_to_copy=["eval_rate_divisor", "eval_min_framerate"]
+                params_to_copy=["eval_rate_divisor", "eval_min_framerate", "min_person_height"]
                 for p in params_to_copy:
                     if p in config:
                         params[p]=config[p]
