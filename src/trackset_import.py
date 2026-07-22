@@ -1447,16 +1447,21 @@ def convert_autolabel_folder(src_folder, output_folder, shard="",
         if os.path.isfile(out_anno) and os.path.isfile(out_video):
             continue
         src = os.path.join(src_folder, v)
-        autolabel_video(src, out_anno, convention=convention)
-        if not os.path.isfile(out_video):
-            shutil.copy(src, out_video)
-        # point the annotation at the dataset-local video copy
-        d = json.load(open(out_anno))
-        d.setdefault("metadata", {})["original_video"] = out_video
-        with open(out_anno, "w") as fh:
-            json.dump(d, fh, indent=4)
-        done += 1
-        print(f"autolabelled {stem} ({done})", flush=True)
+        try:
+            autolabel_video(src, out_anno, convention=convention)
+            if not os.path.isfile(out_video):
+                shutil.copy(src, out_video)
+            # point the annotation at the dataset-local video copy
+            d = json.load(open(out_anno))
+            d.setdefault("metadata", {})["original_video"] = out_video
+            with open(out_anno, "w") as fh:
+                json.dump(d, fh, indent=4)
+            done += 1
+            print(f"autolabelled {stem} ({done})", flush=True)
+        except Exception as e:
+            # one poisoned video must not kill the batch; resume-by-skip
+            # re-attempts it on the next run
+            print(f"FAIL {stem}: {type(e).__name__}: {e}", flush=True)
     print(f"convert_autolabel_folder: {done} videos -> {output_folder}")
 
 
