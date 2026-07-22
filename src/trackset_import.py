@@ -1299,6 +1299,130 @@ def convert_cevo():
     fix_cevo25_vfr_times()
 
 
+def import_bdd_mot_sequence(label_json_path, frames_dir, fps=5.0):
+    """One BDD100K MOT (box_track_20) sequence -> TrackSet.
+
+    Scalabel format: the per-video JSON is a list of frames
+    {videoName, name, frameIndex, labels:[{id, category,
+    box2d{x1,y1,x2,y2}, attributes{crowd, occluded, truncated}}]}.
+    Annotated at 5 fps (~200 frames / 40 s video).
+
+    Class mapping (complete-GT rules): pedestrian/rider -> person;
+    car/truck/bus/train/motorcycle/bicycle/trailer/other vehicle ->
+    vehicle; "other person" and crowd-attribute boxes -> other (ignore
+    regions, matching MOTChallenge don't-care semantics in track_test).
+    box_convention deliberately NOT stamped until label boxes have been
+    visually checked against occlusions (visible vs amodal unknown).
+    """
+    person_cats = {"pedestrian", "rider"}
+    vehicle_cats = {"car", "truck", "bus", "train", "motorcycle",
+                    "bicycle", "trailer", "other vehicle"}
+    frames_meta = json.load(open(label_json_path))
+    for f in frames_meta:
+        if "frameIndex" not in f:
+            # frame index is also encoded in the name: <video>-0000001.jpg
+            f["frameIndex"] = int(f["name"][-11:-4]) - 1
+    frames_meta.sort(key=lambda f: f["frameIndex"])
+    # geometry from the first image
+    import cv2 as _cv2
+    img0 = _cv2.imread(os.path.join(frames_dir, frames_meta[0]["name"]))
+    if img0 is None:
+        raise FileNotFoundError(
+            f"first frame missing: {frames_dir}/{frames_meta[0]['name']}")
+    height, width = img0.shape[:2]
+
+    ts = trackset.TrackSet()
+    ts.metadata = {
+        "frame_rate": fps,
+        "width": width,
+        "height": height,
+        "classes": ["person", "vehicle", "other"],
+    }
+    ts.frames = []
+    ts.frame_times = []
+    track_id_map = {}
+    for f in frames_meta:
+        objs = {}
+        for l in (f.get("labels") or []):
+            cat = l.get("category", "")
+            attrs = l.get("attributes") or {}
+            if attrs.get("crowd") or cat == "other person":
+                cl = 2                       # ignore region
+            elif cat in person_cats:
+                cl = 0
+            elif cat in vehicle_cats:
+                cl = 1
+            else:
+                continue
+            b = l["box2d"]
+            x1 = round(max(0.0, min(1.0, b["x1"] / width)), 4)
+            y1 = round(max(0.0, min(1.0, b["y1"] / height)), 4)
+            x2 = round(max(0.0, min(1.0, b["x2"] / width)), 4)
+            y2 = round(max(0.0, min(1.0, b["y2"] / height)), 4)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            if l["id"] not in track_id_map:
+                track_id_map[l["id"]] = len(track_id_map) + 1
+            objs[track_id_map[l["id"]]] = {
+                "box": [x1, y1, x2, y2], "class": cl, "conf": 1.0}
+        fi = f["frameIndex"]
+        ts.frames.append({"frame_id": fi,
+                          "frame_time": fi / fps,
+                          "objects": objs})
+        ts.frame_times.append(fi / fps)
+    return ts
+
+
+def convert_bdd100k_mot(
+        src_root="/mldata/downloaded_datasets/other/bdd100k_mot",
+        split="val",
+        output_folder="/mldata/tracking/bdd100k_mot",
+        limit=0):
+    """Convert BDD100K MOT sequences (5 fps jpg dirs + box_track_20
+    labels) into JSON+mp4 tracksets. Videos are assembled from the
+    5 fps frames with x264 (frame_time = frameIndex/5 stays exact)."""
+    labels_root = os.path.join(src_root, "labels", "box_track_20", split)
+    images_root = os.path.join(src_root, "images", "track", split)
+    if not os.path.isdir(labels_root):
+        raise FileNotFoundError(
+            f"{labels_root} missing — box_track_20 labels not downloaded "
+            "yet (portal: bdd-data.berkeley.edu)")
+    stuff.makedir(output_folder + "/annotation/")
+    stuff.makedir(output_folder + "/video/")
+    seqs = sorted(f for f in os.listdir(labels_root) if f.endswith(".json"))
+    if limit:
+        seqs = seqs[:limit]
+    done = 0
+    for name in seqs:
+        stem = name[:-5]
+        frames_dir = os.path.join(images_root, stem)
+        if not os.path.isdir(frames_dir):
+            print(f"  skip {stem}: no frames dir")
+            continue
+        out_anno = output_folder + "/annotation/" + stem + ".json"
+        out_video = output_folder + "/video/" + stem + ".mp4"
+        if os.path.isfile(out_anno) and os.path.isfile(out_video):
+            continue
+        ts = import_bdd_mot_sequence(
+            os.path.join(labels_root, name), frames_dir)
+        if not os.path.isfile(out_video):
+            # 5 fps x264, one image per frame, index order
+            cmd = ("ffmpeg -y -v error -framerate 5 -pattern_type glob "
+                   f"-i '{frames_dir}/*.jpg' -c:v libx264 -preset fast "
+                   f"-crf 18 -pix_fmt yuv420p '{out_video}'")
+            if os.system(cmd) != 0:
+                print(f"  FAIL video assembly {stem}")
+                continue
+        ts.metadata["original_video"] = out_video
+        with open(out_anno, "w") as fh:
+            json.dump({"metadata": ts.metadata, "frames": ts.frames}, fh,
+                      indent=4)
+        done += 1
+        if done % 20 == 0:
+            print(f"  {done} sequences converted")
+    print(f"convert_bdd100k_mot: {done} sequences -> {output_folder}")
+
+
 def fix_cevo25_vfr_times(folder="/mldata/tracking/cevo_april25"):
     """Restamp cevo_april25 GT frame_times from the video's real decoded
     PTS. Most of these cameras record variable frame rate (intervals
