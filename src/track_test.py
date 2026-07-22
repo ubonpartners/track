@@ -15,7 +15,6 @@ import src.trackset as ts
 import threading
 import logging
 import src.track_util as tu
-import ubon_pycstuff.ubon_pycstuff as upyc
 
 tqdm.set_lock(threading.RLock())
 
@@ -244,8 +243,7 @@ def compute_metrics(gt, test,
                     classes_for_det_map=["person","face"],
                     eval_rate_divisor=1,
                     eval_min_framerate=30.0,
-                    show_pbar=False,
-                    metrics="python"):
+                    show_pbar=False):
     assert match_iou<0.9 and match_iou>0.1, f"stupid match_iou {match_iou}"
     start_time=min(gt.first_frame_time(), test.first_frame_time())
     t=start_time
@@ -266,17 +264,7 @@ def compute_metrics(gt, test,
     # run evaluation at the framerate of the original video, potentially divided down
     time_incr=(1.0/gt.metadata["frame_rate"])*eval_rate_divisor
 
-    if metrics=="python":
-        use_c_metrics=False
-    elif metrics=="c":
-        use_c_metrics=True
-    else:
-        assert False, f"Unknown metrics {metrics}"
-
-    if use_c_metrics:
-        c_mota=upyc.c_mota_metrics()
-    else:
-        acc = mm.MOTAccumulator(auto_id=True)
+    acc = mm.MOTAccumulator(auto_id=True)
 
     frame_events=[]
     frame_index=0
@@ -337,38 +325,33 @@ def compute_metrics(gt, test,
                     kept.append(det)
                 test_obj = kept
 
-        if use_c_metrics:
-            udets=[o.to_det() for o in test_obj]
-            ugt=[o.to_det() for o in gt_obj]
-            c_mota.add_frame(udets, ugt)
-        else:
-            gt_dets=[mot_obj(g, img_w, img_h) for g in gt_obj]
-            t_dets=[mot_obj(t, img_w, img_h) for t in test_obj]
-            gt_dets=np.array(gt_dets)
-            t_dets=np.array(t_dets)
-            stats={"num_gt_tracks":len(gt_dets),
-                "num_tracks":len(t_dets)}
-            frame_events.append({"frame_time":t, "events":{}, "stats":stats})
+        gt_dets=[mot_obj(g, img_w, img_h) for g in gt_obj]
+        t_dets=[mot_obj(t, img_w, img_h) for t in test_obj]
+        gt_dets=np.array(gt_dets)
+        t_dets=np.array(t_dets)
+        stats={"num_gt_tracks":len(gt_dets),
+            "num_tracks":len(t_dets)}
+        frame_events.append({"frame_time":t, "events":{}, "stats":stats})
 
-            C=[[]]
-            if len(gt_dets)>0 and len(t_dets)>0:
-                C = mm.distances.iou_matrix(gt_dets[:,1:], t_dets[:,1:], \
-                                    max_iou=match_iou) # format: gt, t
+        C=[[]]
+        if len(gt_dets)>0 and len(t_dets)>0:
+            C = mm.distances.iou_matrix(gt_dets[:,1:], t_dets[:,1:], \
+                                max_iou=match_iou) # format: gt, t
 
-            acc.update(gt_dets[:,0].astype('int').tolist() if len(gt_dets)>0 else [], \
-                    t_dets[:,0].astype('int').tolist() if len(t_dets)>0 else [], C)
-            # capture hyp/gt box geometry for this accumulator frame
-            # (mot_obj rows are [track_id, l, t, w, h] in pixels)
-            cd={}
-            for r in t_dets:
-                tid=int(r[0]); l,tp,w,h=float(r[1]),float(r[2]),float(r[3]),float(r[4])
-                cd[tid]=(l+w*0.5, tp+h*0.5, (w*w+h*h)**0.5, l, tp, w, h)
-            hyp_cd_frames.append(cd)
-            gd={}
-            for r in gt_dets:
-                gid=int(r[0]); l,tp,w,h=float(r[1]),float(r[2]),float(r[3]),float(r[4])
-                gd[gid]=(l+w*0.5, tp+h*0.5, (w*w+h*h)**0.5, l, tp, w, h)
-            gt_cd_frames.append(gd)
+        acc.update(gt_dets[:,0].astype('int').tolist() if len(gt_dets)>0 else [], \
+                t_dets[:,0].astype('int').tolist() if len(t_dets)>0 else [], C)
+        # capture hyp/gt box geometry for this accumulator frame
+        # (mot_obj rows are [track_id, l, t, w, h] in pixels)
+        cd={}
+        for r in t_dets:
+            tid=int(r[0]); l,tp,w,h=float(r[1]),float(r[2]),float(r[3]),float(r[4])
+            cd[tid]=(l+w*0.5, tp+h*0.5, (w*w+h*h)**0.5, l, tp, w, h)
+        hyp_cd_frames.append(cd)
+        gd={}
+        for r in gt_dets:
+            gid=int(r[0]); l,tp,w,h=float(r[1]),float(r[2]),float(r[3]),float(r[4])
+            gd[gid]=(l+w*0.5, tp+h*0.5, (w*w+h*h)**0.5, l, tp, w, h)
+        gt_cd_frames.append(gd)
         t+=time_incr
         if show_pbar:
             pbar.update(1)
@@ -379,69 +362,64 @@ def compute_metrics(gt, test,
     if show_pbar:
         pbar.set_description("PyMOT processing...")
 
-    if use_c_metrics:
-        metrics_dict=c_mota.get_results()
-        # duration normalises the honest-FP-episode rate; frame-rate invariant.
-        metrics_dict["duration"]=duration
-    else:
-        mh = mm.metrics.create()
-        summary = mh.compute(acc, metrics=['num_frames', 'idf1', 'idp', 'idr', \
-                                    'recall', 'precision', 'num_objects', \
-                                    'mostly_tracked', 'partially_tracked', \
-                                    'mostly_lost', 'num_false_positives', \
-                                    'num_misses', 'num_switches', \
-                                    'num_fragmentations', 'mota', 'motp', \
-                                    'num_unique_objects', 'num_matches', \
-                                    'idfp', 'idfn', 'idtp'], \
-                        name='acc')
+    mh = mm.metrics.create()
+    summary = mh.compute(acc, metrics=['num_frames', 'idf1', 'idp', 'idr', \
+                                'recall', 'precision', 'num_objects', \
+                                'mostly_tracked', 'partially_tracked', \
+                                'mostly_lost', 'num_false_positives', \
+                                'num_misses', 'num_switches', \
+                                'num_fragmentations', 'mota', 'motp', \
+                                'num_unique_objects', 'num_matches', \
+                                'idfp', 'idfn', 'idtp'], \
+                    name='acc')
 
-        metrics_dict=summary.loc['acc'].to_dict()
-        # video duration in seconds; fitness uses it to length-normalise
-        # the honest FP-track episode count (frame-rate invariant).
-        metrics_dict["duration"]=duration
+    metrics_dict=summary.loc['acc'].to_dict()
+    # video duration in seconds; fitness uses it to length-normalise
+    # the honest FP-track episode count (frame-rate invariant).
+    metrics_dict["duration"]=duration
 
-        # add some extra metrics like
-        # 'fp_tracks' - number of detected track IDs that correspond to no GT
-        # some _frac metric which is the fraction of the corresponding metric of all objects
+    # add some extra metrics like
+    # 'fp_tracks' - number of detected track IDs that correspond to no GT
+    # some _frac metric which is the fraction of the corresponding metric of all objects
 
-        df = acc.mot_events  # This is a typical name for the DataFrame of match events
-        # Filter rows that are actual matches (i.e. 'Type' == 'MATCH')
-        matches_df = df[df['Type'] == 'MATCH']
-        # Get the predicted IDs that *ever* matched
-        matched_hids = matches_df['HId'].unique()
-        # Get *all* predicted IDs that appeared in the results
-        all_hids = df['HId'].dropna().unique()  # Drop NaNs since some rows might not have an HId
-        # The set of false-positive track IDs are those not in `matched_hids`
-        false_positive_track_ids = set(all_hids) - set(matched_hids)
-        # Finally
-        num_false_positive_tracks = len(false_positive_track_ids)
-        metrics_dict["fp_tracks"]=num_false_positive_tracks
+    df = acc.mot_events  # This is a typical name for the DataFrame of match events
+    # Filter rows that are actual matches (i.e. 'Type' == 'MATCH')
+    matches_df = df[df['Type'] == 'MATCH']
+    # Get the predicted IDs that *ever* matched
+    matched_hids = matches_df['HId'].unique()
+    # Get *all* predicted IDs that appeared in the results
+    all_hids = df['HId'].dropna().unique()  # Drop NaNs since some rows might not have an HId
+    # The set of false-positive track IDs are those not in `matched_hids`
+    false_positive_track_ids = set(all_hids) - set(matched_hids)
+    # Finally
+    num_false_positive_tracks = len(false_positive_track_ids)
+    metrics_dict["fp_tracks"]=num_false_positive_tracks
 
-        # De-gamed honest FP-track count (IoU==0 run-count, GT-grounded,
-        # parameter-free). THIS drives `fitness`. Old fp_tracks is kept
-        # for reporting/comparison only.
-        try:
-            ev_by_hid = _events_by_hid_from_df(df)
-            hrn = _honest_fp_runs_core(ev_by_hid, hyp_cd_frames, gt_cd_frames)
-            metrics_dict["fp_tracks_honest_v2"] = hrn["honest_fp_tracks_v2"]
-            metrics_dict["fp_h2_nm"]            = hrn["nm"]
-            metrics_dict["fp_h2_inrun"]         = hrn["inrun"]
-        except Exception:
-            # logging.warning has no handler in spawn workers — write to
-            # fd 2 which the eval captures.
-            import traceback as _tb
-            sys.stderr.write("honest-fp compute FAILED: "
-                             + _tb.format_exc() + "\n"); sys.stderr.flush()
-            # Fall back to the old gamed count so fitness degrades
-            # gracefully (failure is already loud on stderr).
-            metrics_dict["fp_tracks_honest_v2"] = num_false_positive_tracks
-            metrics_dict["fp_h2_nm"]            = num_false_positive_tracks
-            metrics_dict["fp_h2_inrun"]         = 0
+    # De-gamed honest FP-track count (IoU==0 run-count, GT-grounded,
+    # parameter-free). THIS drives `fitness`. Old fp_tracks is kept
+    # for reporting/comparison only.
+    try:
+        ev_by_hid = _events_by_hid_from_df(df)
+        hrn = _honest_fp_runs_core(ev_by_hid, hyp_cd_frames, gt_cd_frames)
+        metrics_dict["fp_tracks_honest_v2"] = hrn["honest_fp_tracks_v2"]
+        metrics_dict["fp_h2_nm"]            = hrn["nm"]
+        metrics_dict["fp_h2_inrun"]         = hrn["inrun"]
+    except Exception:
+        # logging.warning has no handler in spawn workers — write to
+        # fd 2 which the eval captures.
+        import traceback as _tb
+        sys.stderr.write("honest-fp compute FAILED: "
+                         + _tb.format_exc() + "\n"); sys.stderr.flush()
+        # Fall back to the old gamed count so fitness degrades
+        # gracefully (failure is already loud on stderr).
+        metrics_dict["fp_tracks_honest_v2"] = num_false_positive_tracks
+        metrics_dict["fp_h2_nm"]            = num_false_positive_tracks
+        metrics_dict["fp_h2_inrun"]         = 0
 
-        all_gt_ids = df['OId'].dropna().unique()
-        matched_gt_ids = df.loc[df['Type'] == 'MATCH', 'OId'].unique()
-        completely_lost_gt_ids = set(all_gt_ids) - set(matched_gt_ids)
-        metrics_dict["missed"]=len(completely_lost_gt_ids)
+    all_gt_ids = df['OId'].dropna().unique()
+    matched_gt_ids = df.loc[df['Type'] == 'MATCH', 'OId'].unique()
+    completely_lost_gt_ids = set(all_gt_ids) - set(matched_gt_ids)
+    metrics_dict["missed"]=len(completely_lost_gt_ids)
 
     logging.debug(f"metrics aux")
 
@@ -481,7 +459,7 @@ def compute_metrics(gt, test,
     metrics_dict["fitness"]=fitness_score(metrics_dict)
 
     # optionally extract per-frame MOT metrics
-    if frame_metrics and not use_c_metrics:
+    if frame_metrics:
         logging.debug(f"metrics per frame")
         t=start_time
         frame_index=0
@@ -518,9 +496,8 @@ def compute_metrics(gt, test,
                                                      "mota":mota }
             t+=time_incr
             frame_index+=1
-    if not use_c_metrics:
-        del mh
-        del acc
+    del mh
+    del acc
 
     logging.debug(f"detection metrics")
 
