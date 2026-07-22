@@ -62,9 +62,11 @@ def load_autolabel():
     return _p, _c
 
 
-def autolabel_video(video_path, out_json, convention="fullbody"):
+def autolabel_video(video_path, out_json, convention="fullbody", cuts=False):
     """Full autolabel pipeline on one video -> trackset JSON path.
-    Skips if out_json already exists (resume semantics)."""
+    Skips if out_json already exists (resume semantics). cuts=True enables
+    autolabel's scene-cut detection (TransNetV2) for edited multi-shot
+    content like movies; leave off for single-shot camera footage."""
     if os.path.isfile(out_json):
         # Existence alone is not completion: an interrupted direct JSON write
         # from older versions can leave a truncated file.
@@ -74,8 +76,13 @@ def autolabel_video(video_path, out_json, convention="fullbody"):
     pipeline, _config = load_autolabel()
     os.makedirs(os.path.dirname(os.path.abspath(out_json)), exist_ok=True)
     tmp = out_json + f".tmp{os.getpid()}"
+    kw = {}
+    if cuts:
+        cfg = _config.load_config()
+        cfg.cuts = True
+        kw["config"] = cfg
     try:
-        pipeline.run(video_path, tmp, convention=convention)
+        pipeline.run(video_path, tmp, convention=convention, **kw)
         with open(tmp) as fh:
             json.load(fh)
         os.replace(tmp, out_json)

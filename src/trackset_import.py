@@ -1417,8 +1417,49 @@ def convert_bdd100k_kaggle(
     print(f"convert_bdd100k_kaggle: {done} sequences -> {output_folder}")
 
 
+def _video_codec(path):
+    import subprocess
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=codec_name", "-of", "csv=p=0", path],
+        capture_output=True, text=True)
+    return r.stdout.strip()
+
+
+def _native_fps(path):
+    import subprocess
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=avg_frame_rate", "-of", "csv=p=0", path],
+        capture_output=True, text=True)
+    try:
+        num, den = r.stdout.strip().split("/")
+        return float(num) / float(den)
+    except (ValueError, ZeroDivisionError):
+        import cv2
+        return float(cv2.VideoCapture(path).get(cv2.CAP_PROP_FPS))
+
+
+def _transcode_h264(src, dst):
+    """Exact 1:1 near-lossless x264 transcode (same fps, same frame count,
+    crf 18) for source codecs autolabel's rfdetr worker env cannot decode
+    (AV1). Temp-name write so interrupted runs can't leave a partial mp4."""
+    import subprocess
+    tmp = f"{dst}.part{os.getpid()}.mp4"
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-i", src,
+         "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-an",
+         "-movflags", "+faststart", tmp],
+        capture_output=True, text=True)
+    if r.returncode != 0:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise RuntimeError(f"transcode failed for {src}: {r.stderr[-300:]}")
+    os.replace(tmp, dst)
+
+
 def convert_autolabel_folder(src_folder, output_folder, shard="",
-                             convention="fullbody"):
+                             convention="fullbody", cuts=False):
     """Generic importer: fully autolabel every mp4 in src_folder into a
     dataset at output_folder/{annotation,video} suitable for utrack
     optimization. Requires the autolabel checkout (see
@@ -1427,6 +1468,8 @@ def convert_autolabel_folder(src_folder, output_folder, shard="",
     Resume-by-skip per video; shard="i/N" runs every N-th video (launch
     N processes to overlap GPU/decode). The autolabel export is already
     in track's annotation JSON format; videos are copied in unchanged.
+    cuts=True enables autolabel's scene-cut detection (edited multi-shot
+    sources, e.g. movies).
     """
     from src.autolabel_bridge import autolabel_video
     import shutil
@@ -1447,7 +1490,15 @@ def convert_autolabel_folder(src_folder, output_folder, shard="",
         src = os.path.join(src_folder, v)
         try:
             if not (os.path.isfile(out_anno) and os.path.isfile(out_video)):
-                autolabel_video(src, out_anno, convention=convention)
+                # AV1 sources: rfdetr's worker env can't decode them, so
+                # transcode to h264 as the dataset-local copy up front and
+                # autolabel that file instead of the original
+                if _video_codec(src) == "av1":
+                    if not os.path.isfile(out_video):
+                        _transcode_h264(src, out_video)
+                    src = out_video
+                autolabel_video(src, out_anno, convention=convention,
+                                cuts=cuts)
             elif (json.load(open(out_anno)).get("metadata", {})
                     .get("min_annotated_height")):
                 continue
@@ -1458,6 +1509,11 @@ def convert_autolabel_folder(src_folder, output_folder, shard="",
             # point the annotation at the dataset-local video copy
             d = json.load(open(out_anno))
             d.setdefault("metadata", {})["original_video"] = out_video
+            # autolabel stamps its processing rate (native/stride) as
+            # frame_rate; track consumers treat frame_rate as the video's
+            # native clock (the tracker times decoded frames as index/fps,
+            # so a halved rate plays detections at 2x their true time)
+            d["metadata"]["frame_rate"] = _native_fps(out_video)
             # fully-autolabelled: annotation completeness only above the
             # detector-reliability knee (normalized height, per-class)
             d["metadata"]["min_annotated_height"] = {"person": 0.045}
@@ -1470,6 +1526,16 @@ def convert_autolabel_folder(src_folder, output_folder, shard="",
             # re-attempts it on the next run
             print(f"FAIL {stem}: {type(e).__name__}: {e}", flush=True)
     print(f"convert_autolabel_folder: {done} videos -> {output_folder}")
+
+
+def convert_raw_movies(src_folder="/mldata/video/youtube",
+                       output_folder="/mldata/tracking/raw_movies",
+                       shard=""):
+    """Raw movie/trailer mp4s, fully autolabelled. Edited multi-shot
+    content, so autolabel's scene-cut detection (TransNetV2) is enabled:
+    tracks must not survive or merge across cuts."""
+    convert_autolabel_folder(src_folder, output_folder, shard=shard,
+                             cuts=True)
 
 
 def convert_bwc_videotext(
