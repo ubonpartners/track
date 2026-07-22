@@ -20,6 +20,8 @@ spawns its own conda env internally).
 import json
 import os
 import sys
+import time
+import traceback
 
 _HELP = (
     "autolabel is required for this importer but could not be imported.\n"
@@ -64,10 +66,22 @@ def autolabel_video(video_path, out_json, convention="fullbody"):
     """Full autolabel pipeline on one video -> trackset JSON path.
     Skips if out_json already exists (resume semantics)."""
     if os.path.isfile(out_json):
+        # Existence alone is not completion: an interrupted direct JSON write
+        # from older versions can leave a truncated file.
+        with open(out_json) as fh:
+            json.load(fh)
         return out_json
     pipeline, _config = load_autolabel()
     os.makedirs(os.path.dirname(os.path.abspath(out_json)), exist_ok=True)
-    pipeline.run(video_path, out_json, convention=convention)
+    tmp = out_json + f".tmp{os.getpid()}"
+    try:
+        pipeline.run(video_path, tmp, convention=convention)
+        with open(tmp) as fh:
+            json.load(fh)
+        os.replace(tmp, out_json)
+    finally:
+        if os.path.isfile(tmp):
+            os.unlink(tmp)
     return out_json
 
 
@@ -115,7 +129,12 @@ def augment_trackset_file(anno_path, video_path=None, min_conf=0.55,
         raise FileNotFoundError(f"video for {anno_path} not found: "
                                 f"{video_path}")
 
-    wd = work_dir or "/mldata/autolabel_cache/v1/augment"
+    # Keep datasets separate: basename-only keys collide when two corpora use
+    # the same annotation stem.
+    dataset = os.path.basename(os.path.dirname(
+        os.path.dirname(os.path.abspath(anno_path))))
+    wd = work_dir or os.path.join("/mldata/autolabel_cache/v1/augment",
+                                  dataset)
     al_json = os.path.join(
         wd, os.path.splitext(os.path.basename(anno_path))[0]
         + ".autolabel.json")
@@ -214,9 +233,21 @@ def augment_trackset_file(anno_path, video_path=None, min_conf=0.55,
     return added
 
 
-def augment_dataset(folder, limit=0, names=None, manifest=None, **kw):
+def _augment_one(job):
+    anno_path, kw = job
+    t0 = time.time()
+    try:
+        return anno_path, augment_trackset_file(anno_path, **kw), \
+            time.time() - t0, None
+    except Exception:
+        return anno_path, None, time.time() - t0, traceback.format_exc()
+
+
+def augment_dataset(folder, limit=0, names=None, manifest=None, workers=None,
+                    **kw):
     """Augment annotations in <folder>/annotation in place (skip
-    already-augmented). GPU-serial by design. Restrict scope with
+    already-augmented). Manifest runs default to two long-lived GPU workers;
+    set AUTOLABEL_AUGMENT_WORKERS=1 for serial execution. Restrict scope with
     names=[stems] or manifest=path-to-reduced_N.json (see
     trackset_import.reduce_dataset)."""
     anno_dir = os.path.join(folder, "annotation")
@@ -229,14 +260,53 @@ def augment_dataset(folder, limit=0, names=None, manifest=None, **kw):
     else:
         names = sorted(f for f in os.listdir(anno_dir)
                        if f.endswith(".json"))
-    done = skipped = 0
-    for n in names:
-        r = augment_trackset_file(os.path.join(anno_dir, n), **kw)
-        if r is None:
+    # Manifest augmentation is the large offline corpus path. Two warmed
+    # pipelines use ~26.5 GB on the 32 GB production GPU; three have OOM'd.
+    # Keep importer-triggered augmentation serial unless explicitly opted in.
+    if workers is None:
+        workers = int(os.environ.get(
+            "AUTOLABEL_AUGMENT_WORKERS", "2" if manifest else "1"))
+    workers = max(1, int(workers))
+    jobs = [(os.path.join(anno_dir, n), kw) for n in names]
+    if limit:
+        workers = 1  # preserve exact historical "N newly done" semantics
+
+    done = skipped = failed = completed = 0
+    t0 = time.time()
+
+    def account(result):
+        nonlocal done, skipped, failed, completed
+        anno, r, dt, err = result
+        completed += 1
+        if err:
+            failed += 1
+            print(f"FAIL {os.path.basename(anno)} ({dt:.0f}s)\n{err}",
+                  flush=True)
+        elif r is None:
             skipped += 1
         else:
             done += 1
-        if limit and done >= limit:
-            break
+        elapsed = time.time() - t0
+        eta = elapsed / max(completed, 1) * (len(jobs) - completed)
+        print(f"augment progress {completed}/{len(jobs)} "
+              f"done={done} skip={skipped} fail={failed} "
+              f"last={dt:.0f}s eta={eta / 3600:.1f}h", flush=True)
+
+    if workers == 1:
+        for job in jobs:
+            result = _augment_one(job)
+            account(result)
+            if limit and done >= limit:
+                break
+    else:
+        import multiprocessing as mp
+        # The documented entry point is `python -c`, for which spawn cannot
+        # re-import __main__. The parent has not initialized CUDA here, so a
+        # Linux fork pool is safe and each child owns its model stack.
+        with mp.get_context("fork").Pool(workers) as pool:
+            for result in pool.imap_unordered(_augment_one, jobs,
+                                              chunksize=1):
+                account(result)
     print(f"augment_dataset {folder}: {done} augmented, "
-          f"{skipped} already done")
+          f"{skipped} already done, {failed} failed")
+    return {"done": done, "skipped": skipped, "failed": failed}
