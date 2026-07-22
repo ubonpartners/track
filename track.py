@@ -118,7 +118,7 @@ def compare_track(t, compare_config=None, display=True):
     if display:
         ts.display_trackset(trackset_list=trackset_compare, trackset_gt=trackset_gt, frame_events_list=frame_events_list, output=None)
 
-def test_track(t, config_file, display=False, output=None, proxy=None, metrics="python", save_trackset=None):
+def test_track(t, config_file, display=False, output=None, proxy=None, save_trackset=None):
     trackset_gt=ts.TrackSet(t)
     trackset=ts.TrackSet()
     start_time=time.time()
@@ -138,8 +138,7 @@ def test_track(t, config_file, display=False, output=None, proxy=None, metrics="
                                                      frame_metrics=True,
                                                      eval_rate_divisor=1,
                                                      show_pbar=True,
-                                                     eval_min_framerate=5,
-                                                     metrics=metrics)
+                                                     eval_min_framerate=5)
     metrics_time=time.time()
     elapsed_import=import_time-start_time
     elapsed_metrics=metrics_time-import_time
@@ -175,7 +174,6 @@ if __name__ == '__main__':
     parser.add_argument('--config', type=str, default="/mldata/config/track/trackers/uc_v11.yaml", help="config")
     parser.add_argument('--output', type=str, default=None, help='output mp4 name')
     parser.add_argument('--save-trackset', type=str, default=None, help='save tracked run as UBTRK2 trackset file')
-    parser.add_argument('--metrics', type=str, default="python", help='metric computation: python or c')
     parser.add_argument('--proxy', type=str, default=None, help='proxy addr:port remote jetson e.g. 192.168.1.35:18861')
     opt = parser.parse_args()
     stuff.rmdir(os.path.join(os.getcwd(), "tmp"))
@@ -208,7 +206,7 @@ if __name__ == '__main__':
         tsi.convert_cevo()
         exit()
     if opt.track:
-        test_track(opt.trackset, opt.config, display=opt.display, output=opt.output, proxy=opt.proxy, metrics=opt.metrics, save_trackset=opt.save_trackset)
+        test_track(opt.trackset, opt.config, display=opt.display, output=opt.output, proxy=opt.proxy, save_trackset=opt.save_trackset)
         exit()
     if opt.compare is not None:
         compare_track(opt.trackset, compare_config=opt.compare)
