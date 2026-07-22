@@ -1444,11 +1444,15 @@ def convert_autolabel_folder(src_folder, output_folder, shard="",
         stem = os.path.splitext(v)[0]
         out_anno = output_folder + "/annotation/" + stem + ".json"
         out_video = output_folder + "/video/" + stem + ".mp4"
-        if os.path.isfile(out_anno) and os.path.isfile(out_video):
-            continue
         src = os.path.join(src_folder, v)
         try:
-            autolabel_video(src, out_anno, convention=convention)
+            if not (os.path.isfile(out_anno) and os.path.isfile(out_video)):
+                autolabel_video(src, out_anno, convention=convention)
+            elif (json.load(open(out_anno)).get("metadata", {})
+                    .get("min_annotated_height")):
+                continue
+            # else: annotation exists but was written by an external
+            # labeller run — fall through to stamp it
             if not os.path.isfile(out_video):
                 shutil.copy(src, out_video)
             # point the annotation at the dataset-local video copy
