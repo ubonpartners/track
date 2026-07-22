@@ -1041,7 +1041,7 @@ def _convert_meva_clip(args):
 
 def convert_meva(src_root="/mldata/downloaded_datasets/other/MEVA",
                  output_folder="/mldata/tracking/meva",
-                 workers=8):
+                 workers=8, augment=True, augment_limit=0):
     """Convert MEVA (KF1) KPF clips into trackset JSON + video pairs under
     output_folder/{annotation,video}/.
 
@@ -1092,9 +1092,16 @@ def convert_meva(src_root="/mldata/downloaded_datasets/other/MEVA",
 
     print(f"meva done. already={already} " +
           " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    if augment:
+        # MEVA labels only scripted-activity actors; add missing
+        # high-confidence bystander tracks so the dataset is fully
+        # annotated (GPU-serial second pass; resume-safe).
+        from src.autolabel_bridge import augment_dataset
+        augment_dataset(output_folder, limit=augment_limit)
 
 def convert_otw(src_root="/mldata/downloaded_datasets/other/otw/otw",
-                output_folder="/mldata/tracking/otw"):
+                output_folder="/mldata/tracking/otw",
+                augment=True, augment_limit=0):
     """Convert Out the Window (OTW) into MOT-equivalent JSON+mp4 pairs
     under output_folder/{annotation,video}/.
 
@@ -1162,6 +1169,12 @@ def convert_otw(src_root="/mldata/downloaded_datasets/other/otw/otw",
                 ts.export_yaml(out_anno, out_video)
 
         print(f"{collection} done. missing_video={skipped_missing} failed={skipped_failed} empty={skipped_empty}")
+
+    if augment:
+        # OTW annotates only activity actors; add missing high-confidence
+        # tracks so the dataset is fully annotated (GPU-serial pass).
+        from src.autolabel_bridge import augment_dataset
+        augment_dataset(output_folder, limit=augment_limit)
 
 
 def _write_gap_filled_video(ts, out_video):
@@ -1402,6 +1415,57 @@ def convert_bdd100k_kaggle(
             json.dump(doc, fh, indent=4)
         done += 1
     print(f"convert_bdd100k_kaggle: {done} sequences -> {output_folder}")
+
+
+def convert_autolabel_folder(src_folder, output_folder, shard="",
+                             convention="fullbody"):
+    """Generic importer: fully autolabel every mp4 in src_folder into a
+    dataset at output_folder/{annotation,video} suitable for utrack
+    optimization. Requires the autolabel checkout (see
+    src/autolabel_bridge.py — helpful error if missing).
+
+    Resume-by-skip per video; shard="i/N" runs every N-th video (launch
+    N processes to overlap GPU/decode). The autolabel export is already
+    in track's annotation JSON format; videos are copied in unchanged.
+    """
+    from src.autolabel_bridge import autolabel_video
+    import shutil
+    stuff.makedir(output_folder + "/annotation/")
+    stuff.makedir(output_folder + "/video/")
+    vids = sorted(f for f in os.listdir(src_folder)
+                  if f.lower().endswith((".mp4", ".mov", ".avi", ".mkv")))
+    si, sn = 0, 1
+    if shard:
+        si, sn = (int(x) for x in shard.split("/"))
+    done = 0
+    for k, v in enumerate(vids):
+        if k % sn != si:
+            continue
+        stem = os.path.splitext(v)[0]
+        out_anno = output_folder + "/annotation/" + stem + ".json"
+        out_video = output_folder + "/video/" + stem + ".mp4"
+        if os.path.isfile(out_anno) and os.path.isfile(out_video):
+            continue
+        src = os.path.join(src_folder, v)
+        autolabel_video(src, out_anno, convention=convention)
+        if not os.path.isfile(out_video):
+            shutil.copy(src, out_video)
+        # point the annotation at the dataset-local video copy
+        d = json.load(open(out_anno))
+        d.setdefault("metadata", {})["original_video"] = out_video
+        with open(out_anno, "w") as fh:
+            json.dump(d, fh, indent=4)
+        done += 1
+        print(f"autolabelled {stem} ({done})", flush=True)
+    print(f"convert_autolabel_folder: {done} videos -> {output_folder}")
+
+
+def convert_bwc_videotext(
+        src_folder="/mldata/downloaded_datasets/other/BWC-VideoText-359/"
+                   "eval_videos",
+        output_folder="/mldata/tracking/bwc-videotext", shard=""):
+    """Body-worn-camera eval videos, fully autolabelled (use case 2)."""
+    convert_autolabel_folder(src_folder, output_folder, shard=shard)
 
 
 def fix_cevo25_vfr_times(folder="/mldata/tracking/cevo_april25"):
