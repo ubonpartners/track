@@ -1468,6 +1468,83 @@ def convert_bwc_videotext(
     convert_autolabel_folder(src_folder, output_folder, shard=shard)
 
 
+def reduce_dataset(folder, n=50, group_fn=None, manifest=None):
+    """Offline heuristic selection of the top-N clips of a converted
+    dataset (no GPU): rich in annotations, diverse across scenes.
+
+    Scoring per clip (from the annotation JSON alone):
+      score = person_boxes + 2*person_tracks + 0.5*vehicle_boxes
+              + 10*mean_objects_per_frame
+    (annotation volume dominates; density bonus favours busy scenes).
+    Diversity: clips are grouped by scene/camera (group_fn(stem); default
+    strips date/time+digits — MEVA "<date>.<t0>.<t1>.<site>.<cam>" groups
+    to "site.cam", OTW "homes_00012" to "homes_") and selection is a
+    round-robin over groups in descending score, so one prolific camera
+    cannot fill the whole budget.
+
+    Writes <folder>/reduced_<n>.json (list of stems) and returns it.
+    Consumers: autolabel_bridge.augment_dataset(names=...), or any
+    importer that wants a "reduced" mode.
+    """
+    anno_dir = os.path.join(folder, "annotation")
+
+    def default_group(stem):
+        parts = stem.split(".")
+        if len(parts) >= 5:               # MEVA-style dotted stems
+            return ".".join(parts[3:])[:40]
+        return "".join(c for c in stem if not c.isdigit())[:40]
+
+    gf = group_fn or default_group
+    scored = []
+    for f in sorted(os.listdir(anno_dir)):
+        if not f.endswith(".json"):
+            continue
+        try:
+            d = json.load(open(os.path.join(anno_dir, f)))
+        except Exception:
+            continue
+        frames = d.get("frames", [])
+        if not frames:
+            continue
+        pb = vb = 0
+        ptr, vtr = set(), set()
+        for fr in frames:
+            for tid, o in fr["objects"].items():
+                if o.get("class") == 0:
+                    pb += 1
+                    ptr.add(tid)
+                elif o.get("class") == 1:
+                    vb += 1
+                    vtr.add(tid)
+        dens = (pb + vb) / max(len(frames), 1)
+        score = pb + 2 * len(ptr) + 0.5 * vb + 10 * dens
+        if score <= 0:
+            continue
+        stem = f[:-5]
+        scored.append((score, stem, gf(stem)))
+
+    by_group = {}
+    for sc, stem, g in sorted(scored, reverse=True):
+        by_group.setdefault(g, []).append((sc, stem))
+    picked = []
+    while len(picked) < n and any(by_group.values()):
+        # round-robin: best remaining clip of each group, richest group
+        # first, until the budget is filled
+        for g in sorted(by_group,
+                        key=lambda g: -(by_group[g][0][0]
+                                        if by_group[g] else -1)):
+            if by_group[g]:
+                picked.append(by_group[g].pop(0)[1])
+                if len(picked) >= n:
+                    break
+    out = manifest or os.path.join(folder, f"reduced_{n}.json")
+    with open(out, "w") as fh:
+        json.dump(sorted(picked), fh, indent=1)
+    print(f"reduce_dataset: {len(picked)}/{len(scored)} clips "
+          f"({len(by_group)} scene groups) -> {out}")
+    return out
+
+
 def fix_cevo25_vfr_times(folder="/mldata/tracking/cevo_april25"):
     """Restamp cevo_april25 GT frame_times from the video's real decoded
     PTS. Most of these cameras record variable frame rate (intervals

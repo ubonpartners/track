@@ -207,12 +207,21 @@ def augment_trackset_file(anno_path, video_path=None, min_conf=0.55,
     return added
 
 
-def augment_dataset(folder, limit=0, **kw):
-    """Augment every annotation in <folder>/annotation in place
-    (skip already-augmented). GPU-serial by design — one video's
-    detection runs at a time."""
+def augment_dataset(folder, limit=0, names=None, manifest=None, **kw):
+    """Augment annotations in <folder>/annotation in place (skip
+    already-augmented). GPU-serial by design. Restrict scope with
+    names=[stems] or manifest=path-to-reduced_N.json (see
+    trackset_import.reduce_dataset)."""
     anno_dir = os.path.join(folder, "annotation")
-    names = sorted(f for f in os.listdir(anno_dir) if f.endswith(".json"))
+    if manifest:
+        names = json.load(open(manifest))
+    if names is not None:
+        names = [n if n.endswith(".json") else n + ".json" for n in names]
+        names = [n for n in sorted(names)
+                 if os.path.isfile(os.path.join(anno_dir, n))]
+    else:
+        names = sorted(f for f in os.listdir(anno_dir)
+                       if f.endswith(".json"))
     done = skipped = 0
     for n in names:
         r = augment_trackset_file(os.path.join(anno_dir, n), **kw)
