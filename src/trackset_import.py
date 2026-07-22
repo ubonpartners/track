@@ -1299,6 +1299,105 @@ def convert_cevo():
     fix_cevo25_vfr_times()
 
 
+def convert_bdd100k_kaggle(
+        src_root="/mldata/downloaded_datasets/other/BDD100k_kaggle",
+        output_folder="/mldata/tracking/bdd100k_mot",
+        limit=0):
+    """Convert the 50-video Kaggle BDD100K MOT subset (original 30fps
+    .mov clips + flattened scalabel CSV) into JSON+mp4 tracksets.
+
+    Frame mapping MEASURED 2026-07-22: label frameIndex k corresponds to
+    video time (k-1)/5 s, NOT k/5 — detector-vs-GT IoU sweep over 40
+    sampled pedestrian boxes peaks at -1.0 interval (mean best-IoU 0.592
+    vs 0.307 at k/5; offsets -2..0 swept). Likely 1-based jpg numbering
+    in the original 5 fps extraction. frameIndex 0 clamps to t=0.
+
+    Classes: pedestrian/rider -> person; car/truck/bus/train/motorcycle/
+    bicycle/trailer/"other vehicle" -> vehicle; crowd-attribute boxes and
+    "other person" -> other (ignore regions). box_convention "fullbody":
+    occluded objects carry estimated full extents (visually verified on
+    overlapping pedestrians/vehicles), matching MOT/JAAD semantics.
+    """
+    import csv as _csv
+    import subprocess
+    person_cats = {"pedestrian", "rider"}
+    vehicle_cats = {"car", "truck", "bus", "train", "motorcycle",
+                    "bicycle", "trailer", "other vehicle"}
+    videos_dir = os.path.join(src_root, "bdd100k", "videos", "train")
+    stuff.makedir(output_folder + "/annotation/")
+    stuff.makedir(output_folder + "/video/")
+
+    by_video = {}
+    with open(os.path.join(src_root, "mot_labels.csv")) as fh:
+        for r in _csv.DictReader(fh):
+            if r.get("haveVideo") != "True" or not r.get("category"):
+                continue
+            by_video.setdefault(r["videoName"], []).append(r)
+
+    done = 0
+    for vid in sorted(by_video):
+        src_video = os.path.join(videos_dir, vid + ".mov")
+        if not os.path.isfile(src_video):
+            print(f"  skip {vid}: no video")
+            continue
+        out_anno = output_folder + "/annotation/bdd_" + vid + ".json"
+        out_video = output_folder + "/video/bdd_" + vid + ".mp4"
+        if os.path.isfile(out_anno) and os.path.isfile(out_video):
+            continue
+        cap = cv2.VideoCapture(src_video)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = float(cap.get(cv2.CAP_PROP_FPS)) or 30.0
+        cap.release()
+        if not os.path.isfile(out_video):
+            # lossless container change; keeps exact frame timing
+            rc = subprocess.run(
+                ["ffmpeg", "-y", "-v", "error", "-i", src_video,
+                 "-c", "copy", "-movflags", "+faststart", out_video])
+            if rc.returncode != 0:
+                print(f"  FAIL remux {vid}")
+                continue
+        track_id_map = {}
+        by_frame = {}
+        for r in by_video[vid]:
+            cat = r["category"]
+            if r.get("attributes.crowd") == "True" or cat == "other person":
+                cl = 2
+            elif cat in person_cats:
+                cl = 0
+            elif cat in vehicle_cats:
+                cl = 1
+            else:
+                continue
+            x1 = round(max(0.0, min(1.0, float(r["box2d.x1"]) / width)), 4)
+            y1 = round(max(0.0, min(1.0, float(r["box2d.y1"]) / height)), 4)
+            x2 = round(max(0.0, min(1.0, float(r["box2d.x2"]) / width)), 4)
+            y2 = round(max(0.0, min(1.0, float(r["box2d.y2"]) / height)), 4)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            tid = r["id"]
+            if tid not in track_id_map:
+                track_id_map[tid] = len(track_id_map) + 1
+            k = int(r["frameIndex"])
+            by_frame.setdefault(k, {})[track_id_map[tid]] = {
+                "box": [x1, y1, x2, y2], "class": cl, "conf": 1.0}
+        frames = []
+        for k in sorted(by_frame):
+            t = max(0.0, (k - 1) / 5.0)
+            frames.append({"frame_id": k, "frame_time": round(t, 6),
+                           "objects": by_frame[k]})
+        doc = {"metadata": {
+                   "frame_rate": fps, "width": width, "height": height,
+                   "classes": ["person", "vehicle", "other"],
+                   "box_convention": "fullbody",
+                   "original_video": out_video},
+               "frames": frames}
+        with open(out_anno, "w") as fh:
+            json.dump(doc, fh, indent=4)
+        done += 1
+    print(f"convert_bdd100k_kaggle: {done} sequences -> {output_folder}")
+
+
 def fix_cevo25_vfr_times(folder="/mldata/tracking/cevo_april25"):
     """Restamp cevo_april25 GT frame_times from the video's real decoded
     PTS. Most of these cameras record variable frame rate (intervals
