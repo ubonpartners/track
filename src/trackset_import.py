@@ -1350,10 +1350,16 @@ def convert_bdd100k_kaggle(
         fps = float(cap.get(cv2.CAP_PROP_FPS)) or 30.0
         cap.release()
         if not os.path.isfile(out_video):
-            # lossless container change; keeps exact frame timing
+            # RE-ENCODE, not stream copy: the source iPhone movs are
+            # portrait streams with +-90 rotation metadata; consumers
+            # that read the raw stream (NVDEC/C paths) would see them
+            # sideways. Re-encoding applies the rotation to pixels and
+            # strips the metadata (ffmpeg autorotate default).
             rc = subprocess.run(
                 ["ffmpeg", "-y", "-v", "error", "-i", src_video,
-                 "-c", "copy", "-movflags", "+faststart", out_video])
+                 "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                 "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                 out_video])
             if rc.returncode != 0:
                 print(f"  FAIL remux {vid}")
                 continue
