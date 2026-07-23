@@ -12,8 +12,16 @@
 #     correspond to retained frames. BDD's sparse 5fps GT lands on the
 #     retained cadence for any N dividing 6;
 #   - no B-frames, I+P only, GOP ~2s of output frames;
-#   - optional hard duration cap (MEVA: 120s — future autolabel runs take
-#     the lite clip, so they only ever see the 2 minutes);
+#   - optional hard duration cap (MEVA: 120s);
+#
+# AUTOLABEL ORDERING (the invariant that keeps GT quality): auto-annotation
+# ALWAYS runs on the NATIVE-framerate source — its own tracking would
+# degrade badly at 5fps — and the fps drop is applied to the RESULTING
+# annotation by cadence subsetting here. Time-trimming is safe, rate-drop
+# input is not. For time-capped sets this tool therefore also emits
+# <root>/video_autolabel/<name>.mp4: a stream-copied (native fps/res)
+# duration-trimmed clip that is the ONLY correct autolabel input; the lite
+# clip is for EVAL DECODE ONLY.
 #   - optionally DROP clips whose source timestamps are broken (backward
 #     PTS jitter, the OTW doorbell disease): video+annotation are moved to
 #     <root>/dropped_jitter/, never deleted.
@@ -165,6 +173,15 @@ def process_dataset(root, min_fps, max_seconds=None, drop_jitter=False,
         out_fps = fps / divisor
         dst = os.path.join(lite_dir, os.path.splitext(os.path.basename(src))[0] + ".mp4")
         transcode(src, dst, divisor, dims, out_fps, max_seconds)
+        if max_seconds is not None:
+            # native-rate autolabel input for the trimmed window (see header)
+            adir = os.path.join(root, "video_autolabel")
+            os.makedirs(adir, exist_ok=True)
+            adst = os.path.join(adir, os.path.basename(dst))
+            if not os.path.exists(adst):
+                subprocess.check_call(
+                    ["ffmpeg", "-y", "-loglevel", "error", "-t", str(max_seconds),
+                     "-i", src, "-c", "copy", "-an", adst])
         new, kept, droppedf = rewrite_annotation(d, fps, divisor, dims,
                                                  max_seconds, dst)
         orig = jpath + ".orig"
