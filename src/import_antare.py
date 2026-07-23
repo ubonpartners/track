@@ -154,15 +154,20 @@ def retained_positions(pts, t0, t1, halve):
     return pos
 
 
-def transcode_chunk(src, dst, t0, t1, dims, halve):
-    """Exact-cadence chunk cut: select by ORIGINAL time window (and global
-    frame parity when halving) so retained frames keep source cadence;
-    setpts rebases times to the chunk start. I+P, ~2s GOP, NVENC."""
+def transcode_chunk(src, dst, t0, t1, dims, halve, out_fps):
+    """Chunk cut: select by ORIGINAL time window (and global frame parity
+    when halving), then restamp to TRUE CFR (setpts=N/out_fps). The
+    source may be VFR (escooter GoPro: pts drifts up to 2.7s per chunk
+    from a uniform grid) and every downstream consumer — GT times, the
+    tracker's raw-h264 n/fps stamping, viewers decoding the mp4 pts —
+    must agree on ONE timeline: retained-frame-index / out_fps. Frame
+    CONTENT keeps source cadence; only timestamps are normalised.
+    I+P, ~2s GOP, NVENC."""
     sel = f"between(t,{t0},{t1 - 1e-4})"
     if halve:
         sel += "*not(mod(n\\,2))"
     w, h = dims
-    vf = f"select='{sel}',setpts=PTS-{t0}/TB,scale={w}:{h}"
+    vf = f"select='{sel}',setpts=N/({out_fps}*TB),scale={w}:{h}"
     subprocess.check_call(
         ["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-vf", vf,
          "-fps_mode", "vfr", "-an", "-c:v", "h264_nvenc", "-preset", "p4",
@@ -228,7 +233,7 @@ def import_video(folder, out_root):
                 made.append(stem)
                 continue   # idempotent
         if not os.path.isfile(vpath):   # video content is annotation-independent
-            transcode_chunk(src, vpath, t0, t1, dims, halve)
+            transcode_chunk(src, vpath, t0, t1, dims, halve, out_fps)
         pos = retained_positions(pts, t0, t1, halve)
         doc = chunk_annotation(rows, pos, stride, out_fps, w, h, vpath, cadence)
         ntracks = len({tid for f in doc["frames"] for tid in f["objects"]})

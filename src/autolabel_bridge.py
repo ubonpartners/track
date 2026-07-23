@@ -600,6 +600,7 @@ def densify_sparse_gt(anno_path, anchor_iomin=0.55, max_gap=1.5,
     Linear-only spans remain exactly as trustworthy as the old
     reader-interpolation — no better, marked so ("interp").
     """
+    import bisect
     doc = json.load(open(anno_path))
     meta = doc.get("metadata", {})
     sparse = meta.get("sparse_gt")
@@ -698,9 +699,18 @@ def densify_sparse_gt(anno_path, anchor_iomin=0.55, max_gap=1.5,
                     _motion_transfer(Ha, Hb, Aa, Ab, box, w),
                     conf, oa["class"])
 
-    # dense grid = human times + fill times; every live human track covered
-    grid = sorted({round(f["frame_time"], 4) for f in frames}
-                  | {t for (_tid, t) in fills})
+    # dense grid = human times + fill times (fills landing within 20ms of
+    # a human frame merge into it — 2ms twin frames confuse readers);
+    # every live human track covered on every grid frame IT EXISTS ON
+    human_times = sorted({round(f["frame_time"], 4) for f in frames})
+    def _snap(t):
+        i = bisect.bisect_left(human_times, t)
+        for j in (i - 1, i):
+            if 0 <= j < len(human_times) and abs(human_times[j] - t) <= 0.02:
+                return human_times[j]
+        return t
+    fills = {(tid, _snap(t)): v for (tid, t), v in fills.items()}
+    grid = sorted(set(human_times) | {t for (_tid, t) in fills})
     by_time = {round(f["frame_time"], 4): f for f in frames}
     added_fill = added_interp = 0
     for t in grid:
@@ -711,8 +721,16 @@ def densify_sparse_gt(anno_path, anchor_iomin=0.55, max_gap=1.5,
         for tid, obs in human.items():
             if tid in fr["objects"]:
                 continue
-            t0_, t1_ = obs[0][0], obs[-1][0]
-            if not (t0_ <= t <= t1_):
+            # only between CONSECUTIVE anchors <= max_gap apart: a human
+            # track absent from in-between anchor frames is genuinely
+            # absent (off-frame/occluded — annotators label every image),
+            # and span-wide fill painted mid-air boxes across those gaps
+            times_h = [o[0] for o in obs]
+            i = bisect.bisect_right(times_h, t) - 1
+            if not (0 <= i < len(obs) - 1):
+                continue
+            ta_, tb_ = times_h[i], times_h[i + 1]
+            if not (ta_ < t < tb_) or tb_ - ta_ > max_gap:
                 continue
             key = (tid, t)
             if key in fills:
@@ -722,14 +740,7 @@ def densify_sparse_gt(anno_path, anchor_iomin=0.55, max_gap=1.5,
                                       "source": "autolabel_gtfill"}
                 added_fill += 1
             else:
-                import bisect
-                times_h = [o[0] for o in obs]
-                i = bisect.bisect_right(times_h, t) - 1
-                if i < 0 or i + 1 >= len(obs):
-                    continue
                 (ta, oa), (tb, ob) = obs[i], obs[i + 1]
-                if t <= ta or t >= tb:
-                    continue
                 w = (t - ta) / (tb - ta)
                 box = [a * (1 - w) + b * w
                        for a, b in zip(oa["box"], ob["box"])]
