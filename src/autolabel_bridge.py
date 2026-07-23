@@ -234,6 +234,10 @@ def augment_trackset_file(anno_path, video_path=None, min_conf=0.55,
     with open(tmp, "w") as fh:
         json.dump(doc, fh, indent=4)
     os.replace(tmp, anno_path)
+    # a frame entry claims FULL annotation: materialize the sparse
+    # keyframes onto the existing frame grid so added tracks are present
+    # on every frame they span (no per-frame blinking)
+    densify_augmented_tracks(anno_path, verbose=False)
     if verbose:
         print(f"  augmented {os.path.basename(anno_path)}: "
               f"+{added} autolabel tracks")
@@ -317,3 +321,293 @@ def augment_dataset(folder, limit=0, names=None, manifest=None, workers=None,
     print(f"augment_dataset {folder}: {done} augmented, "
           f"{skipped} already done, {failed} failed")
     return {"done": done, "skipped": skipped, "failed": failed}
+
+
+def tighten_trackset_file(anno_path, match_iou=0.4, min_conf=0.5,
+                          time_tol=0.08, work_dir=None, verbose=True):
+    """Tighten loose human-annotated GT boxes IN PLACE from the clip's
+    autolabel output; identities, spans and classes are untouched.
+    Idempotent (metadata flag). Returns #boxes tightened, or None if the
+    file was already tightened.
+
+    MEVA-style GT is actor-enclosing keyframe-interpolated geometry —
+    measured on school.G336: median 1.30x the area of the matched
+    detector box, 6% of pairs under IoU 0.5, i.e. misses under IoU-0.5
+    scoring even with perfect tracking. Per GT frame, same-class GT and
+    autolabel boxes (nearest autolabel frame within time_tol; covers
+    stride-2 exports) are matched 1:1 greedily by descending IoU; a GT
+    box is replaced iff its match has IoU >= match_iou and
+    conf >= min_conf, and gets "source": "autolabel_tight". Unmatched
+    frames keep the original loose box, so a track's geometry can
+    alternate; consumers wanting only tightened geometry can filter on
+    the per-box source. Boxes added by augmentation
+    ("source": "autolabel") are already tight and skipped.
+    """
+    import bisect
+
+    import numpy as np
+
+    doc = json.load(open(anno_path))
+    meta = doc.get("metadata", {})
+    if meta.get("autolabel_tightened"):
+        return None
+
+    dataset = os.path.basename(os.path.dirname(
+        os.path.dirname(os.path.abspath(anno_path))))
+    wd = work_dir or os.path.join("/mldata/autolabel_cache/v1/augment",
+                                  dataset)
+    al_json = os.path.join(
+        wd, os.path.splitext(os.path.basename(anno_path))[0]
+        + ".autolabel.json")
+    if not os.path.isfile(al_json):
+        raise FileNotFoundError(
+            f"no autolabel output for {anno_path}: {al_json} "
+            "(run augment_dataset / autolabel_video first)")
+    al = json.load(open(al_json))
+    al_frames = sorted(
+        ((float(f["frame_time"]),
+          [(np.asarray(o["box"], float), float(o.get("conf", 1.0)),
+            int(o["class"]))
+           for o in f["objects"].values()])
+         for f in al["frames"]), key=lambda x: x[0])
+    al_times = [t for t, _ in al_frames]
+
+    def iou(a, b):
+        ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+        iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+        i = ix * iy
+        u = ((a[2] - a[0]) * (a[3] - a[1])
+             + (b[2] - b[0]) * (b[3] - b[1]) - i)
+        return i / u if u > 0 else 0.0
+
+    tightened = total = 0
+    for f in doc["frames"]:
+        t = float(f["frame_time"])
+        k = bisect.bisect_left(al_times, t)
+        best = None
+        for kk in (k - 1, k):
+            if 0 <= kk < len(al_times) and abs(al_times[kk] - t) <= time_tol:
+                if best is None or (abs(al_times[kk] - t)
+                                    < abs(al_times[best] - t)):
+                    best = kk
+        gt_objs = [(tid, o) for tid, o in f["objects"].items()
+                   if o.get("source") not in ("autolabel", "autolabel_tight")]
+        total += len(gt_objs)
+        if best is None or not gt_objs:
+            continue
+        cands = [(b, c, cl) for b, c, cl in al_frames[best][1]
+                 if c >= min_conf]
+        # greedy 1:1 by descending IoU (a detection must not tighten two
+        # different GT people)
+        pairs = []
+        for gi, (tid, o) in enumerate(gt_objs):
+            for ai, (b, c, cl) in enumerate(cands):
+                if cl != int(o.get("class", 0)):
+                    continue
+                v = iou(o["box"], b)
+                if v >= match_iou:
+                    pairs.append((v, gi, ai))
+        pairs.sort(reverse=True)
+        used_g, used_a = set(), set()
+        for v, gi, ai in pairs:
+            if gi in used_g or ai in used_a:
+                continue
+            used_g.add(gi)
+            used_a.add(ai)
+            tid, o = gt_objs[gi]
+            o["box"] = [round(float(x), 4) for x in cands[ai][0]]
+            o["source"] = "autolabel_tight"
+            tightened += 1
+
+    meta["autolabel_tightened"] = {
+        "boxes_tightened": tightened, "boxes_total": total,
+        "match_iou": match_iou, "min_conf": min_conf,
+        "time_tol": time_tol, "source": os.path.basename(al_json)}
+    doc["metadata"] = meta
+    tmp = anno_path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(doc, fh, indent=4)
+    os.replace(tmp, anno_path)
+    make_tight_consistent(anno_path, verbose=False)
+    if verbose:
+        print(f"  tightened {os.path.basename(anno_path)}: "
+              f"{tightened}/{total} boxes")
+    return tightened
+
+
+def tighten_dataset(folder, limit=0, names=None, **kw):
+    """Tighten annotations in <folder>/annotation in place (skip
+    already-tightened; skip-and-count files with no autolabel output).
+    Run AFTER augment_dataset — it produces the per-clip autolabel JSONs
+    this reads. CPU-only and fast (~seconds per file)."""
+    anno_dir = os.path.join(folder, "annotation")
+    if names is not None:
+        names = [n if n.endswith(".json") else n + ".json" for n in names]
+        names = [n for n in sorted(names)
+                 if os.path.isfile(os.path.join(anno_dir, n))]
+    else:
+        names = sorted(f for f in os.listdir(anno_dir)
+                       if f.endswith(".json"))
+    done = skipped = missing = failed = 0
+    for n in names:
+        try:
+            r = tighten_trackset_file(os.path.join(anno_dir, n), **kw)
+            if r is None:
+                skipped += 1
+            else:
+                done += 1
+                if limit and done >= limit:
+                    break
+        except FileNotFoundError:
+            missing += 1
+        except Exception:
+            failed += 1
+            print(f"FAIL {n}\n{traceback.format_exc()}", flush=True)
+    print(f"tighten_dataset {folder}: {done} tightened, {skipped} already "
+          f"done, {missing} no-autolabel, {failed} failed")
+    return {"done": done, "skipped": skipped, "missing": missing,
+            "failed": failed}
+
+
+def make_tight_consistent(anno_path, verbose=True):
+    """Remove per-frame loose/tight geometry alternation left by
+    tightening IN PLACE. v1 tightening replaced only confidently-matched
+    frames, so a track could flip between loose GT geometry and tight
+    detector geometry frame to frame — visible as box "flashing",
+    especially on small boxes (194/314 tracks mixed on school.G336).
+
+    For every track that has at least one tightened box: interior runs
+    of loose frames between tightened frames get linearly interpolated
+    tight geometry; leading/trailing loose runs keep the loose box
+    CENTER (approximately unbiased) with the nearest tightened box's
+    width/height. Synthesized boxes get "source":
+    "autolabel_tight_interp". Idempotent (flag inside
+    metadata.autolabel_tightened); tighten_trackset_file calls this
+    automatically, so standalone use is only needed for files tightened
+    before the consistency pass existed. Returns #boxes rewritten, or
+    None if already consistent or never tightened.
+    """
+    import numpy as np
+
+    doc = json.load(open(anno_path))
+    meta = doc.get("metadata", {})
+    flag = meta.get("autolabel_tightened")
+    if not flag or flag.get("consistent"):
+        return None
+
+    # per track: ordered (frame_obj, is_tight, time)
+    tracks = {}
+    for f in doc["frames"]:
+        t = float(f["frame_time"])
+        for tid, o in f["objects"].items():
+            if o.get("source") == "autolabel":
+                continue
+            tracks.setdefault(tid, []).append((t, o))
+    rewritten = 0
+    for tid, obs in tracks.items():
+        obs.sort(key=lambda x: x[0])
+        tight = [i for i, (_, o) in enumerate(obs)
+                 if o.get("source") in ("autolabel_tight",
+                                        "autolabel_tight_interp")]
+        if not tight:
+            continue                       # fully loose track: consistent
+        tset = set(tight)
+        for i, (t, o) in enumerate(obs):
+            if i in tset:
+                continue
+            prev = max((j for j in tight if j < i), default=None)
+            nxt = min((j for j in tight if j > i), default=None)
+            if prev is not None and nxt is not None:
+                a = np.asarray(obs[prev][1]["box"], float)
+                b = np.asarray(obs[nxt][1]["box"], float)
+                ta, tb = obs[prev][0], obs[nxt][0]
+                w = (t - ta) / max(tb - ta, 1e-9)
+                box = a * (1 - w) + b * w
+            else:
+                near = prev if prev is not None else nxt
+                nb = np.asarray(obs[near][1]["box"], float)
+                lw, lh = nb[2] - nb[0], nb[3] - nb[1]
+                g = np.asarray(o["box"], float)
+                cx, cy = (g[0] + g[2]) / 2, (g[1] + g[3]) / 2
+                box = np.array([cx - lw / 2, cy - lh / 2,
+                                cx + lw / 2, cy + lh / 2])
+            o["box"] = [round(float(v), 4) for v in box]
+            o["source"] = "autolabel_tight_interp"
+            rewritten += 1
+    flag["consistent"] = True
+    flag["boxes_interp"] = flag.get("boxes_interp", 0) + rewritten
+    doc["metadata"] = meta
+    tmp = anno_path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(doc, fh, indent=4)
+    os.replace(tmp, anno_path)
+    if verbose:
+        print(f"  consistent {os.path.basename(anno_path)}: "
+              f"{rewritten} boxes interpolated")
+    return rewritten
+
+
+def densify_augmented_tracks(anno_path, max_gap=2.0, verbose=True):
+    """Materialize augmentation-added tracks onto the GT frame grid IN
+    PLACE. augment_trackset_file writes added tracks as sparse ~5fps
+    keyframes ("the reader interpolates"), but on dense per-frame GT
+    (MEVA: a box every 33ms) that convention mismatch makes added tracks
+    blink — present one frame in six (X.....X.) to any per-frame
+    consumer. For each consecutive keyframe pair closer than max_gap,
+    every EXISTING annotation frame strictly between them gets a
+    linearly interpolated box (box and conf); no new frames are created,
+    and gaps wider than max_gap are left absent — a long gap is genuine
+    occlusion, not keyframe spacing, and interpolating it would fabricate
+    an unsupported trajectory. Idempotent (flag inside
+    metadata.autolabel_augmented); augment_trackset_file calls this, so
+    standalone use is only needed for files augmented before it existed.
+    Returns #boxes added, or None if already dense (or never augmented).
+    """
+    import bisect
+
+    import numpy as np
+
+    doc = json.load(open(anno_path))
+    meta = doc.get("metadata", {})
+    flag = meta.get("autolabel_augmented")
+    if not flag or flag.get("dense"):
+        return None
+
+    frames = sorted(doc["frames"], key=lambda f: f["frame_time"])
+    times = [float(f["frame_time"]) for f in frames]
+    tracks = {}
+    for i, f in enumerate(frames):
+        for tid, o in f["objects"].items():
+            if o.get("source") == "autolabel":
+                tracks.setdefault(tid, []).append((i, o))
+    added = 0
+    for tid, obs in tracks.items():
+        for (ia, oa), (ib, ob) in zip(obs, obs[1:]):
+            ta, tb = times[ia], times[ib]
+            if not 0 < tb - ta <= max_gap or ib - ia < 2:
+                continue
+            a = np.asarray(oa["box"], float)
+            b = np.asarray(ob["box"], float)
+            ca, cb = float(oa.get("conf", 1.0)), float(ob.get("conf", 1.0))
+            for k in range(ia + 1, ib):
+                if tid in frames[k]["objects"]:
+                    continue
+                w = (times[k] - ta) / max(tb - ta, 1e-9)
+                box = a * (1 - w) + b * w
+                frames[k]["objects"][tid] = {
+                    "box": [round(float(v), 4) for v in box],
+                    "class": int(oa["class"]),
+                    "conf": round(ca * (1 - w) + cb * w, 4),
+                    "source": "autolabel"}
+                added += 1
+    flag["dense"] = True
+    flag["boxes_densified"] = flag.get("boxes_densified", 0) + added
+    doc["metadata"] = meta
+    tmp = anno_path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(doc, fh, indent=4)
+    os.replace(tmp, anno_path)
+    if verbose:
+        print(f"  densified {os.path.basename(anno_path)}: "
+              f"+{added} interpolated boxes")
+    return added
