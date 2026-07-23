@@ -517,6 +517,114 @@ class TrackSetImportersMixin:
             })
             self.frame_times.append(frame_idx / fps)
 
+    def import_chirla(self, annotation_json_path, video_path):
+        """Import one CHIRLA camera clip (per-frame JSON + avi).
+
+        CHIRLA (CC BY 4.0, bdager/CHIRLA on HF): indoor multi-camera
+        re-id/tracking; annotation is {frame_number(1-based, str):
+        [{"id": person_id, "BboxP": [x1,y1,x2,y2] pixels}, ...]} with
+        one key per video frame (empty list = nobody visible). Person
+        ids are globally consistent across cameras/sequences and serve
+        as track ids within a clip. Persons only.
+        """
+        with open(annotation_json_path) as fh:
+            anno = json.load(fh)
+
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise FileNotFoundError(f"Could not open {video_path}")
+        fps = float(cap.get(cv2.CAP_PROP_FPS)) or 30.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        if width <= 0 or height <= 0:
+            raise ValueError(f"Could not read frame size of {video_path}")
+
+        n = max(frame_count, max((int(k) for k in anno), default=0))
+        if frame_count and abs(n - frame_count) > 2:
+            raise ValueError(
+                f"annotation/video frame count mismatch: {n} keys vs "
+                f"{frame_count} frames in {video_path}")
+
+        self.metadata = {
+            "frame_rate": fps,
+            "width": width,
+            "height": height,
+            "classes": ["person", "vehicle", "other"],
+            "original_video": video_path,
+            "box_convention": "visible",
+        }
+        self.frames = []
+        for i in range(n):
+            objects = {}
+            for o in anno.get(str(i + 1), []):
+                x1, y1, x2, y2 = o["BboxP"]
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                objects[str(o["id"])] = {
+                    "box": [round(x1 / width, 4), round(y1 / height, 4),
+                            round(x2 / width, 4), round(y2 / height, 4)],
+                    "class": 0,
+                    "conf": 1.0,
+                }
+            self.frames.append({"frame_id": i,
+                                "frame_time": i / fps,
+                                "objects": objects})
+
+    def import_roundabouthd(self, sct_path, video_path):
+        """Import one RoundaboutHD camera (SCT_GT.txt + 4K mp4).
+
+        RoundaboutHD (Bath research data 1574, MIT): 4 non-overlapping
+        4K@15fps cameras over a roundabout, 10 min each, human-inspected
+        vehicle tracking GT. SCT_GT rows are space-separated
+        `frame_id track_id xmin ymin xmax ymax cls` in pixels, frames
+        1-based (SCT frame 1 == video frame 0). Vehicles only.
+        """
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise FileNotFoundError(f"Could not open {video_path}")
+        fps = float(cap.get(cv2.CAP_PROP_FPS)) or 15.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        if width <= 0 or height <= 0:
+            raise ValueError(f"Could not read frame size of {video_path}")
+
+        by_frame = {}
+        max_frame = 0
+        with open(sct_path) as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) < 7:
+                    continue
+                fi = int(parts[0]) - 1
+                x1, y1, x2, y2 = (float(v) for v in parts[2:6])
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                by_frame.setdefault(fi, {})[parts[1]] = {
+                    "box": [round(x1 / width, 4), round(y1 / height, 4),
+                            round(x2 / width, 4), round(y2 / height, 4)],
+                    "class": 1,
+                    "conf": 1.0,
+                }
+                max_frame = max(max_frame, fi)
+
+        n = frame_count if frame_count > 0 else max_frame + 1
+        self.metadata = {
+            "frame_rate": fps,
+            "width": width,
+            "height": height,
+            "classes": ["person", "vehicle", "other"],
+            "original_video": video_path,
+            "box_convention": "visible",
+        }
+        self.frames = [{"frame_id": i,
+                        "frame_time": i / fps,
+                        "objects": by_frame.get(i, {})}
+                       for i in range(n)]
+
     def import_jaad(self, annotation_xml_path, video_path):
         """Import a single JAAD clip (XML + mp4) into TrackSet format.
 
@@ -1061,6 +1169,98 @@ def _convert_meva_clip(args):
         print(f"  failed {stem}: {e}")
         return ("failed", stem)
     return ("done", stem)
+
+def convert_chirla(src_root="/mldata/downloaded_datasets/other/chirla",
+                   output_folder="/mldata/tracking/chirla"):
+    """Convert CHIRLA camera clips into trackset JSON + mp4 pairs.
+
+    Output stems: chirla_<seq>_<camera>_<timestamp> with ':' -> '-'
+    (colons break too many downstream tools). mpeg4-in-avi sources are
+    remuxed to mp4 (transcode fallback on broken pts, see
+    _remux_to_mp4). Existing outputs are not redone.
+    """
+    stuff.makedir(output_folder + "/annotation/")
+    stuff.makedir(output_folder + "/video/")
+
+    pairs = []
+    anno_root = os.path.join(src_root, "annotations")
+    for seq in sorted(os.listdir(anno_root)):
+        seq_dir = os.path.join(anno_root, seq)
+        if not os.path.isdir(seq_dir):
+            continue
+        for f in sorted(os.listdir(seq_dir)):
+            if not f.endswith(".json"):
+                continue
+            video = os.path.join(src_root, "videos", seq, f[:-5] + ".avi")
+            pairs.append((seq, os.path.join(seq_dir, f), video))
+    print(f"Found {len(pairs)} CHIRLA annotation files")
+
+    counts = {"done": 0, "already": 0, "missing": 0, "failed": 0,
+              "empty_gt": 0}
+    for seq, anno_path, video_path in pairs:
+        stem = ("chirla_" + seq + "_" +
+                os.path.basename(anno_path)[:-5].replace(":", "-"))
+        out_anno = output_folder + "/annotation/" + stem + ".json"
+        out_video = output_folder + "/video/" + stem + ".mp4"
+        if os.path.isfile(out_anno) and os.path.isfile(out_video):
+            counts["already"] += 1
+            continue
+        if not os.path.isfile(video_path):
+            print(f"  missing video for {anno_path}")
+            counts["missing"] += 1
+            continue
+        ts = trackset.TrackSet()
+        try:
+            ts.import_chirla(anno_path, video_path)
+            if not any(f["objects"] for f in ts.frames):
+                # 12/70 cameras were never visited; keep them out of the
+                # corpus rather than shipping all-empty "GT"
+                counts["empty_gt"] += 1
+                continue
+            if not os.path.isfile(out_video):
+                _remux_to_mp4(video_path, out_video)
+            ts.metadata["original_video"] = out_video
+            ts.export_yaml(out_anno)
+        except Exception as e:
+            print(f"  failed {stem}: {e}")
+            counts["failed"] += 1
+            continue
+        counts["done"] += 1
+        if counts["done"] % 10 == 0:
+            print(f"  {counts}")
+    print(f"chirla done. {counts}")
+
+
+def convert_roundabouthd(
+        src_root="/mldata/downloaded_datasets/other/bath_1574/RoundaboutHD",
+        output_folder="/mldata/tracking/roundabouthd"):
+    """Convert the 4 RoundaboutHD cameras into trackset JSON + mp4."""
+    stuff.makedir(output_folder + "/annotation/")
+    stuff.makedir(output_folder + "/video/")
+    import shutil
+    for cam in ("c001", "c002", "c003", "c004"):
+        stem = "roundabouthd_" + cam
+        out_anno = output_folder + "/annotation/" + stem + ".json"
+        out_video = output_folder + "/video/" + stem + ".mp4"
+        if os.path.isfile(out_anno) and os.path.isfile(out_video):
+            print(f"  {stem} already converted")
+            continue
+        cam_dir = os.path.join(src_root, "images" + cam)
+        video = os.path.join(cam_dir, "video.mp4")
+        sct = os.path.join(cam_dir, "SCT", "SCT_GT.txt")
+        if not (os.path.isfile(video) and os.path.isfile(sct)):
+            print(f"  {stem}: missing {video} or {sct}")
+            continue
+        ts = trackset.TrackSet()
+        ts.import_roundabouthd(sct, video)
+        if not os.path.isfile(out_video):
+            shutil.copy(video, out_video)
+        ts.metadata["original_video"] = out_video
+        ts.export_yaml(out_anno)
+        nb = sum(len(f["objects"]) for f in ts.frames)
+        print(f"  {stem}: {len(ts.frames)} frames, {nb} boxes")
+    print("roundabouthd done.")
+
 
 def convert_meva(src_root="/mldata/downloaded_datasets/other/MEVA",
                  output_folder="/mldata/tracking/meva",
