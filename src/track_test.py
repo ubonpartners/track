@@ -905,6 +905,22 @@ def track_test_work_fn(params, mpwq_context, mpwq_progress_fn):
                            # C pipeline only ever sees the window. Scoring
                            # is capped by the same value in compute_metrics.
                            end_time=params.get("max_duration", 100000))
+    result=score_tracksets(trackset_gt, trackset, params)
+
+    del trackset
+    del trackset_gt
+    logging.debug(f"set entry")
+    entry={"params":params,
+           "result":result,
+           "time":datetime.datetime.now()}
+
+    logging.debug(f"done")
+    return entry
+
+
+def score_tracksets(trackset_gt, trackset, params):
+    """The per-clip scoring block (person + per-class passes + fitness_multi),
+    shared by the mp work-fn and the single-shared-state path."""
     match_iou=0.45
     if "match_iou" in params:
         match_iou=params["match_iou"]
@@ -957,16 +973,130 @@ def track_test_work_fn(params, mpwq_context, mpwq_progress_fn):
     fm=fitness_multi_score(result, params.get("fitness_weights"))
     if fm is not None:
         result["fitness_multi"]=fm
+    return result
 
-    del trackset
-    del trackset_gt
-    logging.debug(f"set entry")
-    entry={"params":params,
-           "result":result,
-           "time":datetime.datetime.now()}
+def _clip_meta(json_path):
+    """{original_video, frame_rate} for a clip, via a tiny sidecar cache —
+    scheduling must not json.load a 200MB MOT20 annotation in the main
+    process. Built once per annotation (invalidated by annotation mtime)."""
+    meta_path = json_path + ".meta.json"
+    try:
+        m = json.load(open(meta_path))
+        if m.get("_mtime") == os.path.getmtime(json_path):
+            return m
+    except (OSError, ValueError):
+        pass
+    md = json.load(open(json_path)).get("metadata") or {}
+    m = {"original_video": md.get("original_video"),
+         "frame_rate": md.get("frame_rate"),
+         "_mtime": os.path.getmtime(json_path)}
+    with open(meta_path, "w") as f:
+        json.dump(m, f)
+    return m
 
-    logging.debug(f"done")
-    return entry
+
+def _single_metrics_worker(args):
+    """CPU pool worker for the single-shared-state path: GT load + results
+    conversion + scoring. No GPU, no CUDA context."""
+    (params, track_results, class_names, attr_names) = args
+    from src.upyc_tracker.upyc_tracker import upyc_results_view
+    target_classes = params.get("target_classes", ["person", "face"])
+    view = upyc_results_view(track_results, class_names, attr_names, target_classes)
+    trackset_gt = ts.TrackSet(params["ds_path"])
+    trackset = ts.TrackSet()
+    trackset.import_create(trackset_gt,
+                           track_min_interval=params["min_interval"],
+                           display=params["display"],
+                           config_file=None,
+                           params={"target_classes": target_classes},
+                           tracker=view,
+                           mpwq_context=None,
+                           mpwq_progress_fn=lambda *a, **k: None,
+                           end_time=params.get("max_duration", 100000))
+    result = score_tracksets(trackset_gt, trackset, params)
+    return {"params": params, "result": result,
+            "time": datetime.datetime.now()}
+
+
+def run_single_shared(config, tests_to_run, desc, max_streams):
+    """The single-shared-state eval path (MB design 2026-07-23): ONE
+    c_track_shared_state per test (one engine set, one CUDA context),
+    every clip submitted as its own c_track_stream — at most max_streams
+    in flight, harvesting the OLDEST before submitting the next. Per-clip
+    config (stream_hint) rides the per-stream yaml, exactly the production
+    merge path. Scoring runs in a CPU pool as streams complete, so the GPU
+    pump never waits on metrics. Replaces 8 processes x 8 engine copies
+    with 1 x 1 and much higher stream concurrency."""
+    import ubon_pycstuff.ubon_pycstuff as upyc
+    from src.upyc_tracker.upyc_tracker import trim_aux_outputs, h264_for_video
+    from multiprocessing import Pool
+    from collections import deque
+    import src.trackset as _  # noqa: ensure module import before workers fork
+
+    by_test = {}
+    for p in tests_to_run:
+        by_test.setdefault(p["test_key"], []).append(p)
+
+    entries = []
+    n_cpu = max(4, (os.cpu_count() or 8) // 4)
+    with Pool(n_cpu) as pool:
+        pending = []
+        for test_key, items in by_test.items():
+            # shared config = the tracker yaml + overrides, munged EXACTLY
+            # like the per-clip path (import_create's merge + aux trim).
+            base = items[0]
+            param_dict = {}
+            cfg = base["config"]
+            cfg = stuff.load_dictionary(cfg) if isinstance(cfg, str) else copy.deepcopy(cfg)
+            param_dict.update(copy.deepcopy(cfg))
+            override = base.get("main_config_override")
+            if override:
+                def _deep_merge(dst, src):
+                    for k, v in src.items():
+                        if isinstance(v, dict) and isinstance(dst.get(k), dict):
+                            _deep_merge(dst[k], v)
+                        else:
+                            dst[k] = v
+                _deep_merge(param_dict, copy.deepcopy(override))
+            param_dict.pop("target_classes", None)
+            trim_aux_outputs(param_dict)
+            import yaml as _yaml
+            shared = upyc.c_track_shared_state(_yaml.dump(param_dict))
+            md = shared.get_model_description()
+            class_names, attr_names = md["class_names"], md["person_attribute_names"]
+
+            win = deque()
+
+            def harvest():
+                item, st = win.popleft()
+                results = st.get_results(3600.0)
+                del st
+                pending.append(pool.apply_async(
+                    _single_metrics_worker,
+                    ((item, results, class_names, attr_names),)))
+
+            for item in items:
+                meta = _clip_meta(item["ds_path"])
+                cap = item.get("max_duration", 100000)
+                cap = cap if cap < 9000 else None
+                h264 = h264_for_video(meta["original_video"], max_seconds=cap)
+                if item.get("stream_hint"):
+                    st = upyc.c_track_stream(shared, _yaml.dump({"stream_hint": item["stream_hint"]}))
+                else:
+                    st = upyc.c_track_stream(shared)
+                st.set_name(item["ds_key"])
+                st.set_frame_intervals(item["min_interval"], -1.0)
+                st.run_on_video_file(h264, upyc.SIMPLE_DECODER_CODEC_H264,
+                                     meta["frame_rate"], False)
+                win.append((item, st))
+                if len(win) >= max_streams:
+                    harvest()
+            while win:
+                harvest()
+            del shared
+        entries = [p.get() for p in pending]
+    return entries
+
 
 def on_result_callback(mpwq_context, result):
     cache=True
@@ -1075,6 +1205,32 @@ def track_test(config, split=None, desc="track test"):
             else:
                 output_results.append(result)
 
+
+    # LARGEST-FIRST dispatch: tried 2026-07-23 and REVERTED on measurement —
+    # 793s vs 182s unsorted (4.3x WORSE). Sorting by annotation size
+    # co-schedules the giant-GT clips (MOT20/PP22, 100-200MB JSONs ->
+    # gigabytes parsed EACH) into one concurrency window; the resulting
+    # memory pressure dwarfs the ~40s queue-tail it was meant to save.
+    # If tail-packing is ever revisited it must interleave memory monsters,
+    # not cluster them.
+
+    # single_shared_streams: N = the MB single-shared-state path (one engine
+    # set, N concurrent streams, CPU-pool scoring). Absent = the mp path.
+    if config.get("single_shared_streams"):
+        results = run_single_shared(config, tests_to_run, desc,
+                                    int(config["single_shared_streams"]))
+        for entry in results:
+            output_results.append(entry)
+        for o in output_results:
+            if "time" in o:
+                o["result"]["time"]=(datetime.datetime.now()-o["time"]).total_seconds()
+            if "group" in config["datasets"][o["params"]["ds_key"]]:
+                o["group"]=config["datasets"][o["params"]["ds_key"]]["group"]
+        results2=display_results(config, output_results, columns, config["sort_key"])
+        elapsed=time.time()-start_time
+        _write_eval_summary_json(config, output_results, results2, elapsed)
+        print(f"All done (single-shared): Evaluated {len(tests_to_run)} tests in {stuff.timestr(elapsed)}")
+        return results2
 
     cached_results_new=[r for r in cached_results if "need_regenerate" not in r["params"]]
     logging.info(f"cached results {len(cached_results)}; deleting {len(cached_results)-len(cached_results_new)} need to run {len(tests_to_run)} tests")
