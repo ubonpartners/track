@@ -660,14 +660,34 @@ class TrackSet(TrackSetImportersMixin):
                 events=display.get_events(0)
 
             if frame_result is not None:
-                img_path=video.img_path_at_time(t) if cap is None else None
-                self.add_frame_result(frame_result, img_path=img_path)
+                # VFR/jittery sources (OTW doorbell cams) can step a frame
+                # timestamp BACKWARD (the decoder logs "unexpected delta ...;
+                # resetting" and carries on). A non-monotonic result used to
+                # trip add_frame's assert and kill the whole eval worker at
+                # 90% of a clip — drop the blip instead and say so once.
+                ft=frame_result["frame_time"]
+                if len(self.frame_times)>0 and ft<=self.frame_times[-1]:
+                    nonmono_dropped=getattr(self, "_nonmono_dropped", 0)+1
+                    self._nonmono_dropped=nonmono_dropped
+                    if nonmono_dropped==1:
+                        import logging
+                        logging.warning(
+                            f"{self.name}: non-monotonic frame time {ft:.4f} after "
+                            f"{self.frame_times[-1]:.4f} — dropping (VFR source jitter; "
+                            f"further drops counted silently)")
+                else:
+                    img_path=video.img_path_at_time(t) if cap is None else None
+                    self.add_frame_result(frame_result, img_path=img_path)
             fn+=1
             if pbar is not None:
                 pbar.update(1)
             elif mpwq_progress_fn is not None:
                 mpwq_progress_fn(mpwq_context, update=1)
 
+        if getattr(self, "_nonmono_dropped", 0) > 0:
+            import logging
+            logging.warning(f"{self.name}: dropped {self._nonmono_dropped} "
+                            f"non-monotonic frame result(s) (VFR source jitter)")
         if cap is not None:
             cap.release()
 
