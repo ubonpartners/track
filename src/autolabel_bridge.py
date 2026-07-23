@@ -635,10 +635,27 @@ def densify_sparse_gt(anno_path, anchor_iomin=0.55, max_gap=1.5,
     for obs in al_tracks.values():
         obs.sort(key=lambda x: x[0])
 
-    def al_box_at(tid, t, tol=0.06):
+    def al_box_at(tid, t, max_bracket=0.5):
+        """Autolabel track's box AT time t: exact/near sample, else lerp
+        between the bracketing samples. A hard nearest-sample tolerance
+        breaks when the GT anchor cadence is an odd multiple of the
+        autolabel sampling stride (justin: anchors every 15 retained
+        frames, autolabel every 2 -> alternate anchors sit half a grid
+        step off and EVERY anchor pair failed -> 0 matches)."""
+        import bisect
         obs = al_tracks[tid]
-        best = min(obs, key=lambda x: abs(x[0] - t))
-        return best if abs(best[0] - t) <= tol else None
+        times = [o[0] for o in obs]
+        i = bisect.bisect_left(times, t)
+        lo = obs[i - 1] if i > 0 else None
+        hi = obs[i] if i < len(obs) else None
+        for o in (lo, hi):
+            if o and abs(o[0] - t) <= 0.02:
+                return o
+        if lo and hi and hi[0] - lo[0] <= max_bracket:
+            w = (t - lo[0]) / (hi[0] - lo[0])
+            box = [a * (1 - w) + b * w for a, b in zip(lo[1], hi[1])]
+            return (t, box, lo[2], min(lo[3], hi[3]))
+        return None
 
     # human observations: tid -> sorted [(t, rec)]
     frames = sorted(doc["frames"], key=lambda f: f["frame_time"])

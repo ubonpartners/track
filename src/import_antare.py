@@ -3,9 +3,21 @@
 # Source: /mldata/downloaded_datasets/antare/labelled_videos/<name>/
 #   <name>            the video (folder name includes .mp4)
 #   MOT/gt.txt        MOT16-style rows: frame,id,x,y,w,h,conf,class,vis
-#                     FRAME INDEXES THE 1FPS EXTRACTED IMAGES (Raw
-#                     images_1fps/), i.e. frame N = t ~= (N-1) seconds.
-#                     Coordinates are SOURCE-resolution pixels.
+#                     FRAME INDEXES THE "1FPS" EXTRACTED IMAGES (Raw
+#                     images_1fps/): image k IS source frame k*stride in
+#                     PTS order (stride = nframes/nimages, e.g. 24/30) —
+#                     pixel-verified against the given jpegs (mean|diff|
+#                     ~0.2-2 at the frame hypothesis vs 14-46 at the old
+#                     (N-1)*1.0s guess). NOT at t=(N-1)s: the GoPro
+#                     escooter clip is VFR (40/50ms intervals mixed) and
+#                     justin's stream STARTS at pts 6.009s. Annotation
+#                     times are expressed on the timeline the tracker
+#                     actually uses — frame_index/out_fps over RETAINED
+#                     chunk frames (upyc run_on_video_file feeds a raw
+#                     elementary stream and stamps t=n/fps uniformly;
+#                     container PTS never reaches it) — so the mapping
+#                     that matters is image -> retained-frame INDEX, not
+#                     image -> pts. Coordinates are SOURCE pixels.
 #   MOT/labels.txt    class names, 1-based line order = class ints in gt.txt
 #
 # Import (per video):
@@ -88,8 +100,33 @@ def chunk_spans(duration):
     return spans
 
 
+def frame_pts(video):
+    """All video frame times in PTS order (packet-level: no decode)."""
+    out = subprocess.check_output(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "packet=pts_time", "-of", "json", video])
+    return sorted(float(p["pts_time"])
+                  for p in json.loads(out)["packets"] if "pts_time" in p)
+
+
+def image_stride(video, image_dir):
+    """(pts_list, stride): image k = source frame k*stride in PTS order.
+    Stride recovered from the given jpegs (nframes/nimages); the identity
+    was pixel-verified against them — see header."""
+    n_images = len([f for f in os.listdir(image_dir)
+                    if f.lower().endswith((".jpg", ".jpeg", ".png"))])
+    pts = frame_pts(video)
+    stride = round(len(pts) / n_images)
+    assert stride >= 1 and abs(len(pts) / stride - n_images) <= 1, \
+        f"{video}: {len(pts)} frames / {n_images} images -> stride {stride} inconsistent"
+    assert stride % 2 == 0 or len(pts) / (pts[-1] - pts[0]) < FPS_HALVE_THRESHOLD, \
+        f"{video}: odd stride {stride} would put annotations on dropped frames when halving"
+    return pts, stride
+
+
 def load_gt(mot_dir):
-    """gt.txt + labels.txt -> [(t_seconds, track_id, x, y, w, h, cls_name)]."""
+    """gt.txt + labels.txt -> [(image_index_0based, track_id, x, y, w, h,
+    cls_name)]. gt.txt frame N is 1-based over the extracted images."""
     labels = [l.strip() for l in open(os.path.join(mot_dir, "labels.txt"))
               if l.strip()]
     rows = []
@@ -101,8 +138,20 @@ def load_gt(mot_dir):
         x, y, w, h = (float(v) for v in parts[2:6])
         cls_i = int(parts[7])
         name = labels[cls_i - 1] if 1 <= cls_i <= len(labels) else "other"
-        rows.append(((fr - 1) * 1.0, tid, x, y, w, h, name))
+        rows.append((fr - 1, tid, x, y, w, h, name))
     return rows
+
+
+def retained_positions(pts, t0, t1, halve):
+    """{global_frame_index: position among this chunk's RETAINED frames}.
+    Mirrors transcode_chunk's select exactly: pts window + global parity.
+    Position/out_fps is the tracker's uniform timeline for the chunk."""
+    pos, i = {}, 0
+    for n, t in enumerate(pts):
+        if t0 <= t < t1 - 1e-4 and (not halve or n % 2 == 0):
+            pos[n] = i
+            i += 1
+    return pos
 
 
 def transcode_chunk(src, dst, t0, t1, dims, halve):
@@ -120,17 +169,22 @@ def transcode_chunk(src, dst, t0, t1, dims, halve):
          "-cq", "23", "-g", "24", "-bf", "0", dst])
 
 
-def chunk_annotation(rows, t0, t1, src_w, src_h, out_fps, video_path):
-    """Rows within [t0, t1) -> trackset json dict, chunk-local times."""
+def chunk_annotation(rows, pos, stride, out_fps, src_w, src_h, video_path,
+                     cadence=1.0):
+    """GT rows whose image-frame is retained in this chunk -> trackset
+    json dict; times on the tracker's uniform retained-index/fps
+    timeline."""
     by_time = {}
-    for (t, tid, x, y, w, h, name) in rows:
-        if not (t0 <= t < t1):
+    for (k, tid, x, y, w, h, name) in rows:
+        g = k * stride
+        if g not in pos:
             continue
+        t_local = pos[g] / out_fps
         cls = CLASS_MAP.get(name, "other")
         rec = {"box": [round(x / src_w, 5), round(y / src_h, 5),
                        round((x + w) / src_w, 5), round((y + h) / src_h, 5)],
                "class": GT_CLASSES.index(cls), "conf": 1.0}
-        by_time.setdefault(round(t - t0, 3), {})[str(tid)] = rec
+        by_time.setdefault(round(t_local, 4), {})[str(tid)] = rec
     frames = [{"frame_id": i + 1, "frame_time": t, "objects": objs}
               for i, (t, objs) in enumerate(sorted(by_time.items()))]
     return {
@@ -139,8 +193,9 @@ def chunk_annotation(rows, t0, t1, src_w, src_h, out_fps, video_path):
             "width": src_w, "height": src_h,   # normalized boxes: any consistent pair
             "classes": GT_CLASSES,
             "original_video": video_path,
-            # sparse human GT at 1Hz — densify_sparse_gt targets this flag
-            "sparse_gt": {"annotation_cadence_s": 1.0,
+            # sparse human GT (~1Hz; measured mean image spacing) —
+            # densify_sparse_gt targets this flag
+            "sparse_gt": {"annotation_cadence_s": round(cadence, 4),
                           "source": "antare/labelled_videos"},
         },
         "frames": frames,
@@ -156,6 +211,8 @@ def import_video(folder, out_root):
     halve = fps >= FPS_HALVE_THRESHOLD
     dims = scale_dims(w, h)
     out_fps = fps / 2 if halve else fps
+    pts, stride = image_stride(src, os.path.join(folder, "Raw images_1fps"))
+    cadence = stride / out_fps / (2 if halve else 1)  # image spacing on tracker timeline
     rows = load_gt(os.path.join(folder, "MOT"))
     os.makedirs(os.path.join(out_root, "video"), exist_ok=True)
     os.makedirs(os.path.join(out_root, "annotation"), exist_ok=True)
@@ -170,8 +227,10 @@ def import_video(folder, out_root):
                j.get("metadata", {}).get("autolabel_augmented"):
                 made.append(stem)
                 continue   # idempotent
-        transcode_chunk(src, vpath, t0, t1, dims, halve)
-        doc = chunk_annotation(rows, t0, t1, w, h, out_fps, vpath)
+        if not os.path.isfile(vpath):   # video content is annotation-independent
+            transcode_chunk(src, vpath, t0, t1, dims, halve)
+        pos = retained_positions(pts, t0, t1, halve)
+        doc = chunk_annotation(rows, pos, stride, out_fps, w, h, vpath, cadence)
         ntracks = len({tid for f in doc["frames"] for tid in f["objects"]})
         with open(jpath + ".tmp", "w") as f:
             json.dump(doc, f)
