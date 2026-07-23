@@ -87,7 +87,11 @@ periodic validate logging.
 That shape is defensible: ~20 dims, expensive evals (minutes each),
 deterministic — gradient-free coordinate methods are a reasonable
 choice, and its trajectory is human-readable (a real virtue given how
-much these logs get eyeballed). Improvements in value order:
+much these logs get eyeballed). Improvements in value order
+(STATUS 2026-07-23: 1, 4, 5 IMPLEMENTED; 2 retracted; 3 downgraded —
+the caching insight applies here too: a retry probe at an unchanged
+vec_best is a cache hit, so the annealing tail only pays after real
+movement or a multiplier change; 6 half-covered by 1; 7 unchanged):
 
 1. **Parallelise the probes.** `score_up` and `score_down` are two
    sequential full evals, each of which parallelises over clips but
@@ -132,6 +136,10 @@ much these logs get eyeballed). Improvements in value order:
 
 ## 3. Code review (src/track_search.py)
 
+STATUS 2026-07-23: everything below is FIXED except the SearchParam
+dataclass refactor (parallel lists kept — the loop now has behavioural
+tests, which was the risk the dataclass was meant to reduce).
+
 - **Dead duplicate imports** at file bottom (`import copy / stuff /
   track_test / datetime` after `search_track`) — delete.
 - **In-place base-config mutation**: `search_test` loads
@@ -168,7 +176,11 @@ per-param improvement attribution). Gaps: nothing machine-readable per
 iteration, no per-group visibility during a search (you can't see "bwc
 got better, cctv flat" without rerunning), no visual trajectory.
 
-Recommended, in cost order:
+Recommended, in cost order (STATUS 2026-07-23: ALL IMPLEMENTED —
+search_journal_*.jsonl doubles as resume_from state; validate blocks log
+per-group levels + deltas; search_report_*.html regenerates each
+validate; eval runs emit sortable results-*.html; colorize now shows
+negatives in red instead of blanking them):
 
 1. **JSONL search journal** (doubles as the resume journal, §2.5): one
    line per eval — {iter, param, direction, vec, split, score, and the
@@ -203,12 +215,31 @@ Recommended, in cost order:
   loose for them and standard practice is 0.5–0.7 — when vehicle
   numbers start mattering, make match_iou per-class (plumbing exists:
   the per-class compute_metrics call).
-- **`max_age_days: 21` and `regen_*` keys** in the yamls are consumed
-  nowhere in the current code path that I can find — either wire them
-  back or delete them from the yamls so they stop implying behaviour.
+- ~~`max_age_days` / `regen_tests` / `regen_datasets`~~ — confirmed
+  unconsumed, REMOVED from both yamls (2026-07-23). Per-dataset
+  `regenerate:` remains and works. autolabel's `eval/score_vehicles.py`
+  deleted (plan P2 item 8 — `mota_vehicle` replaces it).
 - The mc yaml carries `include_families` listing every family — it is
   now a no-op allow-everything list; keep it only if the subset
   workflow (comment a family out) is actually used.
 - `num_workers: auto` resolves from GPU count; with batched candidates
   (§2.1) the right worker count becomes candidates×clips-aware —
   revisit then.
+
+
+## 6. Post-review rationalisation (2026-07-23, MB direction)
+
+The family/group/stream_hint triple had grown seven groups and an
+implicit hint mapping — too much taxonomy. Rationalised in
+track_search_v11_mc.yaml (full explanation in its header):
+
+- **group is now the ONE behavioural axis that matters**: `static`
+  (fixed mounts), `moving` (ego-motion: bodycam + dashcam + handheld
+  pp22), `movie` (cut scenes, visibility only). _groupmean therefore
+  votes static/moving/movie equally — the old 7-group mean gave
+  static-style content 4 of 7 votes.
+- **one hint value**: every `moving` clip carries `stream_hint:
+  bodycam`, read as "the moving-camera profile" (the vocabulary
+  operators already have). Static = unhinted default. A movie profile
+  only appears if cut handling ever needs its own parameters.
+- family stays as pure provenance/reporting.
