@@ -94,18 +94,32 @@ whatever the C side reads, pass it through verbatim). Convention:
 per-type report lines for free.
 
 ### 6. Hint-scoped search parameters
-`_set_nested_param` already addresses dotted paths into the tracker
-config, so if utrack's per-hint parameters live under nested sections
-(e.g. `hints.bwc.<param>`), today's `search_params` can already search
-them — nothing to build, just name them in the yaml:
+**Hint contract CONFIRMED against ubon_cstuff (2026-07-23):** the
+per-stream key is `stream_hint:` in the stream config, the resolved
+vocabulary is `"normal" | "bodycam" | "wide" | deployment-defined`
+(ubon_cstuff include/track.h:126), and per-hint parameter overrides are
+the **`key(hint:x)` variant-axis suffix** — NOT a nested `hints.x.*`
+section (utrack.c: "per-stream profiles use `(hint:x)`"). So:
+
+- §5's dataset key passes through as `stream_hint` with those values
+  (bwc clips → `stream_hint: bodycam`);
+- searchable per-hint parameters are spelled
 
 ```yaml
 search_params:
-  hints.bwc.track_threshold: {initial: ..., step: ..., min: ..., max: ...}
+  track_initial_thr(hint:bodycam): {step: ..., min: ..., max: ...}
 ```
+
+- `_set_nested_param`'s exact-key match handles this only if the key
+  string `track_initial_thr(hint:bodycam)` EXISTS in the base tracker
+  yaml — the search aborts on a missing key by design. So seeding
+  uc_v11.yaml (or the mc derivative) with the hint-variant keys at
+  production base values is a prerequisite step for any hint-scoped
+  search.
+
 This is the mechanism for "optimize BWC without touching CCTV": search
-ONLY `hints.bwc.*` / `hints.dashcam.*` keys; base/cctv parameters stay
-frozen at production values.
+ONLY `(hint:bodycam)` / `(hint:<dashcam-profile>)` variant keys; base
+parameters stay frozen at production values.
 
 ### 7. Regression guard for protected groups
 Even with frozen base params, shared-code effects can leak. Add an
@@ -148,6 +162,58 @@ weight-tuning hope.
     `eval/sequences.py`) can be revisited — the augmented sets are
     "fully annotated" for person+vehicle. Keep them out of *frozen* eval
     sets; they're optimization fodder (that's their purpose here).
+
+## §14. The multi-class search set: track_search_v11_mc.yaml (CREATED 2026-07-23)
+
+`/mldata/config/track/search/track_search_v11_mc.yaml` exists — derived
+from `track_search_v11.yaml`, and runnable TODAY (person-only scoring
+until P0 lands; the multi-class blocks are staged in comments):
+
+- **classes**: `person, vehicle`. `result_log_file_path` is segregated
+  (`track_v11_mc`) per §10 so stale single-class cache rows can't merge in.
+- **kept**: every v11 dataset unchanged, now with `group:` tags —
+  mot17/mot20/cevo/cevo_april25 → `cctv` (the frozen, protected staples),
+  personpath22 → `pp22`, jaad → `dashcam`.
+- **added**: the five labelled-track families, each with `group:` —
+  bwc_videotext(71 clips → `bwc`), meva(50 → `meva`), otw(50 → `otw`),
+  bdd100k_mot(48 → `dashcam`), raw_movies(7 → `movie`).
+- **staged in comments, switch on when P0/P1 land**:
+  `result_dataset_opt_param: fitness_multi`, `fitness_weights
+  {person 1.0, vehicle 0.3}`, the `protect` cctv floor (fill from the
+  baseline run), and the vehicle report columns.
+
+**Train/val/test partition of the new families** (~1/3 each; the test
+third is IN THE FILE but COMMENTED OUT — withheld for final-report
+evaluation, never optimization):
+
+| family | train | val | test (withheld) | how the thirds were chosen |
+|---|---|---|---|---|
+| bwc_videotext | 25 | 23 | 23 | stratified round-robin on vehicle-richness then activity (each third gets vehicle-heavy, person-heavy and quiet clips); the one zero-GT clip (video279) pinned to train as an FP probe |
+| meva | 17 | 17 | 16 | **camera-disjoint**: all clips of one mount stay in one third (5-min clips of the same camera are near-duplicates — splitting them across thirds would leak). 24 mounts dealt so each third mixes bus/school/hospital sites, morning/afternoon/evening, and the 03-07…03-15 dates. admin mounts (2) land in train+val only |
+| otw | 17 | 17 | 16 | stratified round-robin on vehicle-richness then activity; the two vehicle-outlier clips (homes_00352: 49v, homes_00399: 26v) land in different thirds |
+| bdd100k_mot | 16 | 16 | 16 | stratified round-robin on PERSON-richness (pedestrian-heavy dashcam scenes are the scarce resource), then vehicle count |
+| raw_movies | 2 | 3 | 2 | hand-balanced by style + GT volume: train {Food_van, Good_Fortune}, val {John_Wick, TheOdyssey, TheEndOfOakStreet}, test {DisclosureDay, The_Studio} (~440/300/365 GT tracks) |
+
+Every entry carries a `# gt_tracks=N (p=… v=…)` comment; families are
+listed slowest-first (gt_tracks proxy) matching v11 convention.
+
+Review notes folded in while building it (beyond §6's hint-contract fix):
+
+- **Per-class scoring floor**: `min_person_height: 0.04` is
+  person-shaped. Vehicles are often wide-and-short, so either add a
+  per-class floor (`min_vehicle_height`, likely smaller) or exempt
+  vehicle from the height gate when §2 lands — do NOT silently apply the
+  person floor to vehicle GT.
+- **fitness_multi zero-GT guard**: a class with zero GT in a dataset
+  must contribute weight 0 for that dataset (not fitness 0), or vehicle
+  weighting drags down person-only datasets in `_overall`.
+- **'other' class**: the new sets carry substantial `other` GT (MEVA
+  especially — 255 tracks in one clip). track_test already ignores
+  `other` via the ignore-class path (track_test.py:313) — keep it that
+  way in the per-class loop; `other` must never enter `fitness_multi`.
+- **Baseline protocol**: record the §7 protect floor from one
+  `eval_track` of the production config over exactly this file's
+  train+val rows (never the commented test third), then fill the TBD.
 
 ## Suggested first search (once P0+P1 land)
 
