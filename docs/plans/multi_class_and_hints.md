@@ -112,10 +112,9 @@ search_params:
 
 - `_set_nested_param`'s exact-key match handles this only if the key
   string `track_initial_thr(hint:bodycam)` EXISTS in the base tracker
-  yaml — the search aborts on a missing key by design. So seeding
-  uc_v11.yaml (or the mc derivative) with the hint-variant keys at
-  production base values is a prerequisite step for any hint-scoped
-  search.
+  yaml — the search aborts on a missing key by design. **§15 removes
+  this prerequisite**: path-addressed params create the variant block
+  and seed its initial value from the base key.
 
 This is the mechanism for "optimize BWC without touching CCTV": search
 ONLY `(hint:bodycam)` / `(hint:<dashcam-profile>)` variant keys; base
@@ -214,6 +213,132 @@ Review notes folded in while building it (beyond §6's hint-contract fix):
 - **Baseline protocol**: record the §7 protect floor from one
   `eval_track` of the production config over exactly this file's
   train+val rows (never the commented test third), then fill the TBD.
+
+## §15. Path-addressed + hint-split search parameters (ADDED 2026-07-23)
+
+### 15.1 The problem, precisely
+
+`_set_nested_param` (track_search.py:27) walks the whole config tree for
+an **exact bare-name match** and refuses ambiguity. Consequences today:
+
+- `utrack:` keys work only because they happen to be globally unique;
+  `mad_delta` reaches `motiontrack:` by the same luck.
+- Most of `motiontrack:` is UNREACHABLE — `alpha`, `beta`, `blur`,
+  `max_width/max_height` collide with other sections (top-level,
+  thumbnail_stream, faces, clip), so the ambiguity assert fires.
+- The new `roi_scan:` section (ubon_cstuff 6a2c659, 2026-07-22 — nine
+  keys: `cols, split0, split1, overlap, hires_max, activity_area,
+  min_age_lo, min_age_hi, cover_frac`) is reachable by luck today, but
+  any collision (e.g. a future `overlap` elsewhere) breaks it. NOTE:
+  uc_v11.yaml on /mldata still has NO `roi_scan:` section (defaults
+  apply) — searching it requires seeding the section, or the
+  create-on-write below.
+- `_update_initial_parameters` (same file) seeds initial values by the
+  same bare-name walk and has the same ambiguity hole.
+
+### 15.2 Path addressing (small, mechanical)
+
+Accept dotted paths in `search_params` keys, walking segments
+explicitly; bare names keep the current match-anywhere behaviour
+(back-compat for every existing yaml):
+
+```yaml
+search_params:
+  utrack.sim_weight:        {min: 0.0, max: 1.0,  step: 0.01}
+  motiontrack.mad_delta:    {min: 0.0, max: 500,  step: 1.0}
+  motiontrack.alpha:        {...}     # unreachable today; works with paths
+  roi_scan.min_age_lo:      {...}
+```
+
+Implementation: in `_set_nested_param`, split the key on `.`; descend
+dict segments, creating empty dicts for missing INTERMEDIATE segments
+only when the leaf is a variant path (15.3) — a missing plain path still
+asserts (typo protection). Mirror the same resolution in
+`_update_initial_parameters`. Report columns / log labels use the full
+path string. `(hint:x)` parentheses are opaque to the split — only `.`
+separates segments.
+
+### 15.3 Hint-split parameters (directed, not automatic)
+
+ubon_cstuff resolves variants by `yaml_apply_variant(cfg, "hint",
+stream_hint)` over the WHOLE merged config before anything reads it, and
+a SECTION takes one suffixed block that deep-merges:
+`utrack(hint:bodycam): {kf_weight: 0.5}` overrides just that key for
+bodycam streams; everything else inherits base. So the search needs no
+new C-side mechanism — it just writes into variant blocks:
+
+```yaml
+search_params:
+  utrack.kf_weight:                     {min: 0.02, max: 20, step: 0.02}
+  utrack(hint:bodycam).kf_weight:       {min: 0.02, max: 20, step: 0.02}
+  roi_scan(hint:wide).min_age_lo:       {min: 0.5,  max: 20, step: 0.5}
+```
+
+Rules:
+
+- **Create-on-write**: the variant block need not exist in the base
+  config; `_set_nested_param` creates `utrack(hint:bodycam): {}` and
+  writes the leaf. (This supersedes §6's seeding prerequisite.)
+- **Seed from base**: when the variant leaf is absent,
+  `_update_initial_parameters` takes the initial value from the BASE
+  path (`utrack.kf_weight`) — a split always starts at the shared
+  optimum, so iteration 0 is behaviour-identical to the unsplit config.
+- **Directed only**: nothing splits automatically. A convenience
+  expander is worth having once the primitive works:
+
+  ```yaml
+  search_params:
+    utrack.kf_weight: {min: 0.02, max: 20, step: 0.02, split_hints: [bodycam, dashcam]}
+  ```
+
+  expands to the base param plus one variant param per listed hint —
+  three search dimensions from one line, each independently steppable.
+- **Harness prerequisite**: §5's `stream_hint` flow must be live, or the
+  variant blocks are dead weight the eval never exercises (hint values
+  ride the per-dataset key: bwc → `bodycam`, bdd → `dashcam`, …). The
+  hint is an open string on the C side, so `dashcam` needs no C change.
+- **Cost discipline**: every split parameter is one more search
+  dimension. Split only where the optimum plausibly DIFFERS by stream
+  physics (15.4), and only for hints whose datasets are in the run.
+
+### 15.4 Which parameters to split per stream type (recommendation)
+
+The physics: bodycam/dashcam have strong EGO-MOTION (the whole frame
+moves; motion prediction and frame-difference gating degrade), close
+subjects with motion blur, and fast light changes. CCTV/OTW are static
+mounts with small far subjects and quiet frames. Movies add hard cuts.
+Parameters whose optimum tracks those differences are the split
+candidates; appearance/detector plumbing is not.
+
+**Tier 1 — split first (bodycam + dashcam vs base):**
+
+| param | why the optimum differs by stream type |
+|---|---|
+| `utrack.kf_weight` | how much to trust the Kalman prediction: high for static mounts (motion is the reliable cue), low under ego-motion where the constant-velocity prior is wrong every pan |
+| `utrack.kf_d2_weight` | same reasoning, second-derivative gate |
+| `utrack.vbox_expand` | per-frame box displacement is far larger under ego-motion; static cctv wants tight association gates, bodycam needs wide ones |
+| `utrack.sim_weight` (+ `sim_weight_zscore`) | appearance-vs-motion balance: when motion is unreliable (bodycam) lean on ReID; on far cctv subjects ReID is weak and motion should dominate |
+| `utrack.track_buffer_seconds` | how long a lost track survives: cctv occlusions resolve in place (long buffer pays); on bodycam the camera panned away — the subject won't reappear where it vanished (short buffer, let ReID re-link) |
+| `motiontrack.mad_delta` | frame-difference activity gate: global ego-motion saturates it on bodycam/dashcam; the static-scene threshold is meaningless there |
+
+**Tier 2 — split if tier-1 plateaus:**
+
+| param | why |
+|---|---|
+| `utrack.new_track_thr` / `track_initial_thr` | detector confidence distributions differ (motion blur depresses bodycam confidences; tiny cctv people sit near threshold) |
+| `utrack.match_thr_initial/high/low` | association strictness follows the same displacement argument as vbox_expand |
+| `utrack.max_consecutive_misses` | pairs with track_buffer_seconds |
+| `roi_scan.min_age_lo/min_age_hi/activity_area` | roi scanning is a static-wide-scene optimization (`wide`/cctv hints); under bodycam ego-motion the whole frame is active and scanning cadence should back off — split for `wide`, not for bodycam |
+
+**Do NOT split** (keep one global value): `nms_thr`, `conf_thr`,
+`delete_dup_iou`, `fuse_scores`, `reid_z_clip`, `roi_expand_ratio`, and
+every internal calibration knob already on the §"excluded" list —
+detector-level and dedup behaviour should not fork per camera type, and
+each needless split is a wasted search dimension.
+
+First hint-split run: tier 1 only, hints `bodycam` + `dashcam`, base
+frozen at production values (§6), protect guard on `cctv` (§7) — 12
+dimensions, which is comparable to today's full-base searches.
 
 ## Suggested first search (once P0+P1 land)
 
