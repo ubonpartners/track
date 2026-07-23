@@ -1282,10 +1282,31 @@ def convert_chirla(src_root="/mldata/downloaded_datasets/other/chirla",
 def convert_roundabouthd(
         src_root="/mldata/downloaded_datasets/other/bath_1574/RoundaboutHD",
         output_folder="/mldata/tracking/roundabouthd"):
-    """Convert the 4 RoundaboutHD cameras into trackset JSON + mp4."""
+    """Convert the 4 RoundaboutHD cameras into trackset JSON + mp4.
+
+    Source videos are 4K MPEG-4 Part 2 (Simple Profile) — no desktop
+    hardware decode at that resolution, unplayable in practice — so
+    they are transcoded to h264 (NVENC when available, else x264,
+    crf/cq 22, 2s keyframes) rather than copied.
+    """
+    import subprocess
     stuff.makedir(output_folder + "/annotation/")
     stuff.makedir(output_folder + "/video/")
-    import shutil
+
+    def _transcode(src, dst):
+        tmp = dst + ".part.mp4"
+        for codec_args in ((["-c:v", "h264_nvenc", "-preset", "p5",
+                             "-rc", "vbr", "-cq", "22", "-b:v", "0"]),
+                           (["-c:v", "libx264", "-preset", "medium",
+                             "-crf", "22"])):
+            cmd = (["ffmpeg", "-y", "-v", "error", "-i", src] + codec_args +
+                   ["-g", "30", "-pix_fmt", "yuv420p",
+                    "-movflags", "+faststart", "-an", tmp])
+            if subprocess.run(cmd, capture_output=True).returncode == 0:
+                os.replace(tmp, dst)
+                return
+        raise RuntimeError(f"transcode failed for {src}")
+
     for cam in ("c001", "c002", "c003", "c004"):
         stem = "roundabouthd_" + cam
         out_anno = output_folder + "/annotation/" + stem + ".json"
@@ -1302,7 +1323,7 @@ def convert_roundabouthd(
         ts = trackset.TrackSet()
         ts.import_roundabouthd(sct, video)
         if not os.path.isfile(out_video):
-            shutil.copy(video, out_video)
+            _transcode(video, out_video)
         ts.metadata["original_video"] = out_video
         ts.export_yaml(out_anno)
         nb = sum(len(f["objects"]) for f in ts.frames)
