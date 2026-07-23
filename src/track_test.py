@@ -996,6 +996,65 @@ def _clip_meta(json_path):
     return m
 
 
+def _parse_packed_results(blob, class_names, skip_framerate_rt):
+    """Parse a get_results_packed() blob (magic UPK1; see the binding) into
+    trackset frames — numpy-fast, no per-detection Python churn on the pump
+    thread. Frames with result_type == skip_framerate are dropped (parity
+    with the dict path's frame_times filter); a 0xFFFFFFFF det count is a
+    NULL list -> objects None (parity with skip frames)."""
+    import struct
+    off = 0
+    (magic, nf) = struct.unpack_from("<II", blob, off); off += 8
+    assert magic == 0x314B5055, f"bad packed magic {magic:#x}"
+    frames = []
+    times = []
+    DET = struct.Struct("<QIfffffffffff")
+    FR = struct.Struct("<difI")
+    for _ in range(nf):
+        stamp, rt, motion, nd = FR.unpack_from(blob, off); off += FR.size
+        objects = None
+        if nd != 0xFFFFFFFF:
+            objects = {}
+            for _d in range(nd):
+                (tid, cl, conf, x0, y0, x1, y1,
+                 sx0, sy0, sx1, sy1, sconf, fiqa) = DET.unpack_from(blob, off)
+                off += DET.size
+                objects[tid] = {"box": [x0, y0, x1, y1], "class": cl,
+                                "confidence": conf,
+                                "subbox": [sx0, sy0, sx1, sy1],
+                                "subbox_conf": sconf, "fiqa_score": fiqa}
+        if rt == skip_framerate_rt:
+            continue
+        frames.append({"frame_time": stamp, "result_type": rt,
+                       "motion_score": motion, "motion_roi": None,
+                       "inference_roi": None, "inference_dets": None,
+                       "clip_embedding": None, "objects": objects,
+                       "image_path": None, "debug": None})
+        times.append(stamp)
+    return frames, times
+
+
+def _single_metrics_worker_packed(args):
+    """CPU pool worker (packed variant): parse blob + GT load + scoring."""
+    (params, blob, class_names, skip_rt) = args
+    frames, times = _parse_packed_results(blob, class_names, skip_rt)
+    trackset_gt = ts.TrackSet(params["ds_path"])
+    trackset = ts.TrackSet()
+    trackset.frames = frames
+    trackset.frame_times = times
+    trackset.metadata = {
+        "frame_rate": trackset_gt.metadata["frame_rate"],
+        "width": trackset_gt.metadata["width"],
+        "height": trackset_gt.metadata["height"],
+        # objects carry RAW model class ints -> metadata must name them;
+        # scoring remaps by NAME exactly as everywhere else.
+        "classes": list(class_names),
+    }
+    result = score_tracksets(trackset_gt, trackset, params)
+    return {"params": params, "result": result,
+            "time": datetime.datetime.now()}
+
+
 def _single_metrics_worker(args):
     """CPU pool worker for the single-shared-state path: GT load + results
     conversion + scoring. No GPU, no CUDA context."""
@@ -1069,13 +1128,24 @@ def run_single_shared(config, tests_to_run, desc, max_streams):
 
             win = deque()
 
+            packed = (hasattr(upyc.c_track_stream, "get_results_packed")
+                      and not globals().get("_FORCE_DICT", False))
+            skip_rt = int(upyc.TRACK_FRAME_SKIP_FRAMERATE)
+
             def harvest():
                 item, st = win.popleft()
-                results = st.get_results(3600.0)
-                del st
-                pending.append(pool.apply_async(
-                    _single_metrics_worker,
-                    ((item, results, class_names, attr_names),)))
+                if packed:
+                    blob = st.get_results_packed(3600.0)
+                    del st
+                    pending.append(pool.apply_async(
+                        _single_metrics_worker_packed,
+                        ((item, blob, class_names, skip_rt),)))
+                else:
+                    results = st.get_results(3600.0)
+                    del st
+                    pending.append(pool.apply_async(
+                        _single_metrics_worker,
+                        ((item, results, class_names, attr_names),)))
 
             for item in items:
                 meta = _clip_meta(item["ds_path"])
