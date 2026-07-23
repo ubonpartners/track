@@ -13,8 +13,16 @@ def trim_aux_outputs(params):
     """Disable the aux stages metric runs never read (shared by the per-clip
     tracker and the single-shared-state eval path — ONE definition so the two
     paths can never drift)."""
-    for _k in ("thumbnail_stream", "main_jpeg"):
+    # preview_stream is the current name (2026-07-23 rename); the old two
+    # are kept so ancient configs still trim. Missing the new name meant
+    # every eval encoded preview H.264 for nothing.
+    for _k in ("preview_stream", "thumbnail_stream", "main_jpeg"):
         if _k in params:
+            params[_k]["enabled"] = False
+    # hint-variant preview blocks deep-merge over the base — disable those
+    # too or a hinted stream re-enables preview through the variant.
+    for _k in list(params):
+        if _k.startswith("preview_stream(") and isinstance(params[_k], dict):
             params[_k]["enabled"] = False
     if "faces" in params:
         params["faces"]["embeddings_enabled"] = False
