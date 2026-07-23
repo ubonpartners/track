@@ -143,3 +143,74 @@ def test_aggregation_recomputes_vehicle_suffix(tmp_path):
     assert "fitness_multi" in overall
     expected = overall["fitness"] + 0.3 * overall["fitness_vehicle"]
     assert abs(overall["fitness_multi"] - expected) < 1e-9
+
+
+def _mkclip(ds, group, num_objects, mota, fitness, extra=None):
+    # Counts are chosen CONSISTENT with the claimed mota/fitness, because
+    # rollups recompute both from summed counts: all error mass is misses
+    # (fp=0), so recomputed mota == mota and recomputed fitness == mota.
+    result = {
+        "num_frames": 100, "num_objects": num_objects,
+        "num_false_positives": 0,
+        "num_misses": int(round((1 - mota) * num_objects)), "num_switches": 0,
+        "num_unique_objects": 20, "num_fragmentations": 0,
+        "idtp": int(num_objects * 0.9), "idfp": 5, "idfn": 15,
+        "motp": 0.2, "fp_tracks": 1, "fp_tracks_honest_v2": 0,
+        "duration": 10.0, "mota": mota, "idf1": mota,
+        "fp_per_frame": 0.0, "fn_per_obj": 0.0,
+        "switch_per_obj": 0.0, "frag_per_obj": 0.0, "fitness": fitness,
+    }
+    if extra:
+        result.update(extra)
+    return {"params": {"ds_key": ds, "test_key": "t"}, "result": result,
+            "group": group}
+
+
+def test_groupmean_balances_groups():
+    # cctv: tiny volume, great fitness. crowd: huge volume, poor fitness.
+    # _overall follows the crowd; _groupmean must weigh the groups equally.
+    results = [
+        _mkclip("small", "cctv", num_objects=100, mota=0.9, fitness=0.9),
+        _mkclip("huge", "crowd", num_objects=100000, mota=0.3, fitness=0.3),
+    ]
+    rollups = tt.display_results({}, results, [], "fitness")
+    rows = {r["params"]["ds_key"]: r["result"] for r in rollups}
+    assert rows["_overall"]["mota"] < 0.31          # volume-dominated
+    gm = rows["_groupmean"]
+    assert abs(gm["fitness"] - 0.6) < 1e-6          # (0.9+0.3)/2
+    assert abs(gm["mota"] - 0.6) < 0.01
+    # group_weights reweight the macro mean
+    rollups = tt.display_results({"group_weights": {"cctv": 3.0, "crowd": 1.0}},
+                                 results, [], "fitness")
+    rows = {r["params"]["ds_key"]: r["result"] for r in rollups}
+    assert abs(rows["_groupmean"]["fitness"] - (3 * 0.9 + 0.3) / 4) < 1e-6
+
+
+def test_clip_weight_cap():
+    # Three same-group clips, one 100x the volume of the others. Uncapped,
+    # the monster owns the rollup; capped at the 75th percentile its counts
+    # are scaled to the cap and the rollup moves toward the majority.
+    clips = [
+        _mkclip("a", "g", num_objects=1000, mota=0.9, fitness=0.9),
+        _mkclip("b", "g", num_objects=1000, mota=0.9, fitness=0.9),
+        _mkclip("m", "g", num_objects=100000, mota=0.1, fitness=0.1),
+    ]
+    rows = {r["params"]["ds_key"]: r["result"]
+            for r in tt.display_results({}, clips, [], "fitness")}
+    uncapped = rows["_overall"]["mota"]
+    # pctl 50 of [1000, 1000, 100000] caps at 1000: the monster now
+    # contributes one-clip's-worth of counts instead of 50x everyone's.
+    rows = {r["params"]["ds_key"]: r["result"]
+            for r in tt.display_results({"clip_weight_cap_pctl": 50},
+                                        clips, [], "fitness")}
+    capped = rows["_overall"]["mota"]
+    assert uncapped < 0.15                          # monster-owned
+    assert capped > uncapped + 0.2                  # majority regains a say
+    # clips at/below the cap are untouched: with no monster, capping is a no-op
+    small = clips[:2]
+    a = {r["params"]["ds_key"]: r["result"]
+         for r in tt.display_results({}, small, [], "fitness")}
+    b = {r["params"]["ds_key"]: r["result"]
+         for r in tt.display_results({"clip_weight_cap_pctl": 50},
+                                     small, [], "fitness")}
+    assert abs(a["_overall"]["mota"] - b["_overall"]["mota"]) < 1e-9

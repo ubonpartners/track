@@ -691,9 +691,47 @@ def display_results(config, results, columns, sort_key):
                 suffixes=[""]+sorted({p[len("idtp"):] for p in params
                                       if p.startswith("idtp") and p!="idtp"})
                 nonsum={b+sfx for b in nonsum_bases for sfx in suffixes} | {"fitness_multi"}
+                # Per-clip volume cap (search_review.md §1.3): with
+                # clip_weight_cap_pctl set, a clip whose GT volume
+                # (num_objects, per class suffix) exceeds that percentile of
+                # its peers contributes scaled-down COUNTS — so one crowd
+                # monster (MOT20-05 = 75.6% of v11's val boxes) cannot own a
+                # rollup. Rates/derived metrics recompute from the scaled
+                # counts, so everything stays self-consistent.
+                cap_pctl=config.get("clip_weight_cap_pctl")
+                row_w={}   # id(row) -> {suffix: weight}
+                if cap_pctl:
+                    for sfx in suffixes:
+                        vk="num_objects"+sfx
+                        vols=[r["result"][vk] for r in filtered
+                              if vk in r.get("result",{}) and r["result"][vk]>0]
+                        if len(vols)>=2:
+                            cap=float(np.percentile(vols, float(cap_pctl)))
+                            for r in filtered:
+                                v=r.get("result",{}).get(vk, 0)
+                                if v>cap>0:
+                                    row_w.setdefault(id(r),{})[sfx]=cap/v
+                capped_bases={"num_frames","num_objects","num_false_positives",
+                              "num_misses","num_switches","num_unique_objects",
+                              "num_fragmentations","num_matches","idtp","idfp",
+                              "idfn","fp_tracks","fp_tracks_honest_v2",
+                              "fp_h2_nm","fp_h2_inrun","duration","missed",
+                              "mostly_tracked","partially_tracked",
+                              "mostly_lost","mostly_lost2"}
+                def _split_suffix(key):
+                    for sfx in sorted(suffixes, key=len, reverse=True):
+                        if sfx and key.endswith(sfx):
+                            return key[:-len(sfx)], sfx
+                    return key, ""
+                def _w(r, key):
+                    base, sfx=_split_suffix(key)
+                    if base not in capped_bases:
+                        return 1.0
+                    return row_w.get(id(r), {}).get(sfx, 1.0)
                 for p in params:
                     if p not in nonsum:
-                        vals=[r["result"][p] for r in filtered if "result" in r and p in r["result"]]
+                        vals=[_w(r, p)*r["result"][p] for r in filtered
+                              if "result" in r and p in r["result"]]
                         # A key NO row in this group has stays absent — an
                         # empty sum would fabricate zero counts, and the
                         # derived recompute would then report e.g.
@@ -707,7 +745,7 @@ def display_results(config, results, columns, sort_key):
                     for r in filtered:
                         rr=r.get("result", {})
                         if ("motp"+sfx) in rr and ("idtp"+sfx) in rr:
-                            weighted_motp_sum += rr["motp"+sfx]*rr["idtp"+sfx]
+                            weighted_motp_sum += rr["motp"+sfx]*rr["idtp"+sfx]*_w(r, "idtp"+sfx)
                     er["idf1"+sfx]= (2 * er["idtp"+sfx]) / (2 * er["idtp"+sfx] + er["idfp"+sfx] + er["idfn"+sfx]+1e-7)
                     er["mota"+sfx]= 1 - (er["num_false_positives"+sfx] + er["num_misses"+sfx] + er["num_switches"+sfx]) / (er["num_objects"+sfx]+1e-7)
                     er["motp"+sfx]=weighted_motp_sum/(er["idtp"+sfx]+1e-7)
@@ -748,6 +786,40 @@ def display_results(config, results, columns, sort_key):
 
                 results2.append(e)
             datasets.append(name)
+
+        # _groupmean (search_review.md §1.1): the BALANCED objective row —
+        # weighted mean across the per-group __ovr rollups, so no group can
+        # buy influence with GT density (micro-average within a group,
+        # macro-average across groups). group_weights: {group: w} in the
+        # yaml reweights; weights normalise over the groups PRESENT for
+        # each key, so a metric one group lacks (e.g. vehicle keys in a
+        # person-only group) averages over the groups that have it.
+        real_groups=[g for g in groups if g is not None]
+        if real_groups:
+            gw_cfg=config.get("group_weights") or {}
+            for t in tests:
+                grows=[]
+                for r2 in results2:
+                    ds=r2["params"]["ds_key"]
+                    if r2["params"]["test_key"]==t and ds.startswith("__ovr"):
+                        grows.append((ds[len("__ovr"):], r2["result"]))
+                if not grows:
+                    continue
+                er={}
+                allkeys=set()
+                for _, gr in grows:
+                    allkeys |= set(gr.keys())
+                for k in allkeys:
+                    num=0.0; den=0.0
+                    for gname, gr in grows:
+                        if k in gr and isinstance(gr[k], (int, float)):
+                            w=float(gw_cfg.get(gname, 1.0))
+                            num+=w*gr[k]; den+=w
+                    if den>0:
+                        er[k]=num/den
+                results2.append({"params":{"ds_key":"_groupmean","test_key":t},
+                                 "result":er})
+            datasets.append("_groupmean")
 
         for g in groups:
             if g is None:
@@ -1099,6 +1171,8 @@ def _write_eval_summary_json(config, output_results, rollups, elapsed):
             bucket["groups"][group + "_mean"] = metrics
         elif ds_key == "_arithmean":
             bucket["arithmean"] = metrics
+        elif ds_key == "_groupmean":
+            bucket["groupmean"] = metrics
 
     for entry in output_results:
         test_key = entry["params"]["test_key"]

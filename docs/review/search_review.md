@@ -55,7 +55,11 @@ DIFFERENT implicit weightings on the aggregate row: mota is box-weighted
 otw 15%), fp_per_frame is frame-weighted. The same behavioural change
 moves each component through a different dataset lens.
 
-**Recommendation (do this before running the mc search):**
+**Recommendation (STATUS 2026-07-23: items 1 and 3 IMPLEMENTED — the
+`_groupmean` row + `group_weights` and `clip_weight_cap_pctl` are live
+and wired into track_search_v11_mc.yaml; item 2's baseline run is
+deferred by choice — protect stays commented until someone spends the
+eval time):**
 
 1. Add a **balanced objective row**: `_groupmean` = unweighted (or
    `group_weights:`-weighted) mean of the per-group `__ovr<group>`
@@ -94,9 +98,11 @@ much these logs get eyeballed). Improvements in value order:
    further (up to ~2K× when clips ≫ workers is false, i.e. small
    dataset runs), at the cost of stale-best probing — standard
    block-coordinate descent, still convergent for this use.
-2. **Direction memory.** Remember each param's last winning direction;
-   probe it first and skip the opposite probe when it improves
-   (~25–40% fewer evals in practice on monotone stretches).
+2. ~~Direction memory~~ — RETRACTED (2026-07-23, MB): on a monotone
+   stretch the backward probe is exactly the PREVIOUS vec_best, which is
+   already in `all_results` — the cache returns it for free. Direction
+   memory would only save the down-probe immediately after a multiplier
+   change or a param switch, which is noise. No action.
 3. **Per-param convergence.** One global multiplier means a converged
    param keeps costing 2 evals per cycle until EVERY param is quiet:
    with 20+ params the annealing tail is the most expensive phase.
