@@ -27,12 +27,15 @@ def _normalise_param_vec(param_vec, param_is_int):
 
 
 def _is_variant_key(key):
-    """True for keys addressing a `(hint:x)` variant (any segment). Variant
-    paths are CREATE-ON-WRITE: the C side deep-merges a section variant
-    block over its base (`utrack(hint:bodycam): {kf_weight: x}`), so the
-    block legitimately does not exist until a search writes it
-    (multi_class_and_hints.md §15.3)."""
-    return "(hint:" in key
+    """True for keys addressing a variant on ANY config axis — `(hint:x)`
+    (per-stream profile, section- or key-level) or `(class:x)` (per-class
+    key-level, resolved inside utrack per tracked class; the two COMPOSE:
+    a (class:) key inside a (hint:) block is the hint x class cell).
+    Variant paths are CREATE-ON-WRITE: the C side deep-merges variants over
+    their base, so the key legitimately does not exist until a search
+    writes it (multi_class_and_hints.md §15.3)."""
+    import re
+    return re.search(r"\(\w+:", key) is not None
 
 
 def _strip_variants(key):
@@ -188,16 +191,24 @@ def _update_initial_parameters(param_names, param_initial, source_dict, logfile,
 
 
 def _expand_split_hints(search_params, logfile=None):
-    """`split_hints: [bodycam, dashcam]` on a param expands it into the
-    base param plus one `(hint:x)`-variant param per listed hint — three
-    independently-steppable search dimensions from one line
-    (multi_class_and_hints.md §15.3). The variant suffix lands on the
-    param's SECTION (first path segment); a flat key takes it directly.
-    Splitting is DIRECTED only — nothing splits by itself."""
+    """Directed split sugar — nothing splits by itself:
+
+    `split_hints: [bodycam]`   -> plus one `(hint:x)` variant per hint.
+       The suffix lands on the param's SECTION (first path segment) —
+       hint variants are section-level blocks; a flat key takes it directly.
+    `split_classes: [vehicle]` -> plus one `(class:x)` variant per class.
+       The suffix lands on the KEY (last segment) — class variants are
+       key-level, resolved per tracked class inside utrack.
+
+    Each variant is an independently-steppable dimension seeded from its
+    base value. NO automatic hint x class matrix: write the composed key
+    (`utrack(hint:bodycam).kf_weight(class:vehicle)`) explicitly when a
+    cell earns it (multi_class_and_hints.md §15.3/§15.4)."""
     out = {}
     for name, spec in search_params.items():
         spec = dict(spec or {})
         hints = spec.pop("split_hints", None)
+        classes = spec.pop("split_classes", None)
         out[name] = spec
         for h in hints or []:
             if "." in name:
@@ -208,6 +219,11 @@ def _expand_split_hints(search_params, logfile=None):
             out[vname] = dict(spec)
             if logfile:
                 search_log(logfile, f"split_hints: {name} -> {vname}")
+        for c in classes or []:
+            vname = f"{name}(class:{c})"
+            out[vname] = dict(spec)
+            if logfile:
+                search_log(logfile, f"split_classes: {name} -> {vname}")
     return out
 
 

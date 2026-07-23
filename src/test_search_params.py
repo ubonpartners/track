@@ -149,3 +149,35 @@ def test_flat_variant_seeds_from_section_scoped_base():
     tsr._update_initial_parameters(
         names, initial, {"utrack": {"vbox_expand": 0.25}}, None, "test")
     assert initial == [0.25]
+
+
+def test_class_variants_and_composition():
+    c = _cfg()
+    # key-level class variant lands beside its base inside the section
+    tsr._set_nested_param(c, "utrack.kf_weight(class:vehicle)", 0.8)
+    assert c["utrack"]["kf_weight(class:vehicle)"] == 0.8
+    tsr._set_nested_param(c, "kf_weight(class:vehicle)", 0.7)  # bare form
+    assert c["utrack"]["kf_weight(class:vehicle)"] == 0.7
+    # hint x class composition: class key inside the hint block
+    tsr._set_nested_param(c, "utrack(hint:bodycam).kf_weight(class:vehicle)", 0.6)
+    assert c["utrack(hint:bodycam)"]["kf_weight(class:vehicle)"] == 0.6
+    # seeding strips ALL variant axes back to the base key
+    names = ["utrack.kf_weight(class:vehicle)",
+             "utrack(hint:bodycam).kf_weight(class:vehicle)"]
+    initial = [None, None]
+    tsr._update_initial_parameters(names, initial, _cfg(), None, "t")
+    assert initial == [0.4, 0.4]
+
+
+def test_split_classes_expansion():
+    out = tsr._expand_split_hints({
+        "utrack.new_track_thr": {"min": 0, "max": 1, "step": 0.01,
+                                 "split_classes": ["vehicle"]},
+        "kf_weight": {"min": 0, "max": 2, "step": 0.02,
+                      "split_hints": ["bodycam"],
+                      "split_classes": ["vehicle"]},
+    })
+    assert set(out) == {
+        "utrack.new_track_thr", "utrack.new_track_thr(class:vehicle)",
+        "kf_weight", "kf_weight(hint:bodycam)", "kf_weight(class:vehicle)",
+    }   # no automatic hint x class matrix
