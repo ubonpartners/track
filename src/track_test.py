@@ -898,16 +898,12 @@ def track_test_work_fn(params, mpwq_context, mpwq_progress_fn):
                            params=params,
                            mpwq_context=mpwq_context,
                            mpwq_progress_fn=mpwq_progress_fn,
-                           # KNOWN LIMITATION (measured 2026-07-23): this
-                           # trims the RESULT set only. upyc's
-                           # run_on_video_file() has no stop-time parameter,
-                           # so the C pipeline decodes+tracks the WHOLE clip
-                           # regardless — max_duration caps scoring, not
-                           # compute. A true fast-mode cap needs a duration
-                           # arg in the binding, or duration-suffixed temp
-                           # h264 files (NEVER a -t on the shared
-                           # generated_h264 cache — it would poison every
-                           # future full-length eval).
+                           # max_duration is a REAL compute cap since
+                           # 2026-07-23: upyc_tracker truncates the h264 at
+                           # extraction (duration-suffixed cache entry, so
+                           # capped and full evals never share files) — the
+                           # C pipeline only ever sees the window. Scoring
+                           # is capped by the same value in compute_metrics.
                            end_time=params.get("max_duration", 100000))
     match_iou=0.45
     if "match_iou" in params:

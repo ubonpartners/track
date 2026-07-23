@@ -44,19 +44,26 @@ class upyc_tracker:
         # of where the mp4 is so we can reuse it next time - if you don't want
         # to do this use cache_h264=False which will use a temp file instead
 
+        # end_time < the sentinel default = a REAL time cap: truncate the
+        # elementary stream so the C pipeline decodes/tracks only the window
+        # (run_on_video_file has no stop-time of its own). The cap is baked
+        # into the CACHE NAME — an uncapped eval must never pick up a
+        # truncated file, and capped search iterations reuse their cut.
+        cap = end_time if (end_time and end_time < 9000.0) else None
+        suffix = f"_t{int(cap)}" if cap else ""
         h264_file_temp=None
         h264_file=None
         if cache_h264 and video.endswith(".mp4"):
             p = Path(video)
-            h264_file=str(p.with_name("generated_h264") / p.with_suffix(".h264").name)
+            h264_file=str(p.with_name("generated_h264") / (p.stem + suffix + ".h264"))
             gen_dir = p.with_name("generated_h264")
             gen_dir.mkdir(parents=True, exist_ok=True)
             if not os.path.isfile(h264_file):
-                stuff.mp4_to_h264(video, h264_file)
+                stuff.mp4_to_h264(video, h264_file, max_seconds=cap)
         else:
             h264_file=tempfile.NamedTemporaryFile(delete=False, suffix=".h264").name
             stuff.rm(h264_file)
-            stuff.mp4_to_h264(video, h264_file)
+            stuff.mp4_to_h264(video, h264_file, max_seconds=cap)
             h264_file_temp=h264_file
 
         assert os.path.isfile(h264_file), "Failed to create h264 file"
