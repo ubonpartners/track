@@ -1126,28 +1126,21 @@ def run_single_shared(config, tests_to_run, desc, max_streams):
             md = shared.get_model_description()
             class_names, attr_names = md["class_names"], md["person_attribute_names"]
 
-            win = deque()
-
+            # Harvest-ANY-completed, NO polling (MB 2026-07-23): each
+            # in-flight stream gets a thread that BLOCKS in the C wait
+            # (get_results_packed releases the GIL for wait+pack), so
+            # completions are event-driven and the executor refills the
+            # window the moment any stream finishes. The old harvest-oldest
+            # loop was head-of-line blocking: NVDEC burst to 84% then sat
+            # near-idle while younger finished streams waited on the head.
+            # Stream create/run/destroy hold the GIL (pybind default) so
+            # those calls stay serialized — no concurrent-create question.
             packed = (hasattr(upyc.c_track_stream, "get_results_packed")
                       and not globals().get("_FORCE_DICT", False))
             skip_rt = int(upyc.TRACK_FRAME_SKIP_FRAMERATE)
+            from concurrent.futures import ThreadPoolExecutor
 
-            def harvest():
-                item, st = win.popleft()
-                if packed:
-                    blob = st.get_results_packed(3600.0)
-                    del st
-                    pending.append(pool.apply_async(
-                        _single_metrics_worker_packed,
-                        ((item, blob, class_names, skip_rt),)))
-                else:
-                    results = st.get_results(3600.0)
-                    del st
-                    pending.append(pool.apply_async(
-                        _single_metrics_worker,
-                        ((item, results, class_names, attr_names),)))
-
-            for item in items:
+            def clip_task(item):
                 meta = _clip_meta(item["ds_path"])
                 cap = None
                 if not item.get("max_duration_is_default"):
@@ -1162,11 +1155,21 @@ def run_single_shared(config, tests_to_run, desc, max_streams):
                 st.set_frame_intervals(item["min_interval"], -1.0)
                 st.run_on_video_file(h264, upyc.SIMPLE_DECODER_CODEC_H264,
                                      meta["frame_rate"], False)
-                win.append((item, st))
-                if len(win) >= max_streams:
-                    harvest()
-            while win:
-                harvest()
+                if packed:
+                    blob = st.get_results_packed(3600.0)
+                    del st
+                    return pool.apply_async(
+                        _single_metrics_worker_packed,
+                        ((item, blob, class_names, skip_rt),))
+                results = st.get_results(3600.0)
+                del st
+                return pool.apply_async(
+                    _single_metrics_worker,
+                    ((item, results, class_names, attr_names),))
+
+            with ThreadPoolExecutor(max_workers=max_streams) as ex:
+                for fut in [ex.submit(clip_task, item) for item in items]:
+                    pending.append(fut.result())
             del shared
         entries = [p.get() for p in pending]
     return entries
