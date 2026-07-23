@@ -126,3 +126,16 @@ def test_protect_guard():
 
 def test_no_protect_is_noop():
     assert tsr._check_protect({"result_test_opt_key": "x"}, []) is None
+
+
+def test_flat_variant_lands_beside_its_base():
+    # kf_weight lives under utrack: — its (hint:x) variant must be written
+    # INTO utrack (the C side resolves variants against siblings), never at
+    # top level where nothing reads it.
+    c = _cfg()
+    tsr._set_nested_param(c, "kf_weight(hint:bodycam)", 0.9)
+    assert c["utrack"]["kf_weight(hint:bodycam)"] == 0.9
+    assert "kf_weight(hint:bodycam)" not in c   # NOT at top level
+    # a genuinely top-level key keeps top-level variant placement
+    tsr._set_nested_param(c, "conf_thr(hint:bodycam)", 0.1)
+    assert c["conf_thr(hint:bodycam)"] == 0.1

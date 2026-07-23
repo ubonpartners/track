@@ -81,9 +81,18 @@ def _set_nested_param(config_dict, key, value):
     """
     if "." not in key:
         if _is_variant_key(key):
-            # Flat-key variant ("conf_thr(hint:bodycam)"): top-level
-            # create-on-write, same §15.3 rule as section variants.
-            config_dict[key] = value
+            # Flat-key variant ("kf_weight(hint:bodycam)"): create-on-write
+            # BESIDE ITS BASE KEY — the C side resolves `key(hint:x)`
+            # against siblings, so a variant of a section-scoped key must
+            # live in that section (utrack: {kf_weight(hint:bodycam): x}),
+            # not at top level. Base missing entirely -> top level (a
+            # genuinely new flat key).
+            base = _strip_variants(key)
+            try:
+                parent, _ = _find_by_bare_name(config_dict, base)
+            except AssertionError:
+                parent = config_dict
+            parent[key] = value
             return
         parent, child_key = _find_by_bare_name(config_dict, key)
         parent[child_key] = value
