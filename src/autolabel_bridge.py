@@ -547,6 +547,201 @@ def make_tight_consistent(anno_path, verbose=True):
     return rewritten
 
 
+def _motion_transfer(Ha, Hb, Aa, Ab, At, w):
+    """Warp lerp(Ha,Hb,w) by autolabel motion: center residual (relative
+    to autolabel's own anchor lerp) plus size ratio. Box conventions
+    cancel; zero residual == plain linear interpolation."""
+    def cs(b):
+        return ((b[0]+b[2])/2, (b[1]+b[3])/2, b[2]-b[0], b[3]-b[1])
+    hxa, hya, hwa, hha = cs(Ha); hxb, hyb, hwb, hhb = cs(Hb)
+    axa, aya, awa, aha = cs(Aa); axb, ayb, awb, ahb = cs(Ab)
+    axt, ayt, awt, aht = cs(At)
+    cx = (hxa + (hxb-hxa)*w) + (axt - (axa + (axb-axa)*w))
+    cy = (hya + (hyb-hya)*w) + (ayt - (aya + (ayb-aya)*w))
+    def size(h0, h1, a0, a1, at):
+        base = h0 + (h1-h0)*w
+        alin = a0 + (a1-a0)*w
+        return base * (at/alin) if alin > 1e-6 and at > 1e-6 else base
+    bw = size(hwa, hwb, awa, awb, awt)
+    bh = size(hha, hhb, aha, ahb, aht)
+    return [cx-bw/2, cy-bh/2, cx+bw/2, cy+bh/2]
+
+
+def densify_sparse_gt(anno_path, anchor_iomin=0.55, max_gap=1.5,
+                      work_dir=None, verbose=True):
+    """Densify SPARSE HUMAN GT (metadata.sparse_gt — e.g. antare bodycam
+    1Hz annotations) with autolabel in-betweens. Identity stays HUMAN;
+    geometry between anchors comes from autolabel where it corroborates,
+    linear interpolation otherwise:
+
+      1. autolabel_video() on metadata.original_video (the retained-cadence
+         chunk — full analytics framerate, single-shot so cuts=False);
+      2. for each human track and consecutive anchor pair closer than
+         max_gap: the autolabel track matching BOTH anchors (same mapped
+         class, intersection-over-min-area >= anchor_iomin at each)
+         supplies MOTION between them: the fill box is the lerp of the
+         human anchors warped by autolabel's center residual and size
+         ratio ("source": "autolabel_gtfill"). Motion transfer, not box
+         copy: autolabel exports FULL-BODY boxes while MOT-style GT is
+         visible-box (measured IoU median 0.35 on antare escooter — the
+         visible pipeline path needs aux caches the current detector
+         set no longer writes), so absolute geometry is unusable but
+         relative motion is convention-free; IoMin likewise survives
+         the fullbody-superset offset where plain IoU does not. Where
+         autolabel motion is linear this reduces to exact linear interp;
+      3. the dense grid = human frames + all matched in-between times, and
+         EVERY live human track gets a box on EVERY grid frame in its span
+         (linear fallback, "source": "interp") — a frame carrying only
+         some tracks would break the reader's bracket interpolation for
+         the absent ones;
+      4. idempotent via metadata.sparse_gt.densified.
+
+    Run augment_trackset_file afterwards for people the humans missed.
+    Linear-only spans remain exactly as trustworthy as the old
+    reader-interpolation — no better, marked so ("interp").
+    """
+    doc = json.load(open(anno_path))
+    meta = doc.get("metadata", {})
+    sparse = meta.get("sparse_gt")
+    if not sparse or sparse.get("densified"):
+        return None
+    video = meta["original_video"]
+    if work_dir is None:
+        work_dir = os.path.join(os.path.dirname(anno_path), "autolabel_work")
+    os.makedirs(work_dir, exist_ok=True)
+    al_json = os.path.join(
+        work_dir, os.path.splitext(os.path.basename(video))[0] + ".autolabel.json")
+    autolabel_video(video, al_json, cuts=False)
+    al = json.load(open(al_json))
+    al_classes = al["metadata"]["classes"]
+    gt_classes = meta["classes"]
+
+    def iomin(a, b):
+        ix = min(a[2], b[2]) - max(a[0], b[0])
+        iy = min(a[3], b[3]) - max(a[1], b[1])
+        if ix <= 0 or iy <= 0:
+            return 0.0
+        amin = min((a[2]-a[0])*(a[3]-a[1]), (b[2]-b[0])*(b[3]-b[1]))
+        return ix * iy / amin if amin > 0 else 0.0
+
+    # autolabel observations: tid -> sorted [(t, box, cls_name, conf)]
+    al_tracks = {}
+    for fr in al["frames"]:
+        t = fr["frame_time"]
+        for tid, o in (fr.get("objects") or {}).items():
+            cls = al_classes[o["class"]] if o.get("class") is not None else "person"
+            al_tracks.setdefault(tid, []).append(
+                (t, o["box"], cls, o.get("conf", o.get("confidence", 1.0))))
+    for obs in al_tracks.values():
+        obs.sort(key=lambda x: x[0])
+
+    def al_box_at(tid, t, tol=0.06):
+        obs = al_tracks[tid]
+        best = min(obs, key=lambda x: abs(x[0] - t))
+        return best if abs(best[0] - t) <= tol else None
+
+    # human observations: tid -> sorted [(t, rec)]
+    frames = sorted(doc["frames"], key=lambda f: f["frame_time"])
+    human = {}
+    for fr in frames:
+        for tid, o in (fr.get("objects") or {}).items():
+            human.setdefault(tid, []).append((fr["frame_time"], o))
+    for obs in human.values():
+        obs.sort(key=lambda x: x[0])
+
+    # matched fills: (tid, t) -> (box, conf)
+    fills = {}
+    n_pairs = n_matched = 0
+    for tid, obs in human.items():
+        for (ta, oa), (tb, ob) in zip(obs, obs[1:]):
+            if not 0 < tb - ta <= max_gap:
+                continue
+            n_pairs += 1
+            want_cls = gt_classes[oa["class"]]
+            best = None  # (tid, A, B)
+            best_score = anchor_iomin
+            for al_tid in al_tracks:
+                A = al_box_at(al_tid, ta)
+                B = al_box_at(al_tid, tb)
+                if not A or not B or A[2] != want_cls:
+                    continue
+                score = min(iomin(A[1], oa["box"]), iomin(B[1], ob["box"]))
+                if score >= best_score:
+                    best, best_score = (al_tid, A[1], B[1]), score
+            if best is None:
+                continue
+            n_matched += 1
+            al_tid, Aa, Ab = best
+            Ha, Hb = oa["box"], ob["box"]
+            for (t, box, _cls, conf) in al_tracks[al_tid]:
+                if not ta < t < tb:
+                    continue
+                w = (t - ta) / (tb - ta)
+                fills[(tid, round(t, 4))] = (
+                    _motion_transfer(Ha, Hb, Aa, Ab, box, w),
+                    conf, oa["class"])
+
+    # dense grid = human times + fill times; every live human track covered
+    grid = sorted({round(f["frame_time"], 4) for f in frames}
+                  | {t for (_tid, t) in fills})
+    by_time = {round(f["frame_time"], 4): f for f in frames}
+    added_fill = added_interp = 0
+    for t in grid:
+        fr = by_time.get(t)
+        if fr is None:
+            fr = {"frame_id": 0, "frame_time": t, "objects": {}}
+            by_time[t] = fr
+        for tid, obs in human.items():
+            if tid in fr["objects"]:
+                continue
+            t0_, t1_ = obs[0][0], obs[-1][0]
+            if not (t0_ <= t <= t1_):
+                continue
+            key = (tid, t)
+            if key in fills:
+                box, conf, cls = fills[key]
+                fr["objects"][tid] = {"box": [round(v, 5) for v in box],
+                                      "class": cls, "conf": round(conf, 4),
+                                      "source": "autolabel_gtfill"}
+                added_fill += 1
+            else:
+                import bisect
+                times_h = [o[0] for o in obs]
+                i = bisect.bisect_right(times_h, t) - 1
+                if i < 0 or i + 1 >= len(obs):
+                    continue
+                (ta, oa), (tb, ob) = obs[i], obs[i + 1]
+                if t <= ta or t >= tb:
+                    continue
+                w = (t - ta) / (tb - ta)
+                box = [a * (1 - w) + b * w
+                       for a, b in zip(oa["box"], ob["box"])]
+                fr["objects"][tid] = {"box": [round(v, 5) for v in box],
+                                      "class": oa["class"], "conf": 1.0,
+                                      "source": "interp"}
+                added_interp += 1
+
+    out_frames = [by_time[t] for t in grid]
+    for i, fr in enumerate(out_frames):
+        fr["frame_id"] = i + 1
+    doc["frames"] = out_frames
+    sparse["densified"] = True
+    sparse["anchor_pairs"] = n_pairs
+    sparse["anchor_pairs_autolabel_matched"] = n_matched
+    sparse["boxes_autolabel_fill"] = added_fill
+    sparse["boxes_linear_interp"] = added_interp
+    tmp = anno_path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(doc, f)
+    os.replace(tmp, anno_path)
+    if verbose:
+        print(f"  densified {os.path.basename(anno_path)}: "
+              f"{n_matched}/{n_pairs} anchor pairs matched, "
+              f"+{added_fill} autolabel boxes, +{added_interp} interp",
+              flush=True)
+    return added_fill
+
+
 def densify_augmented_tracks(anno_path, max_gap=2.0, verbose=True):
     """Materialize augmentation-added tracks onto the GT frame grid IN
     PLACE. augment_trackset_file writes added tracks as sparse ~5fps
