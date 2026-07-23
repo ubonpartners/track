@@ -904,7 +904,8 @@ def track_test_work_fn(params, mpwq_context, mpwq_progress_fn):
                            # capped and full evals never share files) — the
                            # C pipeline only ever sees the window. Scoring
                            # is capped by the same value in compute_metrics.
-                           end_time=params.get("max_duration", 100000))
+                           end_time=(100000 if params.get("max_duration_is_default")
+                                     else params.get("max_duration", 100000)))
     result=score_tracksets(trackset_gt, trackset, params)
 
     del trackset
@@ -1012,7 +1013,8 @@ def _single_metrics_worker(args):
                            tracker=view,
                            mpwq_context=None,
                            mpwq_progress_fn=lambda *a, **k: None,
-                           end_time=params.get("max_duration", 100000))
+                           end_time=(100000 if params.get("max_duration_is_default")
+                                     else params.get("max_duration", 100000)))
     result = score_tracksets(trackset_gt, trackset, params)
     return {"params": params, "result": result,
             "time": datetime.datetime.now()}
@@ -1077,8 +1079,10 @@ def run_single_shared(config, tests_to_run, desc, max_streams):
 
             for item in items:
                 meta = _clip_meta(item["ds_path"])
-                cap = item.get("max_duration", 100000)
-                cap = cap if cap < 9000 else None
+                cap = None
+                if not item.get("max_duration_is_default"):
+                    cap = item.get("max_duration", 100000)
+                    cap = cap if cap < 9000 else None
                 h264 = h264_for_video(meta["original_video"], max_seconds=cap)
                 if item.get("stream_hint"):
                     st = upyc.c_track_stream(shared, _yaml.dump({"stream_hint": item["stream_hint"]}))
@@ -1180,6 +1184,11 @@ def track_test(config, split=None, desc="track test"):
                     params[p]=test[p]
                 if not "max_duration" in params:
                     params["max_duration"]=1000
+                    # metrics-window default only — NOT a media cap. The
+                    # truncated-h264 path must never build _t1000 variants
+                    # of every clip off this default (found 2026-07-23:
+                    # 306 pointless serial demuxes).
+                    params["max_duration_is_default"]=True
                 # copy some parameters from top level to each test config
                 params_to_copy=["eval_rate_divisor", "eval_min_framerate", "min_person_height",
                                 "classes", "classes_for_det_map", "fitness_weights"]
