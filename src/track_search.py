@@ -354,7 +354,11 @@ def search_test_batch(
             all_results[_candidate_key(split, cand_vecs[i])] = entry
             out[i] = (score, full_result, groups)
             if journal_fn:
-                journal_fn(split, cand_vecs[i], score, groups)
+                stats = {k: full_result[k] for k in
+                         ("fitness", "mota", "idf1", "fitness_vehicle",
+                          "mota_vehicle", "idf1_vehicle", "fitness_multi")
+                         if k in full_result}
+                journal_fn(split, cand_vecs[i], score, groups, stats=stats)
 
     # fill any batch-internal duplicates / late cache hits
     for i in range(len(cand_vecs)):
@@ -485,6 +489,9 @@ th{color:#888} td:first-child,th:first-child{text-align:left}
 <h2>per-group objective at validates</h2>
 <canvas id="groups" width="1100" height="300"></canvas>
 <div class="legend" id="glegend"></div>
+<h2>per-class (train evals): person vs vehicle</h2>
+<canvas id="classes" width="1100" height="300"></canvas>
+<div class="legend" id="clegend"></div>
 <h2>best vector</h2><table id="vec"></table>
 <script>
 const D = __PAYLOAD__;
@@ -523,6 +530,13 @@ const m = Math.max(vals.length-1, 1);
 drawSeries(document.getElementById("groups"),
   gnames.map((g,gi) => ({color: colors[gi%colors.length],
     pts: vals.map((v,i)=>[i/m, (v.groups||{})[g]]).filter(p=>p[1]!==undefined)})));
+const CSER = [["fitness","#4da6ff"],["fitness_vehicle","#ff6b6b"],
+              ["mota","#51cf66"],["mota_vehicle","#ffd43b"]];
+drawSeries(document.getElementById("classes"),
+  CSER.map(([k,color]) => ({color,
+    pts: evals.map((e,i)=>[i/n, (e.stats||{})[k]]).filter(p=>p[1]!==undefined)})));
+document.getElementById("clegend").innerHTML =
+  CSER.map(([k,c])=>'<span style="color:'+c+'">&#9632; '+k+"</span>").join("");
 document.getElementById("glegend").innerHTML =
   gnames.map((g,gi)=>'<span style="color:'+colors[gi%colors.length]+'">&#9632; '+g+"</span>").join("");
 const best = D.meta.best_vec || {};
@@ -606,9 +620,9 @@ def search_track(yaml_file):
 
     iter_box = {"iter": 0}
 
-    def journal_fn(split, vec, score, groups, kind="eval"):
+    def journal_fn(split, vec, score, groups, kind="eval", stats=None):
         e = {"kind": kind, "iter": iter_box["iter"], "split": split or "train",
-             "score": score, "groups": groups,
+             "score": score, "groups": groups, "stats": stats or {},
              "vec": {n: v for n, v in zip(param_names, vec)}}
         journal_entries.append(e)
         _journal_append(journal_path, e)
@@ -667,7 +681,11 @@ def search_track(yaml_file):
                 validate_score, full_result_val, val_groups = batch(
                     [vec_best], "val",
                     f"search test it:{iter_count} validate")[0]
-                journal_fn("val", vec_best, validate_score, val_groups, kind="validate")
+                journal_fn("val", vec_best, validate_score, val_groups, kind="validate",
+                           stats={k: full_result_val[k] for k in
+                                  ("fitness", "mota", "idf1", "fitness_vehicle",
+                                   "mota_vehicle", "idf1_vehicle", "fitness_multi")
+                                  if full_result_val and k in full_result_val})
                 search_log(logfile, "======================================================")
                 vs = track_test.summary_string(full_result_val) if full_result_val else "(memoised)"
                 search_log(logfile, f"Iter {iter_count:04d}  **VALIDATE** score {validate_score:0.4f}  [{vs} ]")
