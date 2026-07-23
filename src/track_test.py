@@ -1202,3 +1202,64 @@ def _write_eval_summary_json(config, output_results, rollups, elapsed):
     out_path = os.path.join(location, f"results-{cur_time}.json")
     with open(out_path, "w") as f:
         json.dump(summary, f, indent=2, sort_keys=True)
+    try:
+        _write_eval_summary_html(
+            os.path.join(location, f"results-{cur_time}.html"), summary)
+    except Exception:
+        import traceback
+        sys.stderr.write("eval html report failed: "
+                         + traceback.format_exc() + "\n")
+
+
+def _write_eval_summary_html(path, summary):
+    """Self-contained sortable eval report (search_review.md §4.3):
+    per-test rollup cards + a click-to-sort per-clip table, worst clips
+    surfaced. Inline data, vanilla JS, no server, negatives visible."""
+    payload = json.dumps(summary)
+    html = """<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>eval results</title><style>
+body{font-family:system-ui,sans-serif;margin:20px;background:#111;color:#ddd}
+h1{font-size:18px} h2{font-size:14px;color:#aaa;margin-top:22px}
+table{border-collapse:collapse;font-size:12px;margin-top:6px}
+td,th{padding:2px 9px;border-bottom:1px solid #2a2a2a;text-align:right;white-space:nowrap}
+th{color:#8ab;cursor:pointer;user-select:none} td:first-child,th:first-child{text-align:left}
+.neg{color:#ff6b6b} .rollup td{color:#ffd43b}
+</style></head><body><h1>eval results</h1><div id="root"></div>
+<script>
+const D = __PAYLOAD__;
+const COLS = ["fitness","fitness_multi","mota","idf1","mota_vehicle","idf1_vehicle",
+              "fp_per_frame","fp_tracks_honest_v2","num_objects","duration"];
+function fmt(v){ if(v===undefined||v===null) return "";
+  if(typeof v!=="number") return String(v);
+  const s = Math.abs(v)>=1000 ? v.toFixed(0) : v.toFixed(3);
+  return v<0 ? '<span class="neg">'+s+"</span>" : s; }
+function table(rows, id){
+  let sortk=COLS[0], asc=false;
+  const el=document.createElement("table"); el.id=id;
+  function render(){
+    const sorted=[...rows].sort((a,b)=>{
+      const x=a[1][sortk], y=b[1][sortk];
+      return ((x===undefined)-(y===undefined)) || (asc?x-y:y-x) || 0; });
+    el.innerHTML="<tr><th>clip</th>"+COLS.map(c=>
+      '<th data-k="'+c+'">'+c+(c===sortk?(asc?" \u25b2":" \u25bc"):"")+"</th>").join("")+"</tr>"+
+      sorted.map(([k,r])=>"<tr"+(k.startsWith("_")?' class="rollup"':"")+"><td>"+k+"</td>"+
+        COLS.map(c=>"<td>"+fmt(r[c])+"</td>").join("")+"</tr>").join("");
+    el.querySelectorAll("th[data-k]").forEach(th=>th.onclick=()=>{
+      if(sortk===th.dataset.k) asc=!asc; else {sortk=th.dataset.k; asc=false;}
+      render(); });
+  }
+  render(); return el;
+}
+const root=document.getElementById("root");
+for(const [tk, t] of Object.entries(D.tests||{})){
+  const h=document.createElement("h2"); h.textContent="test: "+tk; root.appendChild(h);
+  const rows=[];
+  if(t.overall) rows.push(["_overall", t.overall]);
+  if(t.groupmean) rows.push(["_groupmean", t.groupmean]);
+  for(const [g,m] of Object.entries(t.groups||{})) rows.push(["_"+g, m]);
+  for(const [c,m] of Object.entries(t.clips||{})) rows.push([c, m]);
+  root.appendChild(table(rows, "t_"+tk));
+}
+</script></body></html>"""
+    with open(path, "w") as f:
+        f.write(html.replace("__PAYLOAD__", payload))

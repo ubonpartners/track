@@ -1,5 +1,7 @@
 import copy
 import datetime
+import json
+import os
 
 import stuff
 
@@ -194,13 +196,14 @@ def _expand_split_hints(search_params, logfile=None):
     return out
 
 
-def _check_protect(config, results, logfile=None):
+def _check_protect(config, results, test_key=None, logfile=None):
     """The §7 regression guard: `protect: [{group, param, floor}]` rejects
     any candidate whose `__ovr<group>` rollup drops below the floor —
     'don't break CCTV' as a hard constraint, not a weight-tuning hope.
     Returns None when every rule passes, else the violated rule."""
     rules = config.get("protect") or []
-    test_key = config["result_test_opt_key"]
+    if test_key is None:
+        test_key = config["result_test_opt_key"]
     for rule in rules:
         group, param, floor = rule["group"], rule["param"], float(rule["floor"])
         row = None
@@ -233,6 +236,119 @@ def search_log(logfile, x):
     logfile.flush()
 
 
+def _candidate_key(split, param_vec):
+    return (split or "train", tuple(param_vec))
+
+
+def search_test_batch(
+    config,
+    params,
+    cand_vecs,
+    param_is_int,
+    param_min,
+    param_max,
+    all_results,
+    split="train",
+    logfile=None,
+    desc="search batch",
+    journal_fn=None,
+):
+    """Evaluate N candidate vectors in ONE track_test pass (search_review.md
+    §2.1): the up/down probes (or any batch) share one work-queue run, so the
+    pool never idles between candidates and engines load once per batch.
+
+    Per candidate: range check (reject −10000), memoisation by (split, vec) —
+    validation runs are cached too, so an unchanged vec_best never re-runs
+    the val set — a fresh eval otherwise. The base tracker config is loaded
+    once and DEEP-COPIED per candidate, so nothing (§15 create-on-write
+    variant blocks included) leaks between candidates or batches.
+
+    Returns [(score, full_result_or_None, groups_or_None)] aligned with
+    cand_vecs. groups = {group: opt_param value} from the __ovr rollups.
+    """
+    result_test_opt_key = config["result_test_opt_key"]
+    result_dataset_opt_key = config["result_dataset_opt_key"]
+    result_dataset_opt_param = config["result_dataset_opt_param"]
+
+    out = [None] * len(cand_vecs)
+    to_eval = []          # index -> fresh evaluation needed
+    key_of = {}
+    for i in range(len(cand_vecs)):
+        vec = _normalise_param_vec(cand_vecs[i], param_is_int)
+        cand_vecs[i] = vec
+        if any(v < mn or v > mx for v, mn, mx in zip(vec, param_min, param_max)):
+            # out-of-range: cached like every other reject so boundary
+            # bounces never re-run anything
+            all_results[_candidate_key(split, vec)] = {"score": -10000}
+            out[i] = (-10000, None, None)
+            continue
+        ck = _candidate_key(split, vec)
+        key_of[i] = ck
+        if ck in all_results:
+            c = all_results[ck]
+            out[i] = (c["score"], c.get("full_result"), c.get("groups"))
+            continue
+        if any(key_of.get(j) == ck for j in to_eval):
+            continue      # duplicate inside the batch: fill from cache after
+        to_eval.append(i)
+
+    if to_eval:
+        base = config["tests"][result_test_opt_key]
+        if isinstance(base.get("config"), str):
+            base["config"] = stuff.load_dictionary(base["config"])
+        run_cfg = {k: v for k, v in config.items() if k != "tests"}
+        run_cfg["tests"] = {}
+        tk_of = {}
+        for i in to_eval:
+            tk = f"cand{i:02d}"
+            tk_of[i] = tk
+            t = copy.deepcopy(base)
+            for pi, pname in enumerate(params):
+                _set_nested_param(t["config"], pname, cand_vecs[i][pi])
+            run_cfg["tests"][tk] = t
+        results = track_test.track_test(run_cfg, split=split, desc=desc)
+
+        for i in to_eval:
+            tk = tk_of[i]
+            score = None
+            full_result = None
+            groups = {}
+            for r in results:
+                if r["params"]["test_key"] != tk:
+                    continue
+                ds = r["params"]["ds_key"]
+                if ds == result_dataset_opt_key:
+                    score = r["result"].get(result_dataset_opt_param)
+                    full_result = r["result"]
+                if ds.startswith("__ovr"):
+                    g = ds[len("__ovr"):]
+                    if result_dataset_opt_param in r["result"]:
+                        groups[g] = r["result"][result_dataset_opt_param]
+            if full_result is None:
+                raise RuntimeError(
+                    f"No result for candidate {tk} on dataset {result_dataset_opt_key}")
+            # Regression guard (§7): reject + cache, same path as
+            # out-of-range params.
+            if _check_protect(config, results, test_key=tk, logfile=logfile) is not None:
+                all_results[_candidate_key(split, cand_vecs[i])] = {
+                    "score": -10000, "groups": groups}
+                out[i] = (-10000, None, groups)
+                continue
+            _round_numeric_metrics(full_result)
+            entry = {"score": score, "groups": groups, "full_result": full_result}
+            all_results[_candidate_key(split, cand_vecs[i])] = entry
+            out[i] = (score, full_result, groups)
+            if journal_fn:
+                journal_fn(split, cand_vecs[i], score, groups)
+
+    # fill any batch-internal duplicates / late cache hits
+    for i in range(len(cand_vecs)):
+        if out[i] is None:
+            c = all_results[_candidate_key(split, cand_vecs[i])]
+            out[i] = (c["score"], c.get("full_result"), c.get("groups"))
+    return out
+
+
 def search_test(
     config,
     params,
@@ -245,50 +361,12 @@ def search_test(
     logfile=None,
     desc="search result",
 ):
-    param_vec = _normalise_param_vec(param_vec, param_is_int)
-
-    # check if the parameters are within the min and max range
-    if any(p < min_v or p > max_v for p, min_v, max_v in zip(param_vec, param_min, param_max)):
-        return -10000, None
-
-    is_train = split == "train" or split is None
-
-    if is_train and tuple(param_vec) in all_results:
-        return all_results[tuple(param_vec)]["score"], None
-
-    result_test_opt_key = config["result_test_opt_key"]
-    result_dataset_opt_key = config["result_dataset_opt_key"]
-    result_dataset_opt_param = config["result_dataset_opt_param"]
-    c = config["tests"][result_test_opt_key]
-    if isinstance(c["config"], str):
-        c["config"] = stuff.load_dictionary(c["config"])
-    for i, p in enumerate(params):
-        c = config["tests"][result_test_opt_key]
-        _set_nested_param(c["config"], p, _normalise_param_value(param_vec[i], param_is_int[i]))
-    results = track_test.track_test(config, split=split, desc=desc)
-
-    # Regression guard (§7): a candidate that sinks a protected group is
-    # rejected outright — same path as out-of-range params — and the
-    # rejection is cached so the vector is never re-evaluated.
-    if _check_protect(config, results, logfile=logfile) is not None:
-        if is_train:
-            all_results[tuple(param_vec)] = {"score": -10000, "param_vec": param_vec}
-        return -10000, None
-
-    val = None
-    full_result = None
-    for r in results:
-        if r["params"]["test_key"] == result_test_opt_key and r["params"]["ds_key"] == result_dataset_opt_key:
-            val = r["result"][result_dataset_opt_param]
-            full_result = r["result"]
-    if is_train:
-        all_results[tuple(param_vec)] = {"score": val, "param_vec": param_vec}
-    if full_result is None:
-        raise RuntimeError(
-            f"No result found for test {result_test_opt_key} on dataset {result_dataset_opt_key}"
-        )
-    _round_numeric_metrics(full_result)
-    return val, full_result
+    """Single-candidate wrapper over search_test_batch (kept for callers
+    and tests; the search loop batches)."""
+    (score, full_result, _groups) = search_test_batch(
+        config, params, [param_vec], param_is_int, param_min, param_max,
+        all_results, split=split, logfile=logfile, desc=desc)[0]
+    return score, full_result
 
 
 def eval_track(yaml_file):
@@ -335,19 +413,127 @@ def eval_track(yaml_file):
                                   desc=f"eval {yaml_file}")
 
 
+def _journal_append(path, entry):
+    entry = dict(entry)
+    entry["ts"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(path, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+def _journal_load(path, param_names):
+    """Preload a previous run's journal into the (split, vec) cache —
+    the crash-resume path (search_review.md §2.5). Entries whose param-name
+    set differs from the current search are skipped (a changed search space
+    invalidates old scores)."""
+    cache = {}
+    entries = []
+    if not path or not os.path.isfile(path):
+        return cache, entries
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            vec_map = e.get("vec") or {}
+            if set(vec_map.keys()) != set(param_names):
+                continue
+            vec = tuple(vec_map[n] for n in param_names)
+            cache[(e.get("split") or "train", vec)] = {
+                "score": e.get("score"), "groups": e.get("groups")}
+            entries.append(e)
+    return cache, entries
+
+
+def _write_search_html(path, meta, entries):
+    """Self-contained live search report (search_review.md §4.3): train
+    score trace, validate markers, per-group traces at validates, and the
+    best vector — inline data, vanilla JS, no server, regenerated at every
+    validate so it is live during a run."""
+    payload = json.dumps({"meta": meta, "entries": entries})
+    html = """<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>track search</title><style>
+body{font-family:system-ui,sans-serif;margin:20px;background:#111;color:#ddd}
+h1{font-size:18px} h2{font-size:14px;color:#aaa;margin-top:24px}
+canvas{background:#181818;border:1px solid #333;border-radius:6px}
+table{border-collapse:collapse;font-size:12px;margin-top:8px}
+td,th{padding:2px 10px;border-bottom:1px solid #2a2a2a;text-align:right}
+th{color:#888} td:first-child,th:first-child{text-align:left}
+.legend span{display:inline-block;margin-right:14px;font-size:12px}
+</style></head><body>
+<h1>track search <span id="title"></span></h1>
+<h2>objective (train evals ordered; &#9650; = validate)</h2>
+<canvas id="score" width="1100" height="300"></canvas>
+<h2>per-group objective at validates</h2>
+<canvas id="groups" width="1100" height="300"></canvas>
+<div class="legend" id="glegend"></div>
+<h2>best vector</h2><table id="vec"></table>
+<script>
+const D = __PAYLOAD__;
+document.getElementById("title").textContent =
+  D.meta.name + " — " + D.entries.length + " journal rows";
+const evals = D.entries.filter(e => (e.kind||"eval") === "eval" && e.split !== "val");
+const vals  = D.entries.filter(e => e.split === "val");
+function drawSeries(cv, series, markers) {
+  const c = cv.getContext("2d");
+  const all = series.flatMap(s => s.pts.map(p => p[1])).filter(v => v > -100);
+  if (!all.length) return;
+  const lo = Math.min(...all), hi = Math.max(...all), pad = (hi-lo || 1) * 0.08;
+  const X = n => 40 + (cv.width-60) * n, Y = v => cv.height-24 - (cv.height-48)*(v-lo+pad)/(hi-lo+2*pad);
+  c.clearRect(0,0,cv.width,cv.height);
+  c.fillStyle="#666"; c.font="11px sans-serif";
+  c.fillText(hi.toFixed(3), 2, Y(hi)+4); c.fillText(lo.toFixed(3), 2, Y(lo)+4);
+  series.forEach(s => {
+    c.strokeStyle = s.color; c.beginPath();
+    s.pts.forEach((p,i) => { const x=X(p[0]), y=Y(Math.max(p[1],lo)); i?c.lineTo(x,y):c.moveTo(x,y); });
+    c.stroke();
+  });
+  (markers||[]).forEach(m => {
+    c.fillStyle = "#ffcc00";
+    c.beginPath(); const x=X(m[0]), y=Y(Math.max(m[1],lo));
+    c.moveTo(x,y-5); c.lineTo(x-4,y+3); c.lineTo(x+4,y+3); c.fill();
+  });
+}
+const n = Math.max(evals.length-1, 1);
+drawSeries(document.getElementById("score"),
+  [{color:"#4da6ff", pts: evals.map((e,i)=>[i/n, e.score])}],
+  vals.map(v => { const i = evals.findIndex(e => e.iter >= (v.iter||0));
+                  return [(i<0?evals.length-1:i)/n, v.score]; }));
+const gnames = [...new Set(vals.flatMap(v => Object.keys(v.groups||{})))].sort();
+const colors = ["#4da6ff","#ff6b6b","#51cf66","#ffd43b","#c084fc","#ff922b","#38d9d9","#e599f7"];
+const m = Math.max(vals.length-1, 1);
+drawSeries(document.getElementById("groups"),
+  gnames.map((g,gi) => ({color: colors[gi%colors.length],
+    pts: vals.map((v,i)=>[i/m, (v.groups||{})[g]]).filter(p=>p[1]!==undefined)})));
+document.getElementById("glegend").innerHTML =
+  gnames.map((g,gi)=>'<span style="color:'+colors[gi%colors.length]+'">&#9632; '+g+"</span>").join("");
+const best = D.meta.best_vec || {};
+document.getElementById("vec").innerHTML =
+  "<tr><th>param</th><th>value</th></tr>" +
+  Object.keys(best).map(k=>"<tr><td>"+k+"</td><td>"+best[k]+"</td></tr>").join("");
+</script></body></html>"""
+    html = html.replace("__PAYLOAD__", payload)
+    with open(path, "w") as f:
+        f.write(html)
+
+
 def search_track(yaml_file):
     config = stuff.load_dictionary(yaml_file)
     result_log_file = config["result_log_file_path"]
+    stuff.makedir(result_log_file)
     cur_time = datetime.datetime.now().strftime("%Y%m%d-%H%M")
     logfile = open(result_log_file + "/search_log_" + cur_time + ".txt", "w")
+    journal_path = result_log_file + f"/search_journal_{cur_time}.jsonl"
+    html_path = result_log_file + f"/search_report_{cur_time}.html"
     param_names = []
     param_initial = []
     param_step = []
     param_min = []
     param_max = []
     param_is_int = []
-
-    results = {}
 
     train_split = "train"
     if "do_train_split" in config:
@@ -381,7 +567,12 @@ def search_track(yaml_file):
             param_initial[i] = _normalise_param_value(raw_initial, param_is_int[i])
             search_log(logfile, f"Setting parameter {p} initial value to {param_initial[i]} from search config")
         assert param_initial[i] is not None, f"Parameter {p} missing initial value"
-        param_step.append(float(config["search_params"][p]["step"]))
+        step = float(config["search_params"][p]["step"])
+        # _normalise_param_value rounds floats to 3 dp — a finer step would
+        # silently collapse (search_review.md §3).
+        assert param_is_int[i] or step >= 0.001, \
+            f"{p}: step {step} below the 0.001 float resolution"
+        param_step.append(step)
         param_min.append(float(config["search_params"][p]["min"]))
         param_max.append(float(config["search_params"][p]["max"]))
 
@@ -392,20 +583,40 @@ def search_track(yaml_file):
         assert v >= param_min[i], f"{p} : Initial value {v} is less than min {param_min[i]}"
         assert v <= param_max[i], f"{p} : Initial value {v} is more than max {param_max[i]}"
 
+    # (split, vec) memoisation, optionally preloaded from a previous run's
+    # journal (config resume_from: <path to search_journal_*.jsonl>).
+    results, journal_entries = _journal_load(config.get("resume_from"), param_names)
+    if results:
+        search_log(logfile, f"Resumed {len(results)} cached evals from {config['resume_from']}")
+
+    iter_box = {"iter": 0}
+
+    def journal_fn(split, vec, score, groups, kind="eval"):
+        e = {"kind": kind, "iter": iter_box["iter"], "split": split or "train",
+             "score": score, "groups": groups,
+             "vec": {n: v for n, v in zip(param_names, vec)}}
+        journal_entries.append(e)
+        _journal_append(journal_path, e)
+
+    def write_html(best_vec):
+        meta = {"name": os.path.basename(yaml_file),
+                "best_vec": {n: v for n, v in zip(param_names, best_vec)}}
+        try:
+            _write_search_html(html_path, meta, journal_entries)
+        except Exception as ex:      # the report must never kill a search
+            search_log(logfile, f"html report failed: {ex}")
+
+    def batch(vecs, split, desc):
+        return search_test_batch(
+            config, param_names, vecs, param_is_int, param_min, param_max,
+            results, split=split, logfile=logfile, desc=desc,
+            journal_fn=journal_fn)
+
     param_initial = _normalise_param_vec(param_initial, param_is_int)
-    score_best, best_full_result = search_test(
-        config,
-        param_names,
-        param_initial,
-        param_is_int,
-        param_min,
-        param_max,
-        results,
-        split=train_split,
-        logfile=logfile,
-        desc="search test: initial",
-    )
-    assert best_full_result is not None
+    score_best, best_full_result, _g = batch(
+        [param_initial], train_split, "search test: initial")[0]
+    # best_full_result may be None on a journal-resumed run (the cache
+    # carries score+groups, not the full row) — every consumer guards.
     vec_best = copy.copy(param_initial)
 
     iter_count = 0
@@ -414,32 +625,52 @@ def search_track(yaml_file):
     improvements_since_validate = 0
     last_validate_iter = 0
     successive_improvements = 0
-    search_log(logfile, f"Iter {iter_count:04d} initial score {score_best:0.4f}  [{track_test.summary_string(best_full_result)} ]")
+    best_val = {"score": None, "vec": None}
+    last_val_groups = None
+    search_log(logfile, f"Iter {iter_count:04d} initial score {score_best:0.4f}  [{track_test.summary_string(best_full_result) if best_full_result else '(memoised)'} ]")
     search_log(logfile, f"  initial vector: {dict(zip(param_names, vec_best))}")
 
     total_improvement = [0.0] * len(param_names)
 
+    def finish():
+        search_log(logfile, "All done!")
+        search_log(logfile, f"best by train: score {score_best:0.4f}  vector: {dict(zip(param_names, vec_best))}")
+        if best_val["score"] is not None:
+            search_log(logfile, f"best by val:   score {best_val['score']:0.4f}  vector: {dict(zip(param_names, best_val['vec']))}")
+        write_html(vec_best)
+        search_log(logfile, f"journal: {journal_path}")
+        search_log(logfile, f"report:  {html_path}")
+        logfile.close()
+
     while True:
         index = param_index % len(param_names)
+        iter_box["iter"] = iter_count
 
         do_val = improvements_since_validate > 0 and iter_count >= last_validate_iter + 4
         if train_split is not None:
             if do_val or iter_count == 0:
-                validate_score, full_result_val = search_test(
-                    config,
-                    param_names,
-                    vec_best,
-                    param_is_int,
-                    param_min,
-                    param_max,
-                    results,
-                    split="val",
-                    logfile=logfile,
-                    desc=f"search test it:{iter_count} validate",
-                )
+                validate_score, full_result_val, val_groups = batch(
+                    [vec_best], "val",
+                    f"search test it:{iter_count} validate")[0]
+                journal_fn("val", vec_best, validate_score, val_groups, kind="validate")
                 search_log(logfile, "======================================================")
-                search_log(logfile, f"Iter {iter_count:04d}  **VALIDATE** score {validate_score:0.4f}  [{track_test.summary_string(full_result_val)} ]")
+                vs = track_test.summary_string(full_result_val) if full_result_val else "(memoised)"
+                search_log(logfile, f"Iter {iter_count:04d}  **VALIDATE** score {validate_score:0.4f}  [{vs} ]")
                 search_log(logfile, f"  vector: {dict(zip(param_names, vec_best))}")
+                # Per-group deltas vs the previous validate — the "bwc got
+                # better, cctv flat" line (search_review.md §4.2).
+                if val_groups:
+                    if last_val_groups:
+                        deltas = ", ".join(
+                            f"{g} {val_groups[g] - last_val_groups.get(g, 0):+0.4f}"
+                            for g in sorted(val_groups))
+                        search_log(logfile, f"  group deltas: {deltas}")
+                    levels = ", ".join(f"{g} {val_groups[g]:0.4f}" for g in sorted(val_groups))
+                    search_log(logfile, f"  group levels: {levels}")
+                    last_val_groups = val_groups
+                if best_val["score"] is None or validate_score > best_val["score"]:
+                    best_val["score"] = validate_score
+                    best_val["vec"] = copy.copy(vec_best)
                 total = sum(total_improvement)
                 if total > 0:
                     search_log(logfile, "  cumulative improvement by param:")
@@ -451,37 +682,19 @@ def search_track(yaml_file):
                 search_log(logfile, "======================================================")
                 improvements_since_validate = 0
                 last_validate_iter = iter_count
+                write_html(vec_best)
 
         vec_up = copy.copy(vec_best)
         vec_down = copy.copy(vec_best)
         vec_up[index] += step_multiplier * param_step[index]
         vec_down[index] -= step_multiplier * param_step[index]
-        vec_up = _normalise_param_vec(vec_up, param_is_int)
-        vec_down = _normalise_param_vec(vec_down, param_is_int)
-        score_up, full_result_up = search_test(
-            config,
-            param_names,
-            vec_up,
-            param_is_int,
-            param_min,
-            param_max,
-            results,
-            split=train_split,
-            logfile=logfile,
-            desc=f"search test it:{iter_count} search param {param_names[index]} up",
-        )
-        score_down, full_result_down = search_test(
-            config,
-            param_names,
-            vec_down,
-            param_is_int,
-            param_min,
-            param_max,
-            results,
-            split=train_split,
-            logfile=logfile,
-            desc=f"search test it:{iter_count} search param {param_names[index]} down",
-        )
+        # ONE eval pass for both probes (search_review.md §2.1) — cached /
+        # out-of-range candidates cost nothing, fresh ones share the pool.
+        probes = batch([vec_up, vec_down], train_split,
+                       f"search test it:{iter_count} probe {param_names[index]}")
+        (score_up, full_result_up, _gu) = probes[0]
+        (score_down, full_result_down, _gd) = probes[1]
+        vec_up, vec_down = _normalise_param_vec(vec_up, param_is_int), _normalise_param_vec(vec_down, param_is_int)
         if score_up > score_best:
             total_improvement[index] += score_up - score_best
             score_best = score_up
@@ -496,11 +709,12 @@ def search_track(yaml_file):
             last_improvement_iter = iter_count
         if last_improvement_iter == iter_count:
             new_val = vec_best[index]
+            fr = track_test.summary_string(best_full_result) if best_full_result else "(memoised)"
             search_log(
                 logfile,
                 f"Iter {iter_count:04d} mult:{step_multiplier:>4} "
                 f"{param_names[index]} → {new_val}  "
-                f"score {score_best:0.4f}  [{track_test.summary_string(best_full_result)} ]",
+                f"score {score_best:0.4f}  [{fr} ]",
             )
             successive_improvements += 1
             improvements_since_validate += 1
@@ -522,11 +736,5 @@ def search_track(yaml_file):
             last_improvement_iter = iter_count
             search_log(logfile, f"Iter {iter_count:04d} ---- reducing multiplier to {step_multiplier}----")
             if step_multiplier < final_multiplier:
-                search_log(logfile, "All done!")
-                logfile.close()
+                finish()
                 return
-
-import copy
-import stuff
-import src.track_test as track_test
-import datetime
