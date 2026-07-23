@@ -186,3 +186,30 @@ def test_augmented_tracks_are_dense_on_existing_frames(tmp_path):
     present = [new_id in f["objects"] for f in grid]
     assert all(present), present        # dense on every spanned frame
     assert out["metadata"]["autolabel_augmented"]["dense"] is True
+
+
+def test_autolabel_export_contract_reads():
+    """Reader half of the autolabel<->track schema contract (writer
+    half: autolabel tests/test_core.py::test_export_schema_contract).
+    Golden fixture is a real autolabel export committed in the
+    autolabel repo; if this fails, the exporter drifted from what this
+    repo's readers assume (dense 1-based grid, normalized xyxy boxes,
+    class indices into metadata classes)."""
+    import os
+    golden = os.path.expanduser(
+        "~/stuff/ubonpartners/autolabel/tests/golden/contract_trackset.json")
+    if not os.path.isfile(golden):
+        import pytest
+        pytest.skip("autolabel repo not present")
+    import src.trackset as trackset
+    ts = trackset.TrackSet(golden)
+    assert ts.metadata["classes"] == ["person", "vehicle", "other"]
+    # TrackSet normalizes away frame_id; the contract surface here is
+    # the TIME grid: dense, starting at 0, spaced 1/frame_rate
+    fps = ts.metadata["frame_rate"]
+    for i, f in enumerate(ts.frames):
+        assert abs(f["frame_time"] - i / fps) < 1e-9
+        for o in f["objects"].values():
+            assert len(o["box"]) == 4
+            assert 0 <= o["class"] < len(ts.metadata["classes"])
+    assert len(ts.frames) == 8
