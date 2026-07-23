@@ -706,6 +706,10 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events_list=Non
         trackset_gt=TrackSet(trackset_gt)
 
     trackset_base=trackset_gt if trackset_gt is not None else trackset_list[0]
+    # exact frame interval: t+=0.033 drifted 1% vs the frame grid,
+    # forcing a duplicated frame at fixed times (~every 1.7s at 30fps,
+    # e.g. T=3.35) — seen as deterministic playback hitches
+    frame_dt=1.0/float(trackset_base.metadata.get("frame_rate", 30.0))
     duration=min(max_duration, trackset_base.duration_seconds())
     t=0
     paused=True
@@ -945,9 +949,9 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events_list=Non
                 if e['key']=='<':
                     t=trackset.frame_time_before(t)
                 if e['key']=='.':
-                    t+=0.033
+                    t+=frame_dt
                 if e['key']==',':
-                    t-=0.033
+                    t-=frame_dt
                 if e['key']=='s':
                     show_stats=not show_stats
                 if e['key']=='x':
@@ -959,7 +963,7 @@ def display_trackset(trackset_list=None, trackset_gt=None, frame_events_list=Non
                     key = list(debug_overlays_enabled.keys())[index]
                     debug_overlays_enabled[key]=not debug_overlays_enabled[key]
         if paused is False:
-            t+=0.033
+            t+=frame_dt
     for ts in tss:
         ts["display"].close()
 
