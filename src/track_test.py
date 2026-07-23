@@ -53,6 +53,41 @@ def fitness_score(r):
     h_rate = h / dur if dur > 0 else 0.0
     return r["mota"] - _FP_TRACK_COEF * h_rate - 0.002 * r["fp_per_frame"]
 
+def gt_class_box_counts(gt):
+    """GT box count per class NAME. Drives the multi-class skip rule
+    (multi_class_and_hints.md §2/§4): an extra class with ZERO GT boxes
+    in a clip is not scored there — its metrics would be free points
+    (or, matched against nothing, all-FP noise). Person is exempt from
+    the skip: zero-GT person clips are deliberate FP probes."""
+    classes = gt.metadata.get("classes", [])
+    counts = {c: 0 for c in classes}
+    for frame in gt.frames:
+        objs = frame.get("objects")
+        if not objs:
+            continue
+        for rec in objs.values():
+            cl = rec.get("class", 0)
+            if 0 <= cl < len(classes):
+                counts[classes[cl]] += 1
+    return counts
+
+
+def fitness_multi_score(r, weights):
+    """Config-driven combined fitness (multi_class_and_hints.md §3):
+    fitness_multi = sum_c w_c * fitness_c over classes PRESENT in the
+    row. A class a clip has no GT for contributes nothing (weight 0 for
+    that row, not fitness 0) — the zero-GT guard from plan §14."""
+    weights = weights or {"person": 1.0}
+    total = 0.0
+    present = False
+    for cls, w in weights.items():
+        key = "fitness" if cls == "person" else f"fitness_{cls}"
+        if key in r:
+            total += float(w) * r[key]
+            present = True
+    return total if present else None
+
+
 def summary_string(r):
     s=f" MOTA:{r['mota']:6.5f}"
     if 'idf1' in r:
@@ -81,6 +116,14 @@ def summary_string(r):
         s+=f" PmAP:{r['det_ap_person']:0.3f}"
     if 'det_ap_face' in r:
         s+=f" FmAP:{r['det_ap_face']:0.3f}"
+    if 'det_ap_vehicle' in r:
+        s+=f" VmAP:{r['det_ap_vehicle']:0.3f}"
+    if 'mota_vehicle' in r:
+        s+=f" vMOTA:{r['mota_vehicle']:6.5f}"
+    if 'fp_per_frame_vehicle' in r:
+        s+=f" vFPpf:{r['fp_per_frame_vehicle']:5.2f}"
+    if 'fitness_multi' in r:
+        s+=f" FITm:{r['fitness_multi']:6.5f}"
     return s
 
 def annotation_floors(gt_metadata):
@@ -570,7 +613,8 @@ def compute_metrics(gt, test,
 
     logging.debug(f"detection metrics")
 
-    compute_detection_metrics(gt, test, metrics_dict, classes_for_det_map)
+    if classes_for_det_map:      # None/[] = skip (the per-extra-class calls; det AP is computed once, on the person pass)
+        compute_detection_metrics(gt, test, metrics_dict, classes_for_det_map)
 
     if frame_metrics:
         return metrics_dict, frame_events
@@ -639,31 +683,68 @@ def display_results(config, results, columns, sort_key):
                 e["params"]["ds_key"]=name
                 e["params"]["test_key"]=t
                 er=e["result"]
+                # Per-class namespacing (multi_class_and_hints.md §2): the
+                # SAME derived-metric recompute runs once per class suffix
+                # ("" = person/base, "_vehicle", ...) from that suffix's own
+                # summed counts. Suffixes are detected from the idtp_* keys.
+                nonsum_bases=["fitness","fp_per_frame","fn_per_obj","switch_per_obj","frag_per_obj"]
+                suffixes=[""]+sorted({p[len("idtp"):] for p in params
+                                      if p.startswith("idtp") and p!="idtp"})
+                nonsum={b+sfx for b in nonsum_bases for sfx in suffixes} | {"fitness_multi"}
                 for p in params:
-                    if p not in ["fitness","fp_per_frame","fn_per_obj","switch_per_obj","frag_per_obj"]:
-                        er[p]=sum([r["result"][p] for r in filtered if "result" in r and p in r["result"]])
-                weighted_motp_sum=0
-
-                for r in filtered:
-                    weighted_motp_sum += r['result']['motp']*r['result']['idtp']
-                er["idf1"]= (2 * er["idtp"]) / (2 * er["idtp"] + er["idfp"] + er["idfn"]+1e-7)
-                er['mota']= 1 - (er['num_false_positives'] + er['num_misses'] + er['num_switches']) / (er['num_objects']+1e-7)
-                er['motp']=weighted_motp_sum/(er['idtp']+1e-7)
-                er["fp_per_frame"]=er["num_false_positives"]/(er["num_frames"]+1e-7) # false positive dets per frame
-                er["fn_per_obj"]=er["num_misses"]/(er["num_objects"]+1e-7) # num false negative dets per real object GT det
-                er["switch_per_obj"]=er["num_switches"]/(er["num_unique_objects"]+1e-7) # num switches per unique object
-                er["frag_per_obj"]=er["num_fragmentations"]/(er["num_unique_objects"]+1e-7)
+                    if p not in nonsum:
+                        vals=[r["result"][p] for r in filtered if "result" in r and p in r["result"]]
+                        # A key NO row in this group has stays absent — an
+                        # empty sum would fabricate zero counts, and the
+                        # derived recompute would then report e.g.
+                        # mota_vehicle=1.0 for a group with no vehicle GT.
+                        if vals:
+                            er[p]=sum(vals)
+                for sfx in suffixes:
+                    if ("idtp"+sfx) not in er:
+                        continue
+                    weighted_motp_sum=0
+                    for r in filtered:
+                        rr=r.get("result", {})
+                        if ("motp"+sfx) in rr and ("idtp"+sfx) in rr:
+                            weighted_motp_sum += rr["motp"+sfx]*rr["idtp"+sfx]
+                    er["idf1"+sfx]= (2 * er["idtp"+sfx]) / (2 * er["idtp"+sfx] + er["idfp"+sfx] + er["idfn"+sfx]+1e-7)
+                    er["mota"+sfx]= 1 - (er["num_false_positives"+sfx] + er["num_misses"+sfx] + er["num_switches"+sfx]) / (er["num_objects"+sfx]+1e-7)
+                    er["motp"+sfx]=weighted_motp_sum/(er["idtp"+sfx]+1e-7)
+                    er["fp_per_frame"+sfx]=er["num_false_positives"+sfx]/(er["num_frames"+sfx]+1e-7) # false positive dets per frame
+                    er["fn_per_obj"+sfx]=er["num_misses"+sfx]/(er["num_objects"+sfx]+1e-7) # num false negative dets per real object GT det
+                    er["switch_per_obj"+sfx]=er["num_switches"+sfx]/(er["num_unique_objects"+sfx]+1e-7) # num switches per unique object
+                    er["frag_per_obj"+sfx]=er["num_fragmentations"+sfx]/(er["num_unique_objects"+sfx]+1e-7)
 
                 stats_to_avg=['mostly_tracked_frac','partially_tracked_frac','mostly_lost2_frac',
                               'missed_frac','fp_tracks_frac', 'time',
                               'tracked_frames','tracked_time','tracked_fps','tracked_frames_skipped_frac',
-                              'average_detection_roi_area','det_ap_person', 'det_ap_face']
+                              'average_detection_roi_area','det_ap_person', 'det_ap_face', 'det_ap_vehicle']
 
                 for x in stats_to_avg:
                     if x in er:
                         er[x]=er[x]/len(filtered)
+                # Suffixed fraction averages divide by the number of rows
+                # that HAVE the class — clips without it must not dilute.
+                for sfx in suffixes:
+                    if sfx=="":
+                        continue
+                    for b in ['mostly_tracked_frac','partially_tracked_frac','mostly_lost2_frac',
+                              'missed_frac','fp_tracks_frac','tracked_frames_skipped_frac']:
+                        x=b+sfx
+                        if x in er:
+                            n=len([r for r in filtered if x in r.get("result",{})])
+                            er[x]=er[x]/max(1,n)
 
-                er['fitness']=fitness_score(er)
+                for sfx in suffixes:
+                    if ("idtp"+sfx) in er:
+                        view={b: er[b+sfx] for b in
+                              ["mota","fp_per_frame","fp_tracks","fp_tracks_honest_v2","duration"]
+                              if (b+sfx) in er}
+                        er["fitness"+sfx]=fitness_score(view)
+                fm=fitness_multi_score(er, config.get("fitness_weights"))
+                if fm is not None:
+                    er["fitness_multi"]=fm
 
                 results2.append(e)
             datasets.append(name)
@@ -750,13 +831,53 @@ def track_test_work_fn(params, mpwq_context, mpwq_progress_fn):
         match_iou=params["match_iou"]
     eval_rate_divisor=params.get("eval_rate_divisor", 1)
     eval_min_framerate=params.get("eval_min_framerate", 30.0)
+
+    # Multi-class scoring (multi_class_and_hints.md §2): person is scored
+    # exactly as before (un-suffixed keys — nothing downstream changes);
+    # every EXTRA class in `classes` gets its own compute_metrics pass with
+    # every result key namespaced `<key>_<class>`. A clip whose GT has zero
+    # boxes of an extra class skips that class (§4: absent GT must never
+    # touch a metric); person is exempt — zero-GT person clips are the
+    # deliberate FP probes v11 already carries.
+    eval_classes=params.get("classes", ["person"])
+    if isinstance(eval_classes, str):
+        eval_classes=[c.strip() for c in eval_classes.split(",") if c.strip()]
+    det_map=params.get("classes_for_det_map")
+    if det_map is None:
+        det_map=["person","face"]
+        if "vehicle" in eval_classes:
+            det_map=det_map+["vehicle"]
+
     logging.debug(f"compute metrics")
     result=compute_metrics(trackset_gt, trackset,
                            min_person_height=params.get("min_person_height", 0.0),
                            max_duration=params["max_duration"],
                            match_iou=match_iou,
+                           classes_for_det_map=det_map,
                            eval_rate_divisor=eval_rate_divisor,
                            eval_min_framerate=eval_min_framerate)
+
+    gt_counts=gt_class_box_counts(trackset_gt)
+    for cls in eval_classes:
+        if cls == "person":
+            continue
+        if gt_counts.get(cls, 0) == 0:
+            continue
+        # Per-class pass: no min_person_height (the person floor must not
+        # gate wide-short vehicles — plan §14) and no det-AP recompute.
+        r_cls=compute_metrics(trackset_gt, trackset,
+                              max_duration=params["max_duration"],
+                              match_iou=match_iou,
+                              classes_to_test=[cls],
+                              classes_for_det_map=None,
+                              eval_rate_divisor=eval_rate_divisor,
+                              eval_min_framerate=eval_min_framerate)
+        for k, v in r_cls.items():
+            result[f"{k}_{cls}"]=v
+
+    fm=fitness_multi_score(result, params.get("fitness_weights"))
+    if fm is not None:
+        result["fitness_multi"]=fm
 
     del trackset
     del trackset_gt
@@ -851,10 +972,21 @@ def track_test(config, split=None, desc="track test"):
                 if not "max_duration" in params:
                     params["max_duration"]=1000
                 # copy some parameters from top level to each test config
-                params_to_copy=["eval_rate_divisor", "eval_min_framerate", "min_person_height"]
+                params_to_copy=["eval_rate_divisor", "eval_min_framerate", "min_person_height",
+                                "classes", "classes_for_det_map", "fitness_weights"]
                 for p in params_to_copy:
                     if p in config:
                         params[p]=config[p]
+                # Dataset extras (multi_class_and_hints.md §5): every
+                # per-dataset key beyond the harness-reserved set rides
+                # into params → import_create's param_dict → the tracker
+                # config yaml verbatim. This is how `stream_hint: bodycam`
+                # reaches track_stream_create (the C side resolves the
+                # (hint:x) variant axis from it).
+                reserved={"path","split","group","family","regenerate","no_cache"}
+                for k,v in dataset.items():
+                    if k not in reserved:
+                        params[k]=v
                 params["ds_path"]=dataset["path"]
                 params["display"]=f"{len(tests_to_run):02d}: "+ds_key+"/"+test_key
                 params["ds_key"]=ds_key
@@ -897,8 +1029,10 @@ def track_test(config, split=None, desc="track test"):
 
 
 def _summary_metric_keys():
-    """Float keys exposed in the per-test summary JSON sidecar."""
-    return [
+    """Float keys exposed in the per-test summary JSON sidecar. Per-class
+    namespaced variants (multi_class_and_hints.md §2) ride along for every
+    extra class, plus the combined objective."""
+    base = [
         "fitness", "mota", "idf1", "fp_tracks",
         "fp_tracks_honest_v2", "fp_h2_nm", "fp_h2_inrun",
         "fp_per_frame", "fn_per_obj", "switch_per_obj", "frag_per_obj",
@@ -906,6 +1040,11 @@ def _summary_metric_keys():
         "num_frames", "num_objects", "num_false_positives",
         "num_misses", "num_switches",
     ]
+    out = list(base)
+    for cls in ("vehicle", "animal"):
+        out += [k + "_" + cls for k in base]
+    out.append("fitness_multi")
+    return out
 
 
 def _result_subset(result, keys):

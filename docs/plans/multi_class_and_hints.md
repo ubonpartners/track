@@ -1,5 +1,9 @@
 # Multi-class tracking + clip-type hints: what to change in this repo
 
+Status: **IMPLEMENTED 2026-07-23** (P0 §1-4, P1 §5+§7, §15; §6 needed no
+code). See §16 for the execution record. Still open: the `protect`
+baseline recording, and P2 items 8 (autolabel repo) / 10-13 (situational).
+
 Written 2026-07-22. Context: utrack now emits **vehicle and animal**
 tracks and supports **per-"clip type" parameter optimization**. Goal:
 run `track.py --search` against the new datasets (bwc-videotext, BDD
@@ -387,3 +391,66 @@ P1 ≈ half a day (params flow + guard; hint key name pending utrack-side
 confirmation); P2 items are individually < 1 hour. Nothing here touches
 the tracker itself — it's all metrics/plumbing in `track_test.py`,
 `track_search.py`, `trackset.py:import_create`, and yaml.
+
+## §16. Execution record (2026-07-23)
+
+Implemented in one commit; 21 tests pass (14 new). What landed where:
+
+- **§1** `trackset.py import_create`: `target_classes` is a param
+  (`param_dict.pop`, default `["person","face"]` — back-compat exact);
+  the mc search yaml requests `[person, face, vehicle, animal]`.
+- **§2** `track_test.py track_test_work_fn`: person scored exactly as
+  before (un-suffixed); every extra class in the config `classes` list
+  gets its own compute_metrics pass with every key namespaced
+  `<key>_<class>`. Zero-GT extra classes skip per clip
+  (`gt_class_box_counts`); person is exempt (zero-GT person clips are
+  the deliberate FP probes). det-AP computed once, on the person pass,
+  with `vehicle` auto-added to `classes_for_det_map` when scored. The
+  per-extra-class pass passes NO `min_person_height` (the person floor
+  must not gate wide-short vehicles).
+- **§2 aggregation** `display_results`: suffix-generic — suffixes
+  detected from `idtp_*` keys, derived metrics (idf1/mota/motp/fp_per_
+  frame/…/fitness) recomputed per suffix from that suffix's own summed
+  counts; suffixed fraction averages divide by contributing-row count.
+  A key no row in a group has stays ABSENT (an empty sum used to
+  fabricate `mota_vehicle: 1.0` for vehicle-free groups — caught by the
+  smoke run).
+- **§3** `fitness_multi_score`: Σ w_c·fitness_c over classes PRESENT in
+  the row (`fitness_weights` from the yaml); per-clip and per-rollup.
+- **§5** `track_test`: every dataset key beyond
+  {path,split,group,family,regenerate,no_cache} merges into params →
+  import_create param_dict → the tracker config yaml verbatim.
+  `stream_hint: bodycam` rides this on the bwc rows of the mc yaml
+  (upyc_tracker yaml.dump(params) IS the track_stream config).
+- **§7** `_check_protect` in `search_test`: `protect:` rules reject a
+  candidate whose `__ovr<group>` drops below the floor (−10000, cached);
+  a missing rollup or param asserts loudly.
+- **§15** `_set_nested_param`: dotted-path addressing (bare names keep
+  match-anywhere + ambiguity assert); `(hint:x)` variant paths are
+  create-on-write, plain missing paths still assert.
+  `_update_initial_parameters`: path-aware; absent variants seed from
+  their base path (split starts at the shared optimum).
+  `_expand_split_hints`: `split_hints: [a,b]` → base + one variant param
+  per hint; wired into search_track.
+- **yaml**: track_search_v11_mc.yaml now runs `result_dataset_opt_param:
+  fitness_multi` with `fitness_weights {person 1.0, vehicle 0.3}`,
+  `target_classes`, vehicle report columns, and `stream_hint: bodycam`
+  on all 48 bwc rows. `protect` stays commented until the baseline run.
+
+Validated end-to-end with the real tracker (uc_v11 TRT on the 5090),
+3-clip smoke — MOT17-09 (person-only cctv), bdd dashcam, bwc night
+bodycam: per-clip results carry the full vehicle namespace +
+fitness_multi; MOT17-09 correctly has NO vehicle keys; groups without a
+class no longer fabricate vehicle rollups.
+
+Findings from the smoke, for the record:
+- Night bodycam (video118, Axon Body 3, in-car) currently scores
+  mota −0.109 / idf1 0.0 and the tracker emits zero vehicle tracks —
+  that is the honest baseline the hint-split search exists to move.
+- The bdd dashcam clip scores mota 0.067 with vehicle tracking near
+  zero at cctv-tuned settings — same story.
+- Display quirk, NOT a data bug: `stuff.datatable.colorize` blanks any
+  cell value < 0.01 (zeros AND all negatives), so honest negative MOTAs
+  render as empty cells in the txt report. The JSON sidecar and the
+  search objective see the real numbers. Worth fixing in `stuff` some
+  day, deliberately not touched here.

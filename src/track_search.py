@@ -24,7 +24,27 @@ def _normalise_param_vec(param_vec, param_is_int):
     ]
 
 
-def _set_nested_param(config_dict, key, value):
+def _is_variant_key(key):
+    """True for keys addressing a `(hint:x)` variant (any segment). Variant
+    paths are CREATE-ON-WRITE: the C side deep-merges a section variant
+    block over its base (`utrack(hint:bodycam): {kf_weight: x}`), so the
+    block legitimately does not exist until a search writes it
+    (multi_class_and_hints.md §15.3)."""
+    return "(hint:" in key
+
+
+def _strip_variants(key):
+    """The base path of a variant key: every `(...)` suffix removed from
+    every segment — `utrack(hint:bodycam).kf_weight` → `utrack.kf_weight`.
+    Initial values seed from here, so a split starts at the shared optimum."""
+    import re
+    return re.sub(r"\([^)]*\)", "", key)
+
+
+def _find_by_bare_name(config_dict, key):
+    """Match-anywhere lookup for a bare (dot-free) param name — the
+    original behaviour, kept for every existing search yaml. Returns the
+    single (parent, key) match; asserts on missing or ambiguous."""
     matches = []
 
     def walk(node, path):
@@ -41,29 +61,164 @@ def _set_nested_param(config_dict, key, value):
     if len(matches) > 1:
         paths = ["/".join(path) for _, _, path in matches]
         raise AssertionError(f"Param {key} is ambiguous in config: {paths}")
-    parent, child_key, _ = matches[0]
-    parent[child_key] = value
+    return matches[0][0], matches[0][1]
+
+
+def _set_nested_param(config_dict, key, value):
+    """Set one search parameter in the loaded tracker-config tree.
+
+    Two addressing modes (multi_class_and_hints.md §15.2):
+      - bare name ("kf_weight"): match anywhere, exactly one occurrence —
+        unchanged legacy behaviour, still asserts on ambiguity;
+      - dotted path ("motiontrack.mad_delta", "roi_scan.min_age_lo",
+        "utrack(hint:bodycam).kf_weight"): explicit segments, so keys that
+        are ambiguous as bare names (alpha, max_width, ...) are reachable.
+
+    A missing PLAIN path asserts (typo protection). A missing VARIANT path
+    is created (§15.3): the `(hint:x)` block is a legitimate new override.
+    """
+    if "." not in key:
+        if _is_variant_key(key):
+            # Flat-key variant ("conf_thr(hint:bodycam)"): top-level
+            # create-on-write, same §15.3 rule as section variants.
+            config_dict[key] = value
+            return
+        parent, child_key = _find_by_bare_name(config_dict, key)
+        parent[child_key] = value
+        return
+    segments = key.split(".")
+    variant = _is_variant_key(key)
+    node = config_dict
+    for seg in segments[:-1]:
+        if not isinstance(node.get(seg), dict):
+            if seg in node and node[seg] is not None:
+                raise AssertionError(
+                    f"Param {key}: segment {seg} is not a section in config")
+            if not variant:
+                raise AssertionError(f"Can't find param {key} in config")
+            node[seg] = {}
+        node = node[seg]
+    leaf = segments[-1]
+    if leaf not in node and not variant:
+        raise AssertionError(f"Can't find param {key} in config")
+    node[leaf] = value
+
+
+def _get_nested_param(config_dict, key):
+    """Read a dotted-path param; (found, value)."""
+    node = config_dict
+    segments = key.split(".")
+    for seg in segments[:-1]:
+        if not isinstance(node, dict) or seg not in node:
+            return False, None
+        node = node[seg]
+    if isinstance(node, dict) and segments[-1] in node:
+        return True, node[segments[-1]]
+    return False, None
 
 
 def _update_initial_parameters(param_names, param_initial, source_dict, logfile, source_label):
+    # Bare names: original match-anywhere walk. Dotted paths: explicit
+    # lookup; a variant path absent from the config seeds from its BASE
+    # path (multi_class_and_hints.md §15.3 — a split starts at the shared
+    # optimum, so iteration 0 is behaviour-identical to the unsplit run).
+    def note(key, value, how=""):
+        if logfile:
+            search_log(
+                logfile,
+                f"Setting parameter {key} initial value to {value} from {source_label}{how}",
+            )
+
+    bare = {n for n in param_names if "." not in n}
+
     def walk(node):
         if isinstance(node, dict):
             for key, value in node.items():
-                if key in param_names:
+                if key in bare:
                     idx = param_names.index(key)
                     if param_initial[idx] is None:
                         param_initial[idx] = value
-                        if logfile:
-                            search_log(
-                                logfile,
-                                f"Setting parameter {key} initial value to {value} from {source_label}",
-                            )
+                        note(key, value)
                 walk(value)
         elif isinstance(node, list):
             for value in node:
                 walk(value)
 
     walk(source_dict)
+
+    for idx, name in enumerate(param_names):
+        if param_initial[idx] is not None:
+            continue
+        if "." not in name:
+            if not _is_variant_key(name):
+                continue        # plain bare name: the walk above was its one chance
+            # flat-key variant: seed from the flat base key
+            base = _strip_variants(name)
+            found, value = (True, source_dict[base]) if base in source_dict else (False, None)
+            if found:
+                note(name, value, " (base value; variant not yet in config)")
+                param_initial[idx] = value
+            continue
+        found, value = _get_nested_param(source_dict, name)
+        if not found and _is_variant_key(name):
+            found, value = _get_nested_param(source_dict, _strip_variants(name))
+            if found:
+                note(name, value, " (base value; variant not yet in config)")
+        elif found:
+            note(name, value)
+        if found:
+            param_initial[idx] = value
+
+
+def _expand_split_hints(search_params, logfile=None):
+    """`split_hints: [bodycam, dashcam]` on a param expands it into the
+    base param plus one `(hint:x)`-variant param per listed hint — three
+    independently-steppable search dimensions from one line
+    (multi_class_and_hints.md §15.3). The variant suffix lands on the
+    param's SECTION (first path segment); a flat key takes it directly.
+    Splitting is DIRECTED only — nothing splits by itself."""
+    out = {}
+    for name, spec in search_params.items():
+        spec = dict(spec or {})
+        hints = spec.pop("split_hints", None)
+        out[name] = spec
+        for h in hints or []:
+            if "." in name:
+                first, rest = name.split(".", 1)
+                vname = f"{first}(hint:{h}).{rest}"
+            else:
+                vname = f"{name}(hint:{h})"
+            out[vname] = dict(spec)
+            if logfile:
+                search_log(logfile, f"split_hints: {name} -> {vname}")
+    return out
+
+
+def _check_protect(config, results, logfile=None):
+    """The §7 regression guard: `protect: [{group, param, floor}]` rejects
+    any candidate whose `__ovr<group>` rollup drops below the floor —
+    'don't break CCTV' as a hard constraint, not a weight-tuning hope.
+    Returns None when every rule passes, else the violated rule."""
+    rules = config.get("protect") or []
+    test_key = config["result_test_opt_key"]
+    for rule in rules:
+        group, param, floor = rule["group"], rule["param"], float(rule["floor"])
+        row = None
+        for r in results:
+            if (r["params"]["test_key"] == test_key
+                    and r["params"]["ds_key"] == f"__ovr{group}"):
+                row = r["result"]
+        assert row is not None, (
+            f"protect: no __ovr{group} rollup in results — is any dataset "
+            f"tagged group: {group}?")
+        assert param in row, f"protect: {param} missing from __ovr{group}"
+        if row[param] < floor:
+            if logfile:
+                search_log(logfile,
+                           f"REJECT by protect: {group}.{param} "
+                           f"{row[param]:0.4f} < floor {floor:0.4f}")
+            return rule
+    return None
 
 
 def _round_numeric_metrics(metrics_dict, decimals=3):
@@ -111,6 +266,14 @@ def search_test(
         c = config["tests"][result_test_opt_key]
         _set_nested_param(c["config"], p, _normalise_param_value(param_vec[i], param_is_int[i]))
     results = track_test.track_test(config, split=split, desc=desc)
+
+    # Regression guard (§7): a candidate that sinks a protected group is
+    # rejected outright — same path as out-of-range params — and the
+    # rejection is cached so the vector is never re-evaluated.
+    if _check_protect(config, results, logfile=logfile) is not None:
+        if is_train:
+            all_results[tuple(param_vec)] = {"score": -10000, "param_vec": param_vec}
+        return -10000, None
 
     val = None
     full_result = None
@@ -199,6 +362,8 @@ def search_track(yaml_file):
     if "final_mult" in config:
         final_multiplier = config["final_mult"]
     search_log(logfile, f"Starting step multiplier set to {step_multiplier}")
+
+    config["search_params"] = _expand_split_hints(config["search_params"], logfile=logfile)
 
     for p in config["search_params"]:
         param_names.append(p)

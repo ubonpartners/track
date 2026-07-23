@@ -525,8 +525,6 @@ class TrackSet(TrackSetImportersMixin):
 
         assert len(self.frame_times)==0
 
-        target_classes=["person", "face"]
-
         param_dict={}
         if config_file is not None:
             if isinstance(config_file, str):
@@ -555,6 +553,13 @@ class TrackSet(TrackSetImportersMixin):
                     else:
                         dst[k]=v
             _deep_merge(param_dict, override)
+        # target_classes: which tracker output classes this import KEEPS
+        # (multi_class_and_hints.md §1). utrack emits vehicle/animal tracks
+        # now; the old hardcoded ["person","face"] dropped them on the
+        # floor. A test entry (or main_config_override) requests e.g.
+        # ["person","face","vehicle","animal"]; default unchanged. Popped:
+        # it is an import policy, not a tracker config key.
+        target_classes=param_dict.pop("target_classes", ["person", "face"])
         param_dict["original_trackset"]=video
         tracker=trackers.create_tracker(param_dict,
                                         track_min_interval=track_min_interval,
