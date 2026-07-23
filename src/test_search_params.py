@@ -139,3 +139,13 @@ def test_flat_variant_lands_beside_its_base():
     # a genuinely top-level key keeps top-level variant placement
     tsr._set_nested_param(c, "conf_thr(hint:bodycam)", 0.1)
     assert c["conf_thr(hint:bodycam)"] == 0.1
+
+
+def test_flat_variant_seeds_from_section_scoped_base():
+    # Regression: vbox_expand(hint:bodycam) failed to seed because the base
+    # lookup only checked the config TOP LEVEL — the base lives in utrack:.
+    names = ["vbox_expand(hint:bodycam)"]
+    initial = [None]
+    tsr._update_initial_parameters(
+        names, initial, {"utrack": {"vbox_expand": 0.25}}, None, "test")
+    assert initial == [0.25]

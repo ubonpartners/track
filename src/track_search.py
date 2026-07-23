@@ -163,9 +163,15 @@ def _update_initial_parameters(param_names, param_initial, source_dict, logfile,
         if "." not in name:
             if not _is_variant_key(name):
                 continue        # plain bare name: the walk above was its one chance
-            # flat-key variant: seed from the flat base key
+            # Flat-key variant: seed from the base key WHEREVER it lives —
+            # the same match-anywhere walk used to set it (a bare
+            # vbox_expand sits under utrack:, not at top level).
             base = _strip_variants(name)
-            found, value = (True, source_dict[base]) if base in source_dict else (False, None)
+            try:
+                parent, child = _find_by_bare_name(source_dict, base)
+                found, value = True, parent[child]
+            except AssertionError:
+                found, value = False, None
             if found:
                 note(name, value, " (base value; variant not yet in config)")
                 param_initial[idx] = value
