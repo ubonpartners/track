@@ -330,11 +330,21 @@ candidates; appearance/detector plumbing is not.
 | `utrack.max_consecutive_misses` | pairs with track_buffer_seconds |
 | `roi_scan.min_age_lo/min_age_hi/activity_area` | roi scanning is a static-wide-scene optimization (`wide`/cctv hints); under bodycam ego-motion the whole frame is active and scanning cadence should back off — split for `wide`, not for bodycam |
 
-**Do NOT split** (keep one global value): `nms_thr`, `conf_thr`,
-`delete_dup_iou`, `fuse_scores`, `reid_z_clip`, `roi_expand_ratio`, and
-every internal calibration knob already on the §"excluded" list —
-detector-level and dedup behaviour should not fork per camera type, and
-each needless split is a wasted search dimension.
+**Do NOT split** (keep one global value): `conf_thr`, `delete_dup_iou`,
+`fuse_scores`, `reid_z_clip`, `roi_expand_ratio`, and every internal
+calibration knob already on the §"excluded" list — detector-level and
+dedup behaviour should not fork per camera type, and each needless
+split is a wasted search dimension.
+
+**`nms_thr` is DEAD with the current detector** (found 2026-07-23):
+uc_v11 runs the yolo26 E2E engine and the e2e output path
+(infer.c `process_detections_e2e`) applies no NMS —
+`detection_list_nms_inplace(nms_thr)` runs only on the legacy
+raw-output path. Don't split it, don't search it at all: v11's
+`nms_thr` search dimension has been mutating a value nothing reads
+(removed from track_search_v11_mc.yaml; drop it from v11 too on its
+next touch, or on any config still running a non-e2e detector keep it
+base-only).
 
 First hint-split run: tier 1 only, hints `bodycam` + `dashcam`, base
 frozen at production values (§6), protect guard on `cctv` (§7) — 12
