@@ -336,15 +336,18 @@ calibration knob already on the §"excluded" list — detector-level and
 dedup behaviour should not fork per camera type, and each needless
 split is a wasted search dimension.
 
-**`nms_thr` is DEAD with the current detector** (found 2026-07-23):
-uc_v11 runs the yolo26 E2E engine and the e2e output path
-(infer.c `process_detections_e2e`) applies no NMS —
-`detection_list_nms_inplace(nms_thr)` runs only on the legacy
-raw-output path. Don't split it, don't search it at all: v11's
-`nms_thr` search dimension has been mutating a value nothing reads
-(removed from track_search_v11_mc.yaml; drop it from v11 too on its
-next touch, or on any config still running a non-e2e detector keep it
-base-only).
+**`nms_thr` is dead ON THE TRT BACKEND** (found 2026-07-23, refined):
+uc_v11 runs the yolo26 E2E engine and the TRT e2e output path
+(infer.c `process_detections_e2e`) applies no NMS. Searching it was a
+dead dimension — removed from BOTH track_search_v11.yaml and
+track_search_v11_mc.yaml (searches evaluate on TRT). BUT the key is
+NOT unused everywhere: the Apple/CPU ONNX backend
+(`infer_onnx_linux.cpp finalize_detections`) applies
+`detection_list_nms_inplace(nms_thr)` even to `decode_e2e_rows`
+output, so uc_v11.yaml KEEPS `nms_thr: 0.695` (annotated in place) —
+deleting it would silently drop Apple/CPU builds to the 0.45 default.
+Flag for ubon_cstuff: TRT-vs-ONNX e2e NMS behaviour diverges; if the
+ONNX backend stops NMS-ing e2e rows for parity, the key really can go.
 
 First hint-split run: tier 1 only, hints `bodycam` + `dashcam`, base
 frozen at production values (§6), protect guard on `cctv` (§7) — 12
