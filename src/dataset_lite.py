@@ -57,6 +57,36 @@ def choose_divisor(src_fps, min_fps):
     return max(1, int(math.floor(src_fps / float(min_fps) + 1e-9)))
 
 
+DEFAULT_TRACKER_CONFIG = "/mldata/config/track/trackers/uc_v11.yaml"
+
+
+def min_delta_from_config(hint, config_path=DEFAULT_TRACKER_CONFIG):
+    """min_time_delta_process for a camera class, read from the production
+    tracker config. hint='bodycam' (any moving camera) reads the
+    `(hint:bodycam)` variant when present; 'static' (or a hint with no
+    variant) reads the base key. Imports derive their decimation from
+    THIS so a config change only requires re-running the import."""
+    import yaml
+    cfg = yaml.safe_load(open(config_path))
+    key = "min_time_delta_process"
+    if hint and hint != "static":
+        v = cfg.get(f"{key}(hint:{hint})")
+        if v is not None:
+            return float(v)
+    return float(cfg[key])
+
+
+def divisor_from_config(src_fps, hint, config_path=DEFAULT_TRACKER_CONFIG):
+    """Smallest integer N with N/src_fps >= min_time_delta_process: the
+    decimated grid is then exactly the frame set the tracker's
+    min-interval gate selects from the native stream (assuming clean CFR
+    stamps), so the decimation is analytics-equivalent by construction —
+    the gate passes every retained frame and no un-retained frame would
+    ever have been processed."""
+    delta = min_delta_from_config(hint, config_path)
+    return max(1, int(math.ceil(delta * src_fps - 1e-9)))
+
+
 def scale_dims(w, h, max_edge=1280):
     """Longest side capped at max_edge, aspect kept, both sides even.
     Never upscales."""
@@ -95,7 +125,8 @@ def has_backward_pts(video):
     return False
 
 
-def rewrite_annotation(d, src_fps, divisor, dims, max_seconds, lite_video):
+def rewrite_annotation(d, src_fps, divisor, dims, max_seconds, lite_video,
+                       hint=None, min_delta=None):
     """Subset an annotation dict to the retained frames + refresh metadata.
     Pure function (unit-tested); returns (new_dict, kept, dropped)."""
     md = dict(d.get("metadata") or {})
@@ -113,8 +144,12 @@ def rewrite_annotation(d, src_fps, divisor, dims, max_seconds, lite_video):
     md["frame_rate"] = src_fps / float(divisor)
     md["width"], md["height"] = dims
     md["original_video"] = lite_video
+    if hint:
+        # camera class: evals bind `(hint:x)` config variants through this
+        md["hint"] = hint
     md["lite"] = {"source_fps": src_fps, "divisor": divisor,
-                  "max_seconds": max_seconds}
+                  "max_seconds": max_seconds,
+                  "hint": hint, "min_time_delta": min_delta}
     out = dict(d)
     out["metadata"] = md
     out["frames"] = kept
@@ -137,8 +172,15 @@ def transcode(src, dst, divisor, dims, out_fps, max_seconds):
     subprocess.check_call(cmd)
 
 
-def process_dataset(root, min_fps, max_seconds=None, drop_jitter=False,
-                    max_edge=1280):
+def process_dataset(root, min_fps=None, max_seconds=None, drop_jitter=False,
+                    max_edge=1280, hint=None,
+                    config_path=DEFAULT_TRACKER_CONFIG):
+    """hint mode (preferred): divisor per clip from the tracker config's
+    min_time_delta_process for that camera class (analytics-equivalent
+    decimation; re-run after a config change). min_fps mode (legacy):
+    fixed framerate floor."""
+    if (min_fps is None) == (hint is None):
+        raise ValueError("pass exactly one of min_fps / hint")
     anno_dir = os.path.join(root, "annotation")
     lite_dir = os.path.join(root, "video_lite")
     os.makedirs(lite_dir, exist_ok=True)
@@ -168,7 +210,12 @@ def process_dataset(root, min_fps, max_seconds=None, drop_jitter=False,
             print(f"  {name[:-5]}: BACKWARD PTS — dropped to {qdir}", flush=True)
             continue
         w, h, fps = probe(src)
-        divisor = choose_divisor(fps, min_fps)
+        min_delta = None
+        if hint is not None:
+            min_delta = min_delta_from_config(hint, config_path)
+            divisor = divisor_from_config(fps, hint, config_path)
+        else:
+            divisor = choose_divisor(fps, min_fps)
         dims = scale_dims(w, h, max_edge)
         out_fps = fps / divisor
         dst = os.path.join(lite_dir, os.path.splitext(os.path.basename(src))[0] + ".mp4")
@@ -183,7 +230,9 @@ def process_dataset(root, min_fps, max_seconds=None, drop_jitter=False,
                     ["ffmpeg", "-y", "-loglevel", "error", "-t", str(max_seconds),
                      "-i", src, "-c", "copy", "-an", adst])
         new, kept, droppedf = rewrite_annotation(d, fps, divisor, dims,
-                                                 max_seconds, dst)
+                                                 max_seconds, dst,
+                                                 hint=hint,
+                                                 min_delta=min_delta)
         orig = jpath + ".orig"
         if not os.path.exists(orig):
             shutil.copy2(jpath, orig)
@@ -202,13 +251,22 @@ def process_dataset(root, min_fps, max_seconds=None, drop_jitter=False,
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--root", required=True)
-    ap.add_argument("--min-fps", type=float, required=True,
-                    help="5 for static cameras, 12 for moving")
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--hint", choices=["static", "bodycam"],
+                   help="camera class: divisor derived from the tracker "
+                        "config's min_time_delta_process (re-run after a "
+                        "config change)")
+    g.add_argument("--min-fps", type=float,
+                   help="legacy fixed framerate floor")
+    ap.add_argument("--config", default=DEFAULT_TRACKER_CONFIG,
+                    help="tracker config for --hint mode")
     ap.add_argument("--max-seconds", type=float, default=None)
     ap.add_argument("--drop-jitter", action="store_true")
     ap.add_argument("--max-edge", type=int, default=1280)
     a = ap.parse_args()
-    process_dataset(a.root, a.min_fps, a.max_seconds, a.drop_jitter, a.max_edge)
+    process_dataset(a.root, min_fps=a.min_fps, max_seconds=a.max_seconds,
+                    drop_jitter=a.drop_jitter, max_edge=a.max_edge,
+                    hint=a.hint, config_path=a.config)
 
 
 if __name__ == "__main__":

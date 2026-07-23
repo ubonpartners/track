@@ -1398,7 +1398,7 @@ def convert_uvg_vcm(src_root="/mldata/downloaded_datasets/other/uvg_vcm",
 
 def convert_meva(src_root="/mldata/downloaded_datasets/other/MEVA",
                  output_folder="/mldata/tracking/meva",
-                 workers=8, augment=True, augment_limit=0):
+                 workers=8, augment=True, augment_limit=0, lite=True):
     """Convert MEVA (KF1) KPF clips into trackset JSON + video pairs under
     output_folder/{annotation,video}/.
 
@@ -1455,10 +1455,15 @@ def convert_meva(src_root="/mldata/downloaded_datasets/other/MEVA",
         # annotated (GPU-serial second pass; resume-safe).
         from src.autolabel_bridge import augment_dataset
         augment_dataset(output_folder, limit=augment_limit)
+    if lite:
+        # static mounted cameras; decimate to the analytics grid AFTER
+        # augmentation (autolabel needs native framerate)
+        from src.dataset_lite import process_dataset
+        process_dataset(output_folder, hint="static", max_seconds=120)
 
 def convert_otw(src_root="/mldata/downloaded_datasets/other/otw/otw",
                 output_folder="/mldata/tracking/otw",
-                augment=True, augment_limit=0):
+                augment=True, augment_limit=0, lite=True):
     """Convert Out the Window (OTW) into MOT-equivalent JSON+mp4 pairs
     under output_folder/{annotation,video}/.
 
@@ -1532,6 +1537,11 @@ def convert_otw(src_root="/mldata/downloaded_datasets/other/otw/otw",
         # tracks so the dataset is fully annotated (GPU-serial pass).
         from src.autolabel_bridge import augment_dataset
         augment_dataset(output_folder, limit=augment_limit)
+    if lite:
+        # static window cameras; doorbell clips with backward-PTS jitter
+        # are quarantined. Runs AFTER augmentation (native-fps invariant).
+        from src.dataset_lite import process_dataset
+        process_dataset(output_folder, hint="static", drop_jitter=True)
 
 
 def _write_gap_filled_video(ts, out_video):
@@ -1887,20 +1897,28 @@ def convert_autolabel_folder(src_folder, output_folder, shard="",
 
 def convert_raw_movies(src_folder="/mldata/video/youtube",
                        output_folder="/mldata/tracking/raw_movies",
-                       shard=""):
+                       shard="", lite=True):
     """Raw movie/trailer mp4s, fully autolabelled. Edited multi-shot
     content, so autolabel's scene-cut detection (TransNetV2) is enabled:
-    tracks must not survive or merge across cuts."""
+    tracks must not survive or merge across cuts. Moving camera: the
+    final lite pass decimates to the analytics grid (hint:bodycam)."""
     convert_autolabel_folder(src_folder, output_folder, shard=shard,
                              cuts=True)
+    if lite:
+        from src.dataset_lite import process_dataset
+        process_dataset(output_folder, hint="bodycam")
 
 
 def convert_bwc_videotext(
         src_folder="/mldata/downloaded_datasets/other/BWC-VideoText-359/"
                    "eval_videos",
-        output_folder="/mldata/tracking/bwc-videotext", shard=""):
+        output_folder="/mldata/tracking/bwc-videotext", shard="",
+        lite=True):
     """Body-worn-camera eval videos, fully autolabelled (use case 2)."""
     convert_autolabel_folder(src_folder, output_folder, shard=shard)
+    if lite:
+        from src.dataset_lite import process_dataset
+        process_dataset(output_folder, hint="bodycam")
 
 
 def reduce_dataset(folder, n=50, group_fn=None, manifest=None):
