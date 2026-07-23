@@ -9,6 +9,37 @@ from pathlib import Path
 import ubon_pycstuff.ubon_pycstuff as upyc
 
 
+def trim_aux_outputs(params):
+    """Disable the aux stages metric runs never read (shared by the per-clip
+    tracker and the single-shared-state eval path — ONE definition so the two
+    paths can never drift)."""
+    for _k in ("thumbnail_stream", "main_jpeg"):
+        if _k in params:
+            params[_k]["enabled"] = False
+    if "faces" in params:
+        params["faces"]["embeddings_enabled"] = False
+        params["faces"]["jpegs_enabled"] = False
+    if "clip" in params:
+        params["clip"]["frame_embeddings_enabled"] = False
+        params["clip"]["object_embeddings_enabled"] = False
+        params["clip"]["jpegs_enabled"] = False
+    if "fiqa" in params:
+        params["fiqa"]["enabled"] = False
+
+
+def h264_for_video(video, max_seconds=None):
+    """Cached elementary-stream path for `video` (duration-suffixed when
+    capped — capped and full evals must never share cache files)."""
+    p = Path(video)
+    suffix = f"_t{int(max_seconds)}" if max_seconds else ""
+    gen_dir = p.with_name("generated_h264")
+    gen_dir.mkdir(parents=True, exist_ok=True)
+    h264 = str(gen_dir / (p.stem + suffix + ".h264"))
+    if not os.path.isfile(h264):
+        stuff.mp4_to_h264(video, h264, max_seconds=max_seconds)
+    return h264
+
+
 RESULT_TYPE_NAMES = {
     upyc.TRACK_FRAME_SKIP_FRAMERATE: "skip_framerate",
     upyc.TRACK_FRAME_SKIP_NO_MOTION: "skip_no_motion",
@@ -71,19 +102,7 @@ class upyc_tracker:
         # By default we trim auxiliary outputs for faster metric runs.
         # If debug is enabled, preserve the full configured detector/tracker output.
         if debug_enable is False:
-            # whole-frame preview stream (renamed main_jpeg -> thumbnail_stream)
-            for _k in ("thumbnail_stream", "main_jpeg"):
-                if _k in params:
-                    params[_k]["enabled"]=False
-            if "faces" in params:
-                params["faces"]["embeddings_enabled"]=False
-                params["faces"]["jpegs_enabled"]=False
-            if "clip" in params:
-                params["clip"]["frame_embeddings_enabled"]=False
-                params["clip"]["object_embeddings_enabled"]=False
-                params["clip"]["jpegs_enabled"]=False
-            if "fiqa" in params:
-                params["fiqa"]["enabled"]=False
+            trim_aux_outputs(params)
 
         yaml_string=yaml.dump(params)
 
@@ -209,3 +228,29 @@ class upyc_tracker:
             "objects": objects,
             "debug": debug if len(debug) > 0 else None,
         }
+
+
+class upyc_results_view:
+    """CPU-side view over a finished stream's get_results() list, exposing
+    exactly the tracker interface import_create consumes (get_frame_times /
+    needs_frames / track_frame). Used by the single-shared-state eval path:
+    the GPU work happened on a stream elsewhere; this only converts result
+    dicts to frames — in a metrics pool worker, no CUDA context. The methods
+    ARE upyc_tracker's (assigned below), so the two paths cannot drift."""
+
+    def __init__(self, track_results, class_names, person_attribute_names, classes):
+        self.track_results = track_results
+        self.md = {"class_names": class_names,
+                   "person_attribute_names": person_attribute_names}
+        self.classes = classes
+        self.class_remap = stuff.make_class_remap_table(class_names, classes)
+        self.frame_times = []
+        self.frame_indexes = []
+        for i, r in enumerate(track_results):
+            if r["result_type"] != upyc.TRACK_FRAME_SKIP_FRAMERATE:
+                self.frame_times.append(r.get("media_stamp", r.get("time")))
+                self.frame_indexes.append(i)
+
+upyc_results_view.get_frame_times = upyc_tracker.get_frame_times
+upyc_results_view.needs_frames = upyc_tracker.needs_frames
+upyc_results_view.track_frame = upyc_tracker.track_frame

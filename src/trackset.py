@@ -521,7 +521,8 @@ class TrackSet(TrackSetImportersMixin):
                       mpwq_context=None,
                       mpwq_progress_fn=None,
                       start_time=0,
-                      end_time=100000):
+                      end_time=100000,
+                      tracker=None):
 
         assert len(self.frame_times)==0
 
@@ -560,13 +561,18 @@ class TrackSet(TrackSetImportersMixin):
         # ["person","face","vehicle","animal"]; default unchanged. Popped:
         # it is an import policy, not a tracker config key.
         target_classes=param_dict.pop("target_classes", ["person", "face"])
-        param_dict["original_trackset"]=video
-        tracker=trackers.create_tracker(param_dict,
-                                        track_min_interval=track_min_interval,
-                                        debug_enable=debug_enable,
-                                        start_time=start_time,
-                                        end_time=end_time,
-                                        classes=target_classes)
+        # tracker injection (single-shared-state eval path): the GPU work
+        # already happened on a stream elsewhere; the caller hands us a
+        # results VIEW exposing the same interface, and this import is pure
+        # dict->frame conversion.
+        if tracker is None:
+            param_dict["original_trackset"]=video
+            tracker=trackers.create_tracker(param_dict,
+                                            track_min_interval=track_min_interval,
+                                            debug_enable=debug_enable,
+                                            start_time=start_time,
+                                            end_time=end_time,
+                                            classes=target_classes)
 
         frame_times=None
         if hasattr(tracker, 'get_frame_times'):
