@@ -156,13 +156,11 @@ if __name__ == '__main__':
     parser.add_argument('--logging', type=str, default='info', help="Logging config: level[:console|file]")
     parser.add_argument('--trackset', type=str, default='/mldata/tracking/mot/annotation/MOT20-01.json')
     parser.add_argument('--view', action='store_true', help='view a trackset')
-    parser.add_argument('--caltech', action='store_true', help='make caltech pedestrian sequences')
     parser.add_argument('--mot', action='store_true', help='make MOT sequences')
     parser.add_argument('--personpath22', action='store_true', help='make PersonPath22 sequences')
     parser.add_argument('--personpath22-amodal', action='store_true', help='use amodal (occluded) boxes for PersonPath22 instead of visible')
     parser.add_argument('--jaad', action='store_true', help='make JAAD sequences')
     parser.add_argument('--otw', action='store_true', help='make Out the Window (OTW) sequences')
-    parser.add_argument('--egohumans', action='store_true', help='make EgoHumans sequences')
     parser.add_argument('--meva', action='store_true', help='make MEVA sequences')
     parser.add_argument('--cevo', action='store_true', help='make new CEVO videos')
     parser.add_argument('--test', type=str, default=None, help='test yaml file')
@@ -182,9 +180,6 @@ if __name__ == '__main__':
     log_dir = os.path.join(os.getcwd(), "tmp/log")
     stuff.makedir(log_dir)
     stuff.configure_root_logger(opt.logging, log_dir=log_dir)
-    if opt.caltech:
-        tsi.convert_caltech_pedestrian()
-        exit()
     if opt.mot:
         tsi.convert_mot()
         exit()
@@ -197,9 +192,6 @@ if __name__ == '__main__':
         exit()
     if opt.otw:
         tsi.convert_otw()
-        exit()
-    if opt.egohumans:
-        tsi.convert_egohumans()
         exit()
     if opt.meva:
         tsi.convert_meva()

@@ -35,9 +35,6 @@ class TrackSet(TrackSetImportersMixin):
             if path.endswith(".ini"):
                 self.import_mot(path)
                 return
-            if path.endswith(".vbb"):
-                self.import_caltech_pedestrian(path)
-                return
             if path.endswith(".geom.yml") or path.endswith(".geom.yaml"):
                 self.import_meva(path)
                 return
