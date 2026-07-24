@@ -37,13 +37,18 @@ def trim_aux_outputs(params):
 
 def h264_for_video(video, max_seconds=None):
     """Cached elementary-stream path for `video` (duration-suffixed when
-    capped — capped and full evals must never share cache files)."""
+    capped — capped and full evals must never share cache files). The
+    cache is invalidated when the source mp4 is newer: a re-transcoded
+    lite video with a different framerate against a stale .h264 plays the
+    old frame set on the new clock, silently corrupting every timing —
+    this exact bug cost a night of search on 2026-07-23."""
     p = Path(video)
     suffix = f"_t{int(max_seconds)}" if max_seconds else ""
     gen_dir = p.with_name("generated_h264")
     gen_dir.mkdir(parents=True, exist_ok=True)
     h264 = str(gen_dir / (p.stem + suffix + ".h264"))
-    if not os.path.isfile(h264):
+    if (not os.path.isfile(h264)
+            or os.path.getmtime(h264) < os.path.getmtime(video)):
         stuff.mp4_to_h264(video, h264, max_seconds=max_seconds)
     return h264
 
@@ -93,12 +98,9 @@ class upyc_tracker:
         h264_file_temp=None
         h264_file=None
         if cache_h264 and video.endswith(".mp4"):
-            p = Path(video)
-            h264_file=str(p.with_name("generated_h264") / (p.stem + suffix + ".h264"))
-            gen_dir = p.with_name("generated_h264")
-            gen_dir.mkdir(parents=True, exist_ok=True)
-            if not os.path.isfile(h264_file):
-                stuff.mp4_to_h264(video, h264_file, max_seconds=cap)
+            # mtime-invalidated (stale-cache timing corruption; see
+            # h264_for_video)
+            h264_file = h264_for_video(video, max_seconds=cap)
         else:
             h264_file=tempfile.NamedTemporaryFile(delete=False, suffix=".h264").name
             stuff.rm(h264_file)
