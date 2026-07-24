@@ -1456,10 +1456,11 @@ def convert_meva(src_root="/mldata/downloaded_datasets/other/MEVA",
         from src.autolabel_bridge import augment_dataset
         augment_dataset(output_folder, limit=augment_limit)
     if lite:
-        # static mounted cameras; decimate to the analytics grid AFTER
-        # augmentation (autolabel needs native framerate)
-        from src.dataset_lite import process_dataset
-        process_dataset(output_folder, hint="static", max_seconds=120)
+        # tier 2 eval-spec derive AFTER augmentation (autolabel needs
+        # native framerate; native truth stays in tier 1)
+        from src.corpus_manifest import derive_tracking
+        derive_tracking(os.path.basename(output_folder.rstrip("/")),
+                        hint="static", max_seconds=120)
 
 def convert_otw(src_root="/mldata/downloaded_datasets/other/otw/otw",
                 output_folder="/mldata/tracking_original/otw",
@@ -1538,10 +1539,11 @@ def convert_otw(src_root="/mldata/downloaded_datasets/other/otw/otw",
         from src.autolabel_bridge import augment_dataset
         augment_dataset(output_folder, limit=augment_limit)
     if lite:
-        # static window cameras; doorbell clips with backward-PTS jitter
-        # are quarantined. Runs AFTER augmentation (native-fps invariant).
-        from src.dataset_lite import process_dataset
-        process_dataset(output_folder, hint="static", drop_jitter=True)
+        # tier 2 eval-spec derive AFTER augmentation (native-fps
+        # invariant; jitter quarantine happens at tier-1 import)
+        from src.corpus_manifest import derive_tracking
+        derive_tracking(os.path.basename(output_folder.rstrip("/")),
+                        hint="static")
 
 
 def _write_gap_filled_video(ts, out_video):
@@ -1905,8 +1907,9 @@ def convert_raw_movies(src_folder="/mldata/video/youtube",
     convert_autolabel_folder(src_folder, output_folder, shard=shard,
                              cuts=True)
     if lite:
-        from src.dataset_lite import process_dataset
-        process_dataset(output_folder, hint="bodycam")
+        from src.corpus_manifest import derive_tracking
+        derive_tracking(os.path.basename(output_folder.rstrip("/")),
+                        hint="bodycam")
 
 
 def convert_bwc_videotext(
@@ -1917,8 +1920,9 @@ def convert_bwc_videotext(
     """Body-worn-camera eval videos, fully autolabelled (use case 2)."""
     convert_autolabel_folder(src_folder, output_folder, shard=shard)
     if lite:
-        from src.dataset_lite import process_dataset
-        process_dataset(output_folder, hint="bodycam")
+        from src.corpus_manifest import derive_tracking
+        derive_tracking(os.path.basename(output_folder.rstrip("/")),
+                        hint="bodycam")
 
 
 def reduce_dataset(folder, n=50, group_fn=None, manifest=None):

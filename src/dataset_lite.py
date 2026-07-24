@@ -166,10 +166,17 @@ def transcode(src, dst, divisor, dims, out_fps, max_seconds):
     cmd = ["ffmpeg", "-y", "-loglevel", "error"]
     if max_seconds is not None:
         cmd += ["-t", str(max_seconds + 0.5)]  # pad half a frame period; the select+json caps exactly
-    cmd += ["-i", src, "-vf", ",".join(vf), "-fps_mode", "vfr", "-an",
-            "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23",
-            "-g", str(gop), "-bf", "0", dst]
-    subprocess.check_call(cmd)
+    cmd += ["-i", src, "-vf", ",".join(vf), "-fps_mode", "vfr", "-an"]
+    tail = ["-g", str(gop), "-bf", "0", dst]
+    try:
+        subprocess.check_call(
+            cmd + ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"] + tail)
+    except subprocess.CalledProcessError:
+        # NVENC session churn fails intermittently (exit 187) on long
+        # batch runs; x264 keeps the same I+P contract (-bf 0)
+        subprocess.check_call(
+            cmd + ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]
+            + tail)
 
 
 def process_dataset(root, min_fps=None, max_seconds=None, drop_jitter=False,

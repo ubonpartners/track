@@ -145,34 +145,98 @@ def verify(corpus):
     return True
 
 
-def derive_tracking(corpus):
-    """tier 1 -> tier 2 hardlink refresh. Tier 2 is the tracker's own
-    space: it may replace these with divergent copies at any time; this
-    just (re)establishes the default view."""
+def derive_tracking(corpus, hint=None, max_seconds=None):
+    """tier 1 -> tier 2 EVAL-SPEC derivation (MB spec 2026-07-24): for
+    every tier-1 video+annotation pair, produce in tier 2 the version
+    track.py actually evaluates — resolution capped at 1280, framerate
+    decimated to the analytics grid the tracker config's
+    min_time_delta_process (per camera-class hint) selects, I+P-only
+    h264, no audio — plus the annotation subset to the retained frames
+    (native-grid truth stays in tier 1; a tracker-config change only
+    needs a re-derive, never a re-autolabel). No video_lite/, no
+    generated_h264/, no h264 cache: the tier-2 mp4 is the one eval
+    artifact, ingested directly via run_on_mp4_file.
+
+    The recipe (hint/max_seconds) is recorded in tier 2 as
+    derive_recipe.json on first use, so a bare `derive <corpus>` refresh
+    reuses it. Skip-if-current: a clip is re-derived when its tier-1
+    video or annotation is newer than the tier-2 annotation."""
+    import json as _json
+    from src.dataset_lite import (divisor_from_config, min_delta_from_config,
+                                  scale_dims, probe, transcode,
+                                  rewrite_annotation)
     src = os.path.join(T1, corpus)
     dst = os.path.join(T2, corpus)
-    n = 0
-    for rel in _files(src):
-        s, d = os.path.join(src, rel), os.path.join(dst, rel)
-        os.makedirs(os.path.dirname(d), exist_ok=True)
-        if os.path.isfile(d) and os.path.samefile(s, d):
+    recipe_path = os.path.join(dst, "derive_recipe.json")
+    if hint is None and os.path.isfile(recipe_path):
+        r = _json.load(open(recipe_path))
+        hint, max_seconds = r["hint"], r.get("max_seconds")
+    if hint is None:
+        print(f"{corpus}: no hint given and no {recipe_path}; "
+              f"pass hint=static|bodycam", flush=True)
+        return False
+    os.makedirs(os.path.join(dst, "video"), exist_ok=True)
+    os.makedirs(os.path.join(dst, "annotation"), exist_ok=True)
+    with open(recipe_path, "w") as f:
+        _json.dump({"hint": hint, "max_seconds": max_seconds}, f)
+    done = skipped = missing = 0
+    for name in sorted(os.listdir(os.path.join(src, "annotation"))):
+        if not name.endswith(".json") or name.endswith(".meta.json"):
             continue
-        if os.path.isfile(d):
-            os.unlink(d)
-        os.link(s, d)
-        n += 1
-    print(f"{corpus}: derived {n} new links into {dst}", flush=True)
+        stem = name[:-5]
+        s_anno = os.path.join(src, "annotation", name)
+        s_vid = os.path.join(src, "video", stem + ".mp4")
+        d_anno = os.path.join(dst, "annotation", name)
+        d_vid = os.path.join(dst, "video", stem + ".mp4")
+        if not os.path.isfile(s_vid):
+            missing += 1
+            continue
+        if (os.path.isfile(d_anno) and os.path.isfile(d_vid)
+                # a hardlinked (same-inode) annotation is the migration's
+                # placeholder view, not a derived one — always re-derive
+                and not os.path.samefile(s_anno, d_anno)
+                and os.path.getmtime(d_anno) >= os.path.getmtime(s_anno)
+                and os.path.getmtime(d_anno) >= os.path.getmtime(s_vid)):
+            skipped += 1
+            continue
+        w, h, fps = probe(s_vid)
+        divisor = divisor_from_config(fps, hint)
+        dims = scale_dims(w, h)
+        tmp_vid = d_vid + f".part{os.getpid()}.mp4"
+        transcode(s_vid, tmp_vid, divisor, dims, fps / divisor, max_seconds)
+        os.replace(tmp_vid, d_vid)
+        d = _json.load(open(s_anno))
+        new, kept, dropped = rewrite_annotation(
+            d, fps, divisor, dims, max_seconds, d_vid, hint=hint,
+            min_delta=min_delta_from_config(hint))
+        new["metadata"]["source_video"] = s_vid
+        tmp = d_anno + f".tmp{os.getpid()}"
+        with open(tmp, "w") as f:
+            _json.dump(new, f)
+        os.replace(tmp, d_anno)
+        done += 1
+        print(f"  {stem}: {w}x{h}@{fps:.2f} /{divisor} -> "
+              f"{dims[0]}x{dims[1]}@{fps / divisor:.2f} "
+              f"({kept} frames kept, {dropped} dropped)", flush=True)
+    print(f"{corpus}: {done} derived, {skipped} current, "
+          f"{missing} without video -> {dst}", flush=True)
 
 
 def main():
-    if len(sys.argv) < 3 or sys.argv[1] not in ("build", "verify", "derive"):
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    opts = dict(a[2:].split("=", 1) for a in sys.argv[1:]
+                if a.startswith("--") and "=" in a)
+    if len(args) < 2 or args[0] not in ("build", "verify", "derive"):
         print(__doc__)
         sys.exit(2)
-    fn = {"build": build, "verify": verify,
-          "derive": derive_tracking}[sys.argv[1]]
     ok = True
-    for corpus in sys.argv[2:]:
-        r = fn(corpus)
+    for corpus in args[1:]:
+        if args[0] == "derive":
+            ms = opts.get("max-seconds")
+            r = derive_tracking(corpus, hint=opts.get("hint"),
+                                max_seconds=float(ms) if ms else None)
+        else:
+            r = {"build": build, "verify": verify}[args[0]](corpus)
         ok = ok and (r is not False)
     sys.exit(0 if ok else 1)
 
