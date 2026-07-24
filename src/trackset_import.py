@@ -1720,7 +1720,7 @@ def estimate_bdd_time_offsets(detector_cache_root=None):
     _sys.path.insert(0, os.path.expanduser("~/stuff/ubonpartners/autolabel"))
     from autolabel.pipeline import cache_dir_for
     from autolabel.detect import load_detections
-    folder = "/mldata/tracking/bdd100k_mot"
+    folder = "/mldata/tracking_original/bdd100k_mot"
     anno = sorted(f for f in os.listdir(folder + "/annotation")
                   if f.endswith(".json"))
     for name in anno:
@@ -1783,7 +1783,7 @@ def estimate_bdd_time_offsets(detector_cache_root=None):
         print(f"  {name}: offset {bo} (agreement {max(scores.values()):.2f})")
 
 
-def fix_cevo25_vfr_times(folder="/mldata/tracking/cevo_april25"):
+def fix_cevo25_vfr_times(folder="/mldata/tracking_original/cevo_april25"):
     """Restamp cevo_april25 GT frame_times from the video's real decoded
     PTS. Most of these cameras record variable frame rate (intervals
     0.03-0.13s) but the annotations carried synthetic times from a
