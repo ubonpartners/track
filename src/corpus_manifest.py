@@ -377,6 +377,12 @@ def derive_tracking(corpus, hint=None, max_seconds=None, hint_overrides=None):
             d, fps, divisor, dims, max_seconds, d_vid, hint=clip_hint,
             min_delta=min_delta_from_config(clip_hint))
         new["metadata"]["source_video"] = s_vid
+        caps = load_capabilities(corpus)
+        if caps and caps.get("box_convention"):
+            # registry is the convention authority; stamp it per clip so
+            # eval consumers never have to guess (convention-aware
+            # matching reads this)
+            new["metadata"]["box_convention"] = caps["box_convention"]
         tmp = d_anno + f".tmp{os.getpid()}"
         with open(tmp, "w") as f:
             _json.dump(new, f)
