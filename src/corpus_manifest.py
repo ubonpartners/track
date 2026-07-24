@@ -443,8 +443,15 @@ def check_tracking(corpus, purge_legacy=False):
     for ap in sorted(_glob.glob(os.path.join(root, "annotation", "*.json"))):
         if ap.endswith(".meta.json"):
             continue
-        md = (json.load(open(ap)).get("metadata") or {})
+        doc = json.load(open(ap))
+        md = doc.get("metadata") or {}
         stem = os.path.basename(ap)[:-5]
+        if not any(f.get("objects") for f in doc.get("frames") or []):
+            # empty GT scores -inf in eval and poisons aggregates; either
+            # the source has no labels (jaad selected-subjects) or a
+            # duration cap emptied it (meva G419 starts at 120.9s) —
+            # both must be excluded from eval sets
+            problems.append(f"{stem}: annotation has zero GT boxes")
         for field in ("lite", "hint", "box_convention", "source_video"):
             if not md.get(field):
                 problems.append(f"{stem}: missing metadata.{field}")

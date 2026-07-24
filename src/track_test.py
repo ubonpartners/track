@@ -783,6 +783,19 @@ def display_results(config, results, columns, sort_key):
         paramset=paramset.union(set(r["result"].keys()))
     params=list(paramset)
 
+    # Empty-GT exclusion: a clip with zero GT objects scores -inf fitness
+    # and poisons every rollup containing it (jaad selected-subjects clips
+    # with no pedestrian; meva clips emptied by the duration cap). Such
+    # clips carry no signal for any objective — drop them from rollups,
+    # loudly. `corpus_manifest check` flags them at the data layer too.
+    _empty=[r["params"]["ds_key"] for r in results
+            if r["result"].get("num_objects", 1) == 0]
+    if _empty:
+        print(f"EXCLUDING {len(_empty)} zero-GT clips from rollups: "
+              f"{sorted(set(_empty))}", flush=True)
+        results=[r for r in results
+                 if r["result"].get("num_objects", 1) != 0]
+        datasets=[d for d in datasets if d not in set(_empty)]
     results2=[]
     if len(datasets)>1:
         for g in groups:
