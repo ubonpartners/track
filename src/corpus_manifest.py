@@ -32,6 +32,106 @@ import time
 T1 = "/mldata/tracking_original"
 T2 = "/mldata/tracking"
 
+# GT quality/capability registry — the SHARED authority both repos read
+# (autolabel: eval/gt_manifest.py loader; track: load_capabilities).
+# Declared at import, audit numbers written back by autolabel's
+# eval/gt_audit.py via set_audit(). approved_uses vocabulary:
+#   screen val frozen_test train_detector train_reid train_joiner
+#   gate_detection gate_association fp_gating recall_gating
+# Seed values = migration of autolabel's registry (audit 2026-07-23).
+CAPABILITIES_SEED = {
+    "mot": {"box_convention": "fullbody",
+            "completeness": "complete_with_ignore_regions",
+            "density": "per_frame",
+            "geometry": "loose(medIoU 0.71 mot17 / 0.86 mot20)",
+            "occlusion": "labelled_through_occlusion(occl0 ~2.2%)",
+            "artifacts": None,
+            "approved_uses": ["screen", "val", "frozen_test", "train_joiner",
+                              "gate_association", "gate_detection",
+                              "fp_gating", "recall_gating"]},
+    "personpath22": {"box_convention": "visible",
+                     "completeness": "complete",
+                     "density": "keyframe(~200ms)+interpolate",
+                     "geometry": "medIoU 0.78",
+                     "occlusion": "occl0 ~2.8%",
+                     "artifacts": None,
+                     "approved_uses": ["screen", "val", "frozen_test",
+                                       "train_joiner", "gate_association",
+                                       "gate_detection", "fp_gating",
+                                       "recall_gating"]},
+    "jaad": {"box_convention": "fullbody",
+             "completeness": "selected_subjects_only",
+             "density": "per_frame",
+             "geometry": "medIoU 0.81",
+             "occlusion": "occl0 ~2.7%",
+             "artifacts": None,
+             "approved_uses": ["screen", "val", "frozen_test",
+                               "train_joiner", "gate_association"]},
+    "cevo": {"box_convention": "fullbody", "completeness": "complete",
+             "density": "per_frame", "geometry": "unaudited",
+             "occlusion": "unaudited", "artifacts": None,
+             "approved_uses": ["screen", "val", "frozen_test",
+                               "train_joiner", "gate_association",
+                               "gate_detection", "fp_gating",
+                               "recall_gating"]},
+    "cevo_april25": {"box_convention": "fullbody", "completeness": "complete",
+                     "density": "per_frame", "geometry": "unaudited",
+                     "occlusion": "unaudited", "artifacts": None,
+                     "approved_uses": ["screen", "val", "frozen_test",
+                                       "train_joiner", "gate_association",
+                                       "gate_detection", "fp_gating",
+                                       "recall_gating"]},
+    "bdd100k_mot": {"box_convention": "fullbody", "completeness": "complete",
+                    "density": "keyframe(200ms, per-clip offset restamped)",
+                    "geometry": "medIoU 0.43 (night/tiny: detector-limited)",
+                    "occlusion": "occl0 58.8% (detector-invisible dominated)",
+                    "artifacts": None,
+                    "approved_uses": ["gate_detection"]},
+    "meva": {"box_convention": "fullbody",
+             "completeness": "derived(augmented+tightened; actors-only origin)",
+             "density": "per_frame(densified)",
+             "geometry": "tightened(2026-07-23)",
+             "occlusion": "labelled_through_occlusion",
+             "artifacts": "capture_corruption(~10s periodic, 30/50 clips)",
+             "approved_uses": ["train_detector"]},
+    "otw": {"box_convention": "visible",
+            "completeness": "derived(augmented; actors-only origin)",
+            "density": "per_frame(densified)",
+            "geometry": "original_mot_style",
+            "occlusion": "unaudited", "artifacts": None,
+            "approved_uses": ["train_detector"]},
+    "chirla": {"box_convention": "visible",
+               "completeness": "complete(audit extraPP 0.00: no unlabelled people)",
+               "density": "per_frame",
+               "geometry": "medIoU 0.74 (reid-style, slightly loose)",
+               "occlusion": "occl0 0.6%", "artifacts": None,
+               "approved_uses": ["screen", "val", "frozen_test",
+                                 "train_joiner", "gate_association",
+                                 "gate_detection", "fp_gating",
+                                 "recall_gating"]},
+    "roundabouthd": {"box_convention": "visible",
+                     "completeness": "moving_vehicles_only(parked unlabelled: "
+                                     "audit extra/f 1.93)",
+                     "density": "per_frame",
+                     "geometry": "medIoU 0.84 (tight)",
+                     "occlusion": "occl0 2.2%", "artifacts": None,
+                     "approved_uses": ["gate_association"]},
+    "uvg_vcm": {"box_convention": "visible",
+                "completeness": "complete(professional dense labels)",
+                "density": "per_frame",
+                "geometry": "medIoU 0.79 person / 0.73 vehicle",
+                "occlusion": "occl0 0.7% person / 4.4% vehicle; extraPP 0.01",
+                "artifacts": "faces_blurred(JobFair)",
+                "approved_uses": ["screen", "val", "gate_detection",
+                                  "gate_association", "train_detector"]},
+    "bwc-videotext": {"box_convention": "fullbody",
+                      "completeness": "derived(pure autolabel output; no human GT)",
+                      "density": "per_frame",
+                      "geometry": "detector-tight",
+                      "occlusion": "n/a", "artifacts": "night_strobe",
+                      "approved_uses": ["train_detector"]},
+}
+
 CORPUS_INFO = {
     "mot": {"license": "CC BY-NC-SA 3.0 (MOTChallenge)",
             "source_root": "legacy import (MOTChallenge release zips)",
@@ -103,11 +203,18 @@ def build(corpus):
     mpath = os.path.join(root, "MANIFEST.json")
     old = json.load(open(mpath)) if os.path.isfile(mpath) else {"files": {}}
     info = CORPUS_INFO.get(corpus, {})
+    caps = old.get("capabilities") or CAPABILITIES_SEED.get(corpus)
+    if caps is None:
+        raise SystemExit(
+            f"{corpus}: no capabilities declared — a corpus cannot enter "
+            "tier 1 unclassified. Add a capabilities block (see "
+            "CAPABILITIES_SEED for the schema) at import.")
     man = {"corpus": corpus,
            "license": info.get("license", "UNKNOWN"),
            "source_root": info.get("source_root", "UNKNOWN"),
            "import_recipe": info.get("import_recipe", "UNKNOWN"),
            "gt_passes": info.get("gt_passes", old.get("gt_passes", [])),
+           "capabilities": caps,
            "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
            "files": {}}
     for rel in _files(root):
@@ -118,10 +225,51 @@ def build(corpus):
             (prev["version"] + 1 if prev else 1)
         man["files"][rel] = {"sha256": sha, "bytes": os.path.getsize(p),
                              "version": version}
+        if prev and "source" in prev:
+            man["files"][rel]["source"] = prev["source"]
     tmp = mpath + ".tmp"
     json.dump(man, open(tmp, "w"), indent=1)
     os.replace(tmp, mpath)
     print(f"{corpus}: {len(man['files'])} files manifested", flush=True)
+
+
+def load_capabilities(corpus):
+    """Read a corpus's capabilities block (both repos' entry point)."""
+    mp = os.path.join(T1, corpus, "MANIFEST.json")
+    if not os.path.isfile(mp):
+        return None
+    return json.load(open(mp)).get("capabilities")
+
+
+def allows(corpus, use):
+    caps = load_capabilities(corpus)
+    return bool(caps) and use in caps.get("approved_uses", [])
+
+
+def set_audit(corpus, audit):
+    """Autolabel's gt_audit write-back: merge measured numbers into
+    capabilities.audit without rehashing files."""
+    mp = os.path.join(T1, corpus, "MANIFEST.json")
+    man = json.load(open(mp))
+    caps = man.setdefault("capabilities", {})
+    caps["audit"] = dict(caps.get("audit", {}), **audit)
+    tmp = mp + ".tmp"
+    json.dump(man, open(tmp, "w"), indent=1)
+    os.replace(tmp, mp)
+
+
+def set_file_source(corpus, rel, source):
+    """Importer hook: record a tier-1 file's tier-0 origin
+    ({path,url,sha256|bytes,status: present|deleted-refetchable|
+    unknown-legacy})."""
+    mp = os.path.join(T1, corpus, "MANIFEST.json")
+    man = json.load(open(mp))
+    if rel not in man["files"]:
+        raise KeyError(f"{corpus}/{rel} not in manifest — build first")
+    man["files"][rel]["source"] = source
+    tmp = mp + ".tmp"
+    json.dump(man, open(tmp, "w"), indent=1)
+    os.replace(tmp, mp)
 
 
 def verify(corpus):
@@ -134,6 +282,8 @@ def verify(corpus):
             bad.append((rel, "MISSING"))
         elif os.path.getsize(p) != rec["bytes"] or _sha256(p) != rec["sha256"]:
             bad.append((rel, "HASH MISMATCH"))
+    if not man.get("capabilities"):
+        bad.append(("MANIFEST.json", "NO CAPABILITIES BLOCK"))
     extra = [r for r in _files(root) if r not in man["files"]]
     for rel in extra:
         bad.append((rel, "UNMANIFESTED"))
