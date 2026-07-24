@@ -1021,7 +1021,7 @@ def convert_caltech_pedestrian():
 
 
 def convert_mot():
-    output_folder="/mldata/tracking/mot"
+    output_folder="/mldata/tracking_original/mot"
     folders=["/mldata/downloaded_datasets/other/MOT20/train",
              "/mldata/downloaded_datasets/other/MOT17/train"]
     stuff.makedir(output_folder+"/annotation/")
@@ -1038,7 +1038,7 @@ def convert_mot():
 
 
 def convert_personpath22(src_root="/mldata/downloaded_datasets/other/personpath22/dataset/personpath22",
-                         output_folder="/mldata/tracking/personpath22",
+                         output_folder="/mldata/tracking_original/personpath22",
                          anno_variant="visible"):
     """Convert PersonPath22 (gluoncv-motion format) into MOT-equivalent
     JSON+mp4 pairs under output_folder/{annotation,video}/.
@@ -1101,7 +1101,7 @@ def convert_personpath22(src_root="/mldata/downloaded_datasets/other/personpath2
 
 
 def convert_jaad(src_root="/mldata/downloaded_datasets/other/JAAD",
-                 output_folder="/mldata/tracking/jaad"):
+                 output_folder="/mldata/tracking_original/jaad"):
     """Convert JAAD XML + mp4 clips into MOT-like JSON+mp4 tracksets."""
     annotations_dir = os.path.join(src_root, "annotations")
     videos_dir = os.path.join(src_root, "JAAD_clips")
@@ -1219,7 +1219,7 @@ def _convert_meva_clip(args):
     return ("done", stem)
 
 def convert_chirla(src_root="/mldata/downloaded_datasets/other/chirla",
-                   output_folder="/mldata/tracking/chirla"):
+                   output_folder="/mldata/tracking_original/chirla"):
     """Convert CHIRLA camera clips into trackset JSON + mp4 pairs.
 
     Output stems: chirla_<seq>_<camera>_<timestamp> with ':' -> '-'
@@ -1281,7 +1281,7 @@ def convert_chirla(src_root="/mldata/downloaded_datasets/other/chirla",
 
 def convert_roundabouthd(
         src_root="/mldata/downloaded_datasets/other/bath_1574/RoundaboutHD",
-        output_folder="/mldata/tracking/roundabouthd"):
+        output_folder="/mldata/tracking_original/roundabouthd"):
     """Convert the 4 RoundaboutHD cameras into trackset JSON + mp4.
 
     Source videos are 4K MPEG-4 Part 2 (Simple Profile) — no desktop
@@ -1332,7 +1332,7 @@ def convert_roundabouthd(
 
 
 def convert_uvg_vcm(src_root="/mldata/downloaded_datasets/other/uvg_vcm",
-                    output_folder="/mldata/tracking/uvg_vcm"):
+                    output_folder="/mldata/tracking_original/uvg_vcm"):
     """Convert downloaded UVG-VCM sequences into trackset JSON + mp4.
 
     Only sequences with BOTH a raw YUV on disk and a tracking-schema
@@ -1397,7 +1397,7 @@ def convert_uvg_vcm(src_root="/mldata/downloaded_datasets/other/uvg_vcm",
 
 
 def convert_meva(src_root="/mldata/downloaded_datasets/other/MEVA",
-                 output_folder="/mldata/tracking/meva",
+                 output_folder="/mldata/tracking_original/meva",
                  workers=8, augment=True, augment_limit=0, lite=True):
     """Convert MEVA (KF1) KPF clips into trackset JSON + video pairs under
     output_folder/{annotation,video}/.
@@ -1462,7 +1462,7 @@ def convert_meva(src_root="/mldata/downloaded_datasets/other/MEVA",
         process_dataset(output_folder, hint="static", max_seconds=120)
 
 def convert_otw(src_root="/mldata/downloaded_datasets/other/otw/otw",
-                output_folder="/mldata/tracking/otw",
+                output_folder="/mldata/tracking_original/otw",
                 augment=True, augment_limit=0, lite=True):
     """Convert Out the Window (OTW) into MOT-equivalent JSON+mp4 pairs
     under output_folder/{annotation,video}/.
@@ -1588,7 +1588,7 @@ def _write_gap_filled_video(ts, out_video):
         os.remove(list_path)
 
 def convert_egohumans(src_root="/mldata/downloaded_datasets/other/egohumans/data",
-                      output_folder="/mldata/tracking/egohumans",
+                      output_folder="/mldata/tracking_original/egohumans",
                       variants=("exo", "ego_rgb")):
     """Convert the EgoHumans tracking benchmark into MOT-equivalent
     JSON+mp4 pairs under output_folder/{annotation,video}/.
@@ -1657,7 +1657,7 @@ def convert_egohumans(src_root="/mldata/downloaded_datasets/other/egohumans/data
 
 
 def convert_cevo():
-    output_folder="/mldata/tracking/cevo_april25"
+    output_folder="/mldata/tracking_original/cevo_april25"
     folder="/mldata/downloaded_datasets/IndiaOfficeFrontDoor"
     stuff.makedir(output_folder+"/annotation/")
     stuff.makedir(output_folder+"/video/")
@@ -1681,7 +1681,7 @@ def convert_cevo():
 
 def convert_bdd100k_kaggle(
         src_root="/mldata/downloaded_datasets/other/BDD100k_kaggle",
-        output_folder="/mldata/tracking/bdd100k_mot",
+        output_folder="/mldata/tracking_original/bdd100k_mot",
         limit=0):
     """Convert the 50-video Kaggle BDD100K MOT subset (original 30fps
     .mov clips + flattened scalabel CSV) into JSON+mp4 tracksets.
@@ -1896,7 +1896,7 @@ def convert_autolabel_folder(src_folder, output_folder, shard="",
 
 
 def convert_raw_movies(src_folder="/mldata/video/youtube",
-                       output_folder="/mldata/tracking/raw_movies",
+                       output_folder="/mldata/tracking_original/raw_movies",
                        shard="", lite=True):
     """Raw movie/trailer mp4s, fully autolabelled. Edited multi-shot
     content, so autolabel's scene-cut detection (TransNetV2) is enabled:
@@ -1912,7 +1912,7 @@ def convert_raw_movies(src_folder="/mldata/video/youtube",
 def convert_bwc_videotext(
         src_folder="/mldata/downloaded_datasets/other/BWC-VideoText-359/"
                    "eval_videos",
-        output_folder="/mldata/tracking/bwc-videotext", shard="",
+        output_folder="/mldata/tracking_original/bwc-videotext", shard="",
         lite=True):
     """Body-worn-camera eval videos, fully autolabelled (use case 2)."""
     convert_autolabel_folder(src_folder, output_folder, shard=shard)
