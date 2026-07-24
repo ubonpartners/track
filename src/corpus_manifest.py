@@ -472,8 +472,20 @@ def check_tracking(corpus, purge_legacy=False):
                             f"exceeds 1280")
         if int(st.get("has_b_frames", 0)) != 0:
             problems.append(f"{stem}: video has B-frames")
-        num, den = st["avg_frame_rate"].split("/")
-        vfps = float(num) / float(den) if float(den) else 0.0
+        # measure fps from actual frame-stamp spacing, NOT avg_frame_rate:
+        # container duration omits the last frame's display period, so the
+        # frames/duration ratio runs 1/(n-1) hot — 1-2% on short clips,
+        # which false-flags exactly the corpora with 5-15s clips
+        # a ~25-frame window: single-interval measurement is bitten by
+        # container-timebase quantization of non-integer grids (50fps/7)
+        # on the first frame pair
+        pts = _sp.run(
+            ["ffprobe", "-v", "error", "-read_intervals", "%+#25",
+             "-select_streams", "v:0", "-show_entries", "frame=pts_time",
+             "-of", "csv=p=0", ov], capture_output=True, text=True).stdout
+        ts = [float(x.rstrip(",")) for x in pts.split() if x.rstrip(",")]
+        vfps = ((len(ts) - 1) / (ts[-1] - ts[0])
+                if len(ts) >= 2 and ts[-1] > ts[0] else 0.0)
         L = md.get("lite") or {}
         src_fps, hint = L.get("source_fps"), md.get("hint")
         if src_fps and hint:
