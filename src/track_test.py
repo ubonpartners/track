@@ -197,10 +197,21 @@ def summary_string(r):
         s+=f" FmAP:{r['det_ap_face']:0.3f}"
     if 'det_ap_vehicle' in r:
         s+=f" VmAP:{r['det_ap_vehicle']:0.3f}"
+    # vehicle block (unprefixed metrics above are the person pass)
     if 'mota_vehicle' in r:
         s+=f" vMOTA:{r['mota_vehicle']:6.5f}"
+    if 'idf1_vehicle' in r:
+        s+=f" vIDF1:{r['idf1_vehicle']:6.5f}"
+    if 'fitness_vehicle' in r:
+        s+=f" vFit:{r['fitness_vehicle']:6.5f}"
     if 'fp_per_frame_vehicle' in r:
         s+=f" vFPpf:{r['fp_per_frame_vehicle']:5.2f}"
+    if 'fn_per_obj_vehicle' in r:
+        s+=f" vFNPo:{r['fn_per_obj_vehicle']:5.3f}"
+    if 'switch_per_obj_vehicle' in r:
+        s+=f" vSWPo:{r['switch_per_obj_vehicle']:5.3f}"
+    if 'fp_tracks_honest_v2_vehicle' in r:
+        s+=f" vFPh2:{int(r['fp_tracks_honest_v2_vehicle'])}"
     if 'fitness_multi' in r:
         s+=f" FITm:{r['fitness_multi']:6.5f}"
     return s
