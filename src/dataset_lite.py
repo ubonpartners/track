@@ -130,13 +130,22 @@ def rewrite_annotation(d, src_fps, divisor, dims, max_seconds, lite_video,
     """Subset an annotation dict to the retained frames + refresh metadata.
     Pure function (unit-tested); returns (new_dict, kept, dropped)."""
     md = dict(d.get("metadata") or {})
+    frames_in = d.get("frames") or []
+    # frame-selection index: the video transcode keeps frames by decode
+    # ORDINAL (select not(mod(n,N))), so when the annotation's frame_ids
+    # are dense+consecutive use the same ordinal — exact for VFR sources
+    # (cevo_april25: pts-true times drift vs round(t*avg_fps) by frames).
+    # Sparse/gappy ids (meva capture ticks) fall back to the time grid.
+    ids = [fr.get("frame_id") for fr in frames_in]
+    dense = (len(ids) > 1 and all(isinstance(i, int) for i in ids)
+             and ids == list(range(ids[0], ids[0] + len(ids))))
     kept, dropped = [], 0
-    for fr in d.get("frames") or []:
+    for k, fr in enumerate(frames_in):
         t = fr.get("frame_time", 0.0)
         if max_seconds is not None and t > max_seconds:
             dropped += 1
             continue
-        idx = int(round(t * src_fps))
+        idx = (ids[k] - ids[0]) if dense else int(round(t * src_fps))
         if idx % divisor != 0:
             dropped += 1
             continue
