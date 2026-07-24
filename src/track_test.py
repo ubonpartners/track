@@ -25,6 +25,48 @@ def mot_obj(obj, w, h):
     oh=int((obj.box[3]-obj.box[1])*h)
     return [obj.track_id, ol, ot, ow, oh]
 
+def permissive_iou_matrix(gt_boxes, test_boxes):
+    """Convention-permissive pairwise IoU between two box lists.
+
+    GT corpora use two box conventions — 'fullbody' (amodal, includes the
+    occluded lower body) and 'visible' (visible extent only) — and the
+    tracker's own convention is mixed. The difference is almost purely
+    VERTICAL extent, so for each pair the score is
+        max(iou(g, t), iou(g_vclip, t), iou(g, t_vclip))
+    where X_vclip is X with its y-extent truncated to the OTHER box's
+    y-range (x-extent unchanged). A vertical-extent mismatch in either
+    direction therefore still matches, while x-axis discrimination is
+    untouched.
+
+    gt_boxes: (n,4), test_boxes: (m,4), boxes [x1,y1,x2,y2] (any
+    consistent units — IoU is invariant to per-axis scaling). Returns an
+    (n,m) float array. Fully vectorized: the vclip'd box's height equals
+    the pair's y-overlap and its intersection with the other box is the
+    plain intersection, so no per-pair python work is needed."""
+    G = np.asarray(gt_boxes, dtype=float).reshape(-1, 4)
+    T = np.asarray(test_boxes, dtype=float).reshape(-1, 4)
+    gx1, gy1, gx2, gy2 = (G[:, None, i] for i in range(4))
+    tx1, ty1, tx2, ty2 = (T[None, :, i] for i in range(4))
+    ix = np.maximum(0.0, np.minimum(gx2, tx2) - np.maximum(gx1, tx1))
+    iy = np.maximum(0.0, np.minimum(gy2, ty2) - np.maximum(gy1, ty1))
+    inter = ix * iy
+    gw = gx2 - gx1
+    tw = tx2 - tx1
+    area_g = gw * (gy2 - gy1)
+    area_t = tw * (ty2 - ty1)
+    # g clipped to t's y-range has area gw*iy (and vice versa); the
+    # clipped box's intersection with the other box is still `inter`.
+    eps = 1e-12
+    iou = inter / np.maximum(area_g + area_t - inter, eps)
+    iou_gclip = inter / np.maximum(gw * iy + area_t - inter, eps)
+    iou_tclip = inter / np.maximum(area_g + tw * iy - inter, eps)
+    return np.maximum(iou, np.maximum(iou_gclip, iou_tclip))
+
+def permissive_iou(box_a, box_b):
+    """Scalar convention-permissive IoU for one [x1,y1,x2,y2] box pair
+    (symmetric — see permissive_iou_matrix)."""
+    return float(permissive_iou_matrix([box_a], [box_b])[0, 0])
+
 def _box_in_ignore(box, ignore_boxes, frac_thresh):
     """True if a fraction >= frac_thresh of `box` overlaps any ignore box."""
     dx1, dy1, dx2, dy2 = box
@@ -308,8 +350,15 @@ def compute_metrics(gt, test,
                     eval_rate_divisor=1,
                     eval_min_framerate=30.0,
                     min_person_height=0.0,
+                    convention_permissive=None,
                     show_pbar=False):
     assert match_iou<0.9 and match_iou>0.1, f"stupid match_iou {match_iou}"
+    # Convention-permissive box matching: None means AUTO — enabled iff
+    # the GT annotation declares its box convention (tier-2 derived
+    # annotations carry 'box_convention' from the corpus registry; legacy
+    # ones don't). Explicit True/False overrides.
+    if convention_permissive is None:
+        convention_permissive = bool(gt.metadata.get("box_convention"))
     start_time=min(gt.first_frame_time(), test.first_frame_time())
     t=start_time
     last_time=max(gt.last_frame_time(), test.last_frame_time())
@@ -369,6 +418,12 @@ def compute_metrics(gt, test,
     # ignore region. Matches the standard "don't care" behaviour in MOTChallenge.
     ignore_overlap_frac = 0.5
 
+    # Pair scorer for the "does this det genuinely match a GT" rescue
+    # checks below — permissive when enabled, plain IoU otherwise, so the
+    # ignore-region / annotation-floor filters agree with the matcher and
+    # never drop a convention-mismatched but correct detection.
+    pair_iou = permissive_iou if convention_permissive else coord.box_iou
+
     while t<last_time:
         # get GT and Test objects at time
         # this interpolates objects if there is no frame at that time
@@ -411,7 +466,7 @@ def compute_metrics(gt, test,
                                      if det.cl < len(classes_to_test)
                                      else "", 0.0)
                 if (fl > 0 and (det.box[3] - det.box[1]) < fl
-                        and not any(coord.box_iou(det.box, gb) >= match_iou
+                        and not any(pair_iou(det.box, gb) >= match_iou
                                     for gb in gt_boxes_all)):
                     continue
                 kept_t.append(det)
@@ -431,7 +486,7 @@ def compute_metrics(gt, test,
                         # If this detection clearly matches a real GT person we
                         # keep it so the matcher can score the match; otherwise
                         # treat it as a "don't care" detection.
-                        if not any(coord.box_iou(det.box, gb) >= match_iou
+                        if not any(pair_iou(det.box, gb) >= match_iou
                                    for gb in gt_person_boxes):
                             continue
                     kept.append(det)
@@ -447,8 +502,19 @@ def compute_metrics(gt, test,
 
         C=[[]]
         if len(gt_dets)>0 and len(t_dets)>0:
-            C = mm.distances.iou_matrix(gt_dets[:,1:], t_dets[:,1:], \
-                                max_iou=match_iou) # format: gt, t
+            if convention_permissive:
+                # Same semantics as mm.distances.iou_matrix (dist=1-iou,
+                # NaN above the max distance) but with the convention-
+                # permissive score, computed on the normalized boxes
+                # (IoU is invariant to per-axis scaling so this matches
+                # the pixel-space plain-IoU values up to mot_obj's int
+                # truncation). One vectorized (n_gt, n_test) pass.
+                pdist = 1.0 - permissive_iou_matrix(
+                    [g.box for g in gt_obj], [d.box for d in test_obj])
+                C = np.where(pdist > match_iou, np.nan, pdist)
+            else:
+                C = mm.distances.iou_matrix(gt_dets[:,1:], t_dets[:,1:], \
+                                    max_iou=match_iou) # format: gt, t
 
         acc.update(gt_dets[:,0].astype('int').tolist() if len(gt_dets)>0 else [], \
                 t_dets[:,0].astype('int').tolist() if len(t_dets)>0 else [], C)
@@ -927,6 +993,9 @@ def score_tracksets(trackset_gt, trackset, params):
         match_iou=params["match_iou"]
     eval_rate_divisor=params.get("eval_rate_divisor", 1)
     eval_min_framerate=params.get("eval_min_framerate", 30.0)
+    # None = AUTO (enabled iff the GT declares 'box_convention');
+    # a search yaml can force it with an explicit true/false.
+    convention_permissive=params.get("convention_permissive")
 
     # Multi-class scoring (multi_class_and_hints.md §2): person is scored
     # exactly as before (un-suffixed keys — nothing downstream changes);
@@ -951,7 +1020,8 @@ def score_tracksets(trackset_gt, trackset, params):
                            match_iou=match_iou,
                            classes_for_det_map=det_map,
                            eval_rate_divisor=eval_rate_divisor,
-                           eval_min_framerate=eval_min_framerate)
+                           eval_min_framerate=eval_min_framerate,
+                           convention_permissive=convention_permissive)
 
     gt_counts=gt_class_box_counts(trackset_gt)
     for cls in eval_classes:
@@ -967,7 +1037,8 @@ def score_tracksets(trackset_gt, trackset, params):
                               classes_to_test=[cls],
                               classes_for_det_map=None,
                               eval_rate_divisor=eval_rate_divisor,
-                              eval_min_framerate=eval_min_framerate)
+                              eval_min_framerate=eval_min_framerate,
+                              convention_permissive=convention_permissive)
         for k, v in r_cls.items():
             result[f"{k}_{cls}"]=v
 
