@@ -67,14 +67,16 @@ CAPABILITIES_SEED = {
              "artifacts": None,
              "approved_uses": ["screen", "val", "frozen_test",
                                "train_joiner", "gate_association"]},
-    "cevo": {"box_convention": "fullbody", "completeness": "complete",
+    "cevo": {"box_convention": "visible",  # MB ruling 2026-07-24: cevo GT is visible-extent (importer comment concurs; fullbody seed was migrated unaudited)
+             "completeness": "complete",
              "density": "per_frame", "geometry": "unaudited",
              "occlusion": "unaudited", "artifacts": None,
              "approved_uses": ["screen", "val", "frozen_test",
                                "train_joiner", "gate_association",
                                "gate_detection", "fp_gating",
                                "recall_gating"]},
-    "cevo_april25": {"box_convention": "fullbody", "completeness": "complete",
+    "cevo_april25": {"box_convention": "visible",  # same MB ruling as cevo
+                     "completeness": "complete",
                      "density": "per_frame", "geometry": "unaudited",
                      "occlusion": "unaudited", "artifacts": None,
                      "approved_uses": ["screen", "val", "frozen_test",
