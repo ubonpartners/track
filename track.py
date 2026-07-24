@@ -168,6 +168,8 @@ if __name__ == '__main__':
     parser.add_argument('--test', type=str, default=None, help='test yaml file')
     parser.add_argument('--search', type=str, default=None, help='search config yaml file')
     parser.add_argument('--eval',   type=str, default=None, help='single-pass parallel eval yaml (cartesian product of tests × datasets via mp_workqueue; num_workers defaults to "auto" — 4 workers for ≤1 GPU, 2×N for N>1 GPUs)')
+    parser.add_argument('--eval-split', type=str, default='both', choices=['train', 'val', 'both'], help='dataset split for --eval')
+    parser.add_argument('--eval-permissive', type=str, default='auto', choices=['auto', 'on', 'off'], help='convention-permissive matching override for --eval')
     parser.add_argument('--track', action='store_true', help='test tracker on a single sequence')
     parser.add_argument('--compare', type=str, default=None, help='compare multiple sets of tracking results')
     parser.add_argument('--display', action='store_true', help='visualise results')
@@ -215,7 +217,9 @@ if __name__ == '__main__':
         track_search.search_track(opt.search)
         exit()
     if opt.eval is not None:
-        track_search.eval_track(opt.eval)
+        perm = {"auto": None, "on": True, "off": False}[opt.eval_permissive]
+        track_search.eval_track(opt.eval, split=opt.eval_split,
+                                convention_permissive=perm)
         exit()
     if opt.test is not None:
         track_test.track_test(opt.test)

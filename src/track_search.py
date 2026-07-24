@@ -404,7 +404,7 @@ def search_test(
     return score, full_result
 
 
-def eval_track(yaml_file):
+def eval_track(yaml_file, split=None, convention_permissive=None):
     """Single-pass parallel evaluation via the existing multi-process
     work queue. The yaml mirrors the search yaml minus search_params:
 
@@ -431,6 +431,11 @@ def eval_track(yaml_file):
     Returns the aggregated results list (_overall + per-clip).
     """
     config = stuff.load_dictionary(yaml_file)
+    # a SEARCH yaml is a valid eval yaml once search_params is dropped —
+    # its tests.search_config block carries the tracker config + eval
+    # parameters. This gives a one-off eval of the exact search substrate
+    # (MB request 2026-07-24): track.py --eval <search yaml> --eval-split ...
+    config.pop("search_params", None)
     if "num_workers" not in config:
         config["num_workers"] = "auto"
     if "sort_key" not in config:
@@ -444,8 +449,14 @@ def eval_track(yaml_file):
             "idf1,IDF1,{:6.3f}",
             "fitness,FIT,{:6.3f}",
         ]
-    return track_test.track_test(config, split=None,
-                                  desc=f"eval {yaml_file}")
+    if convention_permissive is not None:
+        for t in (config.get("tests") or {}).values():
+            t["convention_permissive"] = convention_permissive
+    if split in ("both", ""):
+        split = None
+    return track_test.track_test(config, split=split,
+                                  desc=f"eval {yaml_file}"
+                                       f" split={split or 'both'}")
 
 
 def _journal_append(path, entry):
