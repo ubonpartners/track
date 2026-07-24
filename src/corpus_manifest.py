@@ -130,6 +130,14 @@ CAPABILITIES_SEED = {
                       "geometry": "detector-tight",
                       "occlusion": "n/a", "artifacts": "night_strobe",
                       "approved_uses": ["train_detector"]},
+    "raw_movies": {"box_convention": "fullbody",
+                   "completeness": "derived(pure autolabel output + scene "
+                                   "cuts; no human GT)",
+                   "density": "per_frame",
+                   "geometry": "detector-tight",
+                   "occlusion": "n/a",
+                   "artifacts": "edited_multi_shot(cuts)",
+                   "approved_uses": []},
 }
 
 CORPUS_INFO = {
@@ -175,6 +183,11 @@ CORPUS_INFO = {
     "bwc-videotext": {"license": "internal",
                       "source_root": "internal bwc footage",
                       "import_recipe": "autolabel-labelled (no human GT)"},
+    "raw_movies": {"license": "unlicensed movie/trailer footage — "
+                              "INTERNAL EVAL ONLY, never train, never ship",
+                   "source_root": "/mldata/video/youtube",
+                   "import_recipe": "convert_raw_movies: autolabel with "
+                                    "scene cuts (AV1 sources h264-transcoded)"},
 }
 
 
@@ -295,7 +308,7 @@ def verify(corpus):
     return True
 
 
-def derive_tracking(corpus, hint=None, max_seconds=None):
+def derive_tracking(corpus, hint=None, max_seconds=None, hint_overrides=None):
     """tier 1 -> tier 2 EVAL-SPEC derivation (MB spec 2026-07-24): for
     every tier-1 video+annotation pair, produce in tier 2 the version
     track.py actually evaluates — resolution capped at 1280, framerate
@@ -321,14 +334,17 @@ def derive_tracking(corpus, hint=None, max_seconds=None):
     if hint is None and os.path.isfile(recipe_path):
         r = _json.load(open(recipe_path))
         hint, max_seconds = r["hint"], r.get("max_seconds")
+        hint_overrides = hint_overrides or r.get("hint_overrides")
     if hint is None:
         print(f"{corpus}: no hint given and no {recipe_path}; "
               f"pass hint=static|bodycam", flush=True)
         return False
+    hint_overrides = hint_overrides or {}
     os.makedirs(os.path.join(dst, "video"), exist_ok=True)
     os.makedirs(os.path.join(dst, "annotation"), exist_ok=True)
     with open(recipe_path, "w") as f:
-        _json.dump({"hint": hint, "max_seconds": max_seconds}, f)
+        _json.dump({"hint": hint, "max_seconds": max_seconds,
+                    "hint_overrides": hint_overrides}, f)
     done = skipped = missing = 0
     for name in sorted(os.listdir(os.path.join(src, "annotation"))):
         if not name.endswith(".json") or name.endswith(".meta.json"):
@@ -349,16 +365,17 @@ def derive_tracking(corpus, hint=None, max_seconds=None):
                 and os.path.getmtime(d_anno) >= os.path.getmtime(s_vid)):
             skipped += 1
             continue
+        clip_hint = hint_overrides.get(stem, hint)
         w, h, fps = probe(s_vid)
-        divisor = divisor_from_config(fps, hint)
+        divisor = divisor_from_config(fps, clip_hint)
         dims = scale_dims(w, h)
         tmp_vid = d_vid + f".part{os.getpid()}.mp4"
         transcode(s_vid, tmp_vid, divisor, dims, fps / divisor, max_seconds)
         os.replace(tmp_vid, d_vid)
         d = _json.load(open(s_anno))
         new, kept, dropped = rewrite_annotation(
-            d, fps, divisor, dims, max_seconds, d_vid, hint=hint,
-            min_delta=min_delta_from_config(hint))
+            d, fps, divisor, dims, max_seconds, d_vid, hint=clip_hint,
+            min_delta=min_delta_from_config(clip_hint))
         new["metadata"]["source_video"] = s_vid
         tmp = d_anno + f".tmp{os.getpid()}"
         with open(tmp, "w") as f:

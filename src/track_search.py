@@ -565,12 +565,38 @@ document.getElementById("vec").innerHTML =
         f.write(html)
 
 
+def _registry_check(config, logfile):
+    """Corpus-registry consultation (data_tiers spec section 4): every
+    dataset row's corpus must approve tuning use. WARNS rather than
+    fails while the `tune_tracker` vocabulary decision is pending —
+    derived-GT corpora (meva/otw/bwc/movies) are currently registered
+    train_detector-only yet sit in the search sets."""
+    from src.corpus_manifest import load_capabilities
+    unapproved = {}
+    for name, row in (config.get("datasets") or {}).items():
+        path = row.get("path", "")
+        parts = path.split("/")
+        corpus = parts[3] if len(parts) > 3 else None
+        caps = load_capabilities(corpus) if corpus else None
+        if caps is None:
+            unapproved.setdefault("UNREGISTERED:" + str(corpus), []).append(name)
+        elif not any(u in caps.get("approved_uses", [])
+                     for u in ("screen", "val", "frozen_test", "tune_tracker")):
+            unapproved.setdefault(corpus, []).append(name)
+    for corpus, names in sorted(unapproved.items()):
+        search_log(logfile,
+                   f"REGISTRY WARNING: corpus '{corpus}' is not approved "
+                   f"for eval/tuning use ({len(names)} clips, e.g. "
+                   f"{names[0]}) — see capabilities.approved_uses")
+
+
 def search_track(yaml_file):
     config = stuff.load_dictionary(yaml_file)
     result_log_file = config["result_log_file_path"]
     stuff.makedir(result_log_file)
     cur_time = datetime.datetime.now().strftime("%Y%m%d-%H%M")
     logfile = open(result_log_file + "/search_log_" + cur_time + ".txt", "w")
+    _registry_check(config, logfile)
     journal_path = result_log_file + f"/search_journal_{cur_time}.jsonl"
     html_path = result_log_file + f"/search_report_{cur_time}.html"
     param_names = []
