@@ -432,7 +432,10 @@ def check_tracking(corpus, purge_legacy=False):
                 else:
                     problems.append(f"legacy dir: {p}")
         for f in files:
-            if f.endswith(".json.meta.json") or f.endswith(".json.orig"):
+            # .json.meta.json sidecars are the eval scheduler's own
+            # mtime-validated cache — regenerated on every eval touch, so
+            # flagging them is permanent noise on an active box
+            if f.endswith(".json.orig"):
                 p = os.path.join(base, f)
                 if purge_legacy:
                     os.remove(p)
