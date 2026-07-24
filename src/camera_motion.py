@@ -24,7 +24,12 @@ import numpy as np
 # end), true ego-motion >=0.095 — threshold sits in the gap, biased
 # toward static per MB (slow pans behave like still cameras for the
 # tracker).
-STATIC_MAX_SHIFT_PER_S = 0.05
+# three bands (2026-07-24 measurement): dense-crowd STATICS (MOT20-03
+# min 0.068) and hood-visible DASHCAMS (WinterDrive min 0.016) overlap
+# completely in cell statistics — between the confident bands the
+# classifier must return "ambiguous" for a human ruling, not guess.
+STATIC_MAX_SHIFT_PER_S = 0.02
+MOVING_MIN_SHIFT_PER_S = 0.09
 
 
 def clip_motion(video, max_pairs=40):
@@ -83,7 +88,11 @@ def classify(video):
     m = clip_motion(video)
     if m is None:
         return None, None
-    return ("static" if m < STATIC_MAX_SHIFT_PER_S else "bodycam"), m
+    if m < STATIC_MAX_SHIFT_PER_S:
+        return "static", m
+    if m > MOVING_MIN_SHIFT_PER_S:
+        return "bodycam", m
+    return "ambiguous", m
 
 
 def classify_corpus(corpus, t2="/mldata/tracking"):
