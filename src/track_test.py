@@ -990,6 +990,9 @@ def _clip_meta(json_path):
     md = json.load(open(json_path)).get("metadata") or {}
     m = {"original_video": md.get("original_video"),
          "frame_rate": md.get("frame_rate"),
+         # lite provenance == guaranteed I+P encoding (dataset_lite -bf 0),
+         # the precondition for the B-frame-skipping mp4-direct ingest
+         "lite": bool(md.get("lite")),
          "_mtime": os.path.getmtime(json_path)}
     with open(meta_path, "w") as f:
         json.dump(m, f)
@@ -1146,15 +1149,35 @@ def run_single_shared(config, tests_to_run, desc, max_streams):
                 if not item.get("max_duration_is_default"):
                     cap = item.get("max_duration", 100000)
                     cap = cap if cap < 9000 else None
-                h264 = h264_for_video(meta["original_video"], max_seconds=cap)
+                video = meta["original_video"]
+                # mp4-direct only for lite-provenance clips: dataset_lite
+                # encodes I+P-only, so the ingest's B-frame skip is a no-op.
+                # Non-lite mp4s (mot/personpath22 full-rate) are B-framed
+                # and keep the h264 path until they get a lite pass.
+                mp4_direct = (cap is None and video.endswith(".mp4")
+                              and meta.get("lite"))
+                if not mp4_direct:
+                    # duration-capped runs still need the trimmed h264
+                    # (no time-range support in run_on_mp4_file yet)
+                    h264 = h264_for_video(video, max_seconds=cap)
                 if item.get("stream_hint"):
                     st = upyc.c_track_stream(shared, _yaml.dump({"stream_hint": item["stream_hint"]}))
                 else:
                     st = upyc.c_track_stream(shared)
                 st.set_name(item["ds_key"])
                 st.set_frame_intervals(item["min_interval"], -1.0)
-                st.run_on_video_file(h264, upyc.SIMPLE_DECODER_CODEC_H264,
-                                     meta["frame_rate"], False)
+                if mp4_direct:
+                    # container pts drive frame timing (no synthetic-fps
+                    # clock to get wrong — the stale-h264 lesson);
+                    # base_time=0 keeps result times on the GT's 0-based
+                    # clock. NB analytics skips B-frames on this path:
+                    # fine for lite files (encoded I+P), wrong for
+                    # B-framed full-rate sources — those keep the h264
+                    # path via max_duration or a non-mp4 extension.
+                    st.run_on_mp4_file(video, 0.0)
+                else:
+                    st.run_on_video_file(h264, upyc.SIMPLE_DECODER_CODEC_H264,
+                                         meta["frame_rate"], False)
                 if packed:
                     blob = st.get_results_packed(3600.0)
                     del st
