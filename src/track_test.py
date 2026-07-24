@@ -25,7 +25,8 @@ def mot_obj(obj, w, h):
     oh=int((obj.box[3]-obj.box[1])*h)
     return [obj.track_id, ol, ot, ow, oh]
 
-def permissive_iou_matrix(gt_boxes, test_boxes, gt_convention=None):
+def permissive_iou_matrix(gt_boxes, test_boxes, gt_convention=None,
+                          max_aspect=3.5, frame_wh=None):
     """Convention-permissive pairwise IoU between two box lists.
 
     GT corpora use two box conventions — 'fullbody' (amodal, includes the
@@ -69,17 +70,39 @@ def permissive_iou_matrix(gt_boxes, test_boxes, gt_convention=None):
     iou = inter / np.maximum(area_g + area_t - inter, eps)
     iou_gclip = inter / np.maximum(gw * iy + area_t - inter, eps)
     iou_tclip = inter / np.maximum(area_g + tw * iy - inter, eps)
+    # plausibility bound (MB 2026-07-24): the forgiven (taller) box must
+    # itself stay within a typical standing-human aspect ratio — beyond
+    # h <= max_aspect*w the extra height is not a legitimate fullbody
+    # interpretation, just a bad box, and plain IoU applies.
+    gh = gy2 - gy1
+    th = ty2 - ty1
+    if frame_wh is not None and max_aspect is not None:
+        # boxes are normalized: pixel aspect = (h*H)/(w*W); cap in pixel
+        # space so the "typical standing human" bound is frame-shape
+        # independent
+        scale = float(frame_wh[1]) / max(float(frame_wh[0]), 1.0)
+        cap = max_aspect / scale
+        t_plaus = th <= cap * np.maximum(tw, eps)
+        g_plaus = gh <= cap * np.maximum(gw, eps)
+    else:
+        t_plaus = np.ones_like(th, dtype=bool)
+        g_plaus = np.ones_like(gh, dtype=bool)
     if gt_convention == "visible":
-        return np.maximum(iou, iou_tclip)
+        return np.maximum(iou, np.where(t_plaus, iou_tclip, iou))
     if gt_convention == "fullbody":
-        return np.maximum(iou, iou_gclip)
-    return np.maximum(iou, np.maximum(iou_gclip, iou_tclip))
+        return np.maximum(iou, np.where(g_plaus, iou_gclip, iou))
+    both = np.maximum(np.where(g_plaus, iou_gclip, iou),
+                      np.where(t_plaus, iou_tclip, iou))
+    return np.maximum(iou, both)
 
-def permissive_iou(box_a, box_b, gt_convention=None):
+def permissive_iou(box_a, box_b, gt_convention=None, max_aspect=3.5,
+                   frame_wh=None):
     """Scalar convention-permissive IoU for one [x1,y1,x2,y2] box pair
     (box_a is GT; see permissive_iou_matrix for directionality)."""
     return float(permissive_iou_matrix([box_a], [box_b],
-                                       gt_convention=gt_convention)[0, 0])
+                                       gt_convention=gt_convention,
+                                       max_aspect=max_aspect,
+                                       frame_wh=frame_wh)[0, 0])
 
 def _box_in_ignore(box, ignore_boxes, frac_thresh):
     """True if a fraction >= frac_thresh of `box` overlaps any ignore box."""
@@ -439,9 +462,12 @@ def compute_metrics(gt, test,
     # checks below — permissive when enabled, plain IoU otherwise, so the
     # ignore-region / annotation-floor filters agree with the matcher and
     # never drop a convention-mismatched but correct detection.
+    _fwh = (gt.metadata.get("width"), gt.metadata.get("height"))
+    _fwh = _fwh if all(_fwh) else None
     if convention_permissive:
         def pair_iou(a, b):
-            return permissive_iou(a, b, gt_convention=gt_convention)
+            return permissive_iou(a, b, gt_convention=gt_convention,
+                                  frame_wh=_fwh)
     else:
         pair_iou = coord.box_iou
 
@@ -532,7 +558,7 @@ def compute_metrics(gt, test,
                 # truncation). One vectorized (n_gt, n_test) pass.
                 pdist = 1.0 - permissive_iou_matrix(
                     [g.box for g in gt_obj], [d.box for d in test_obj],
-                    gt_convention=gt_convention)
+                    gt_convention=gt_convention, frame_wh=_fwh)
                 C = np.where(pdist > match_iou, np.nan, pdist)
             else:
                 C = mm.distances.iou_matrix(gt_dets[:,1:], t_dets[:,1:], \

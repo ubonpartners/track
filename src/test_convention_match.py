@@ -149,3 +149,20 @@ def test_directional_permissive():
                           gt_convention="fullbody") > 0.999
     assert permissive_iou(fb_gt, [0.4, 0.4, 0.6, 1.0],
                           gt_convention="fullbody") < 0.9
+
+
+def test_aspect_plausibility_cap():
+    from src.track_test import permissive_iou
+    sq = (1000, 1000)                             # square frame: norm==pixel
+    vis_gt = [0.45, 0.4, 0.55, 0.5]              # 0.1 x 0.1 visible GT
+    plausible_fb = [0.45, 0.4, 0.55, 0.7]        # h/w = 3.0 <= 3.5: forgiven
+    absurd = [0.45, 0.4, 0.55, 1.0]              # h/w = 6.0: NOT forgiven
+    assert permissive_iou(vis_gt, plausible_fb, gt_convention="visible",
+                          frame_wh=sq) > 0.999
+    assert permissive_iou(vis_gt, absurd, gt_convention="visible",
+                          frame_wh=sq) < 0.5
+    # wide frame rescales the cap: 6:1 normalized in 16:9 is ~3.4 pixel
+    assert permissive_iou(vis_gt, absurd, gt_convention="visible",
+                          frame_wh=(1920, 1080)) > 0.999
+    # no frame geometry -> uncapped (legacy)
+    assert permissive_iou(vis_gt, absurd, gt_convention="visible") > 0.999
