@@ -58,23 +58,26 @@ def clip_motion(video, max_pairs=40):
                     good = st.reshape(-1) == 1
                     if good.sum() >= 15:
                         p = pts.reshape(-1, 2)[good]
-                        d = (nxt.reshape(-1, 2) - pts.reshape(-1, 2))[good]
-                        # min-over-cells of per-cell median motion: crowd
-                        # scenes (MOT20) put most features on moving
-                        # people, defeating global medians/percentiles —
-                        # but a static camera always has at least one
-                        # grid cell of pure background (~0 motion),
-                        # while ego-motion moves every cell.
-                        mag = np.hypot(d[:, 0], d[:, 1])
-                        h = prev.shape[0]
-                        cell = (np.minimum(3, (p[:, 0] * 4 / w).astype(int))
-                                * 3
-                                + np.minimum(2, (p[:, 1] * 3 / h).astype(int)))
-                        meds = [np.median(mag[cell == c])
-                                for c in range(12)
-                                if (cell == c).sum() >= 8]
-                        if meds:
-                            shifts.append(float(min(meds)) / w)
+                        q = nxt.reshape(-1, 2)[good]
+                        # GMC-style RANSAC affine (MB): the background is
+                        # the affine-consistent consensus — incoherent
+                        # crowd motion (MOT20) cannot outvote a static
+                        # background (-> identity), while dashcam forward
+                        # motion IS affine (scale!=1 expansion outvotes a
+                        # static hood). Camera-motion metric = affine
+                        # translation at frame center + scale deviation
+                        # expressed as edge displacement.
+                        M, inl = cv2.estimateAffinePartial2D(
+                            p, q, method=cv2.RANSAC,
+                            ransacReprojThreshold=2.0)
+                        if M is not None and inl is not None                                 and inl.sum() >= 12:
+                            h = prev.shape[0]
+                            c = np.array([w / 2.0, h / 2.0])
+                            tc = M[:, :2] @ c + M[:, 2] - c
+                            scale = np.hypot(M[0, 0], M[0, 1])
+                            shift = (np.hypot(*tc)
+                                     + abs(scale - 1.0) * (w / 2.0))
+                            shifts.append(float(shift) / w)
             prev = g
         idx += 1
     cap.release()
