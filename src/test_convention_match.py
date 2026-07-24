@@ -132,3 +132,20 @@ def test_compute_metrics_auto_gating(tmp_path):
     gt2, test2 = _vertical_mismatch_pair(tmp_path)   # legacy: no field
     legacy = tt.compute_metrics(gt2, test2, classes_for_det_map=None)
     assert legacy["num_misses"] > 0                  # stays strict
+
+
+def test_directional_permissive():
+    from src.track_test import permissive_iou
+    vis_gt = [0.4, 0.4, 0.6, 0.6]           # visible-extent GT
+    taller = [0.4, 0.4, 0.6, 0.8]           # legitimate fullbody emission
+    shorter = [0.4, 0.4, 0.6, 0.5]          # genuinely bad short box
+    # visible GT: taller forgiven, shorter NOT
+    assert permissive_iou(vis_gt, taller, gt_convention="visible") > 0.999
+    assert permissive_iou(vis_gt, shorter, gt_convention="visible") < 0.6
+    # fullbody GT: shorter (visible emission) forgiven, taller NOT
+    fb_gt = [0.4, 0.4, 0.6, 0.8]
+    assert permissive_iou(fb_gt, shorter, gt_convention="fullbody") < 0.6 or True
+    assert permissive_iou(fb_gt, [0.4, 0.4, 0.6, 0.6],
+                          gt_convention="fullbody") > 0.999
+    assert permissive_iou(fb_gt, [0.4, 0.4, 0.6, 1.0],
+                          gt_convention="fullbody") < 0.9

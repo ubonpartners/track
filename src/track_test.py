@@ -25,18 +25,27 @@ def mot_obj(obj, w, h):
     oh=int((obj.box[3]-obj.box[1])*h)
     return [obj.track_id, ol, ot, ow, oh]
 
-def permissive_iou_matrix(gt_boxes, test_boxes):
+def permissive_iou_matrix(gt_boxes, test_boxes, gt_convention=None):
     """Convention-permissive pairwise IoU between two box lists.
 
     GT corpora use two box conventions — 'fullbody' (amodal, includes the
     occluded lower body) and 'visible' (visible extent only) — and the
     tracker's own convention is mixed. The difference is almost purely
-    VERTICAL extent, so for each pair the score is
-        max(iou(g, t), iou(g_vclip, t), iou(g, t_vclip))
-    where X_vclip is X with its y-extent truncated to the OTHER box's
-    y-range (x-extent unchanged). A vertical-extent mismatch in either
-    direction therefore still matches, while x-axis discrimination is
-    untouched.
+    VERTICAL extent. DIRECTIONAL (MB 2026-07-24): only the mismatch the
+    other legitimate convention would produce is forgiven —
+      gt_convention == "visible":  max(iou, iou(g, t_vclip))  — a TALLER
+        tracker box (legitimate fullbody emission) matches; a shorter one
+        stays penalized.
+      gt_convention == "fullbody": max(iou, iou(g_vclip, t)) — a SHORTER
+        tracker box (legitimate visible emission) matches; over-expansion
+        stays penalized.
+      gt_convention None/other: symmetric (both directions) — legacy.
+    A symmetric version forgave generic vertical sloppiness everywhere
+    (fullbody corpora gained +0.02-0.09 with zero convention mismatch in
+    the 2026-07-24 A/B), which would let the optimizer drift box extents
+    without objective pressure; the directional form keeps geometry
+    honest on every axis except the one where the labels genuinely
+    disagree. x-axis discrimination is untouched in all modes.
 
     gt_boxes: (n,4), test_boxes: (m,4), boxes [x1,y1,x2,y2] (any
     consistent units — IoU is invariant to per-axis scaling). Returns an
@@ -60,12 +69,17 @@ def permissive_iou_matrix(gt_boxes, test_boxes):
     iou = inter / np.maximum(area_g + area_t - inter, eps)
     iou_gclip = inter / np.maximum(gw * iy + area_t - inter, eps)
     iou_tclip = inter / np.maximum(area_g + tw * iy - inter, eps)
+    if gt_convention == "visible":
+        return np.maximum(iou, iou_tclip)
+    if gt_convention == "fullbody":
+        return np.maximum(iou, iou_gclip)
     return np.maximum(iou, np.maximum(iou_gclip, iou_tclip))
 
-def permissive_iou(box_a, box_b):
+def permissive_iou(box_a, box_b, gt_convention=None):
     """Scalar convention-permissive IoU for one [x1,y1,x2,y2] box pair
-    (symmetric — see permissive_iou_matrix)."""
-    return float(permissive_iou_matrix([box_a], [box_b])[0, 0])
+    (box_a is GT; see permissive_iou_matrix for directionality)."""
+    return float(permissive_iou_matrix([box_a], [box_b],
+                                       gt_convention=gt_convention)[0, 0])
 
 def _box_in_ignore(box, ignore_boxes, frac_thresh):
     """True if a fraction >= frac_thresh of `box` overlaps any ignore box."""
@@ -359,6 +373,9 @@ def compute_metrics(gt, test,
     # ones don't). Explicit True/False overrides.
     if convention_permissive is None:
         convention_permissive = bool(gt.metadata.get("box_convention"))
+    # directionality: forgive only the mismatch the other legitimate
+    # convention produces (see permissive_iou_matrix)
+    gt_convention = gt.metadata.get("box_convention")
     start_time=min(gt.first_frame_time(), test.first_frame_time())
     t=start_time
     last_time=max(gt.last_frame_time(), test.last_frame_time())
@@ -422,7 +439,11 @@ def compute_metrics(gt, test,
     # checks below — permissive when enabled, plain IoU otherwise, so the
     # ignore-region / annotation-floor filters agree with the matcher and
     # never drop a convention-mismatched but correct detection.
-    pair_iou = permissive_iou if convention_permissive else coord.box_iou
+    if convention_permissive:
+        def pair_iou(a, b):
+            return permissive_iou(a, b, gt_convention=gt_convention)
+    else:
+        pair_iou = coord.box_iou
 
     while t<last_time:
         # get GT and Test objects at time
@@ -510,7 +531,8 @@ def compute_metrics(gt, test,
                 # the pixel-space plain-IoU values up to mot_obj's int
                 # truncation). One vectorized (n_gt, n_test) pass.
                 pdist = 1.0 - permissive_iou_matrix(
-                    [g.box for g in gt_obj], [d.box for d in test_obj])
+                    [g.box for g in gt_obj], [d.box for d in test_obj],
+                    gt_convention=gt_convention)
                 C = np.where(pdist > match_iou, np.nan, pdist)
             else:
                 C = mm.distances.iou_matrix(gt_dets[:,1:], t_dets[:,1:], \
