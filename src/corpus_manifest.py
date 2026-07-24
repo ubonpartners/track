@@ -395,11 +395,109 @@ def derive_tracking(corpus, hint=None, max_seconds=None, hint_overrides=None):
           f"{missing} without video -> {dst}", flush=True)
 
 
+LEGACY_DIRS = ("video_lite", "generated_h264", "video_autolabel")
+
+
+def check_tracking(corpus, purge_legacy=False):
+    """Tier-2 spec conformance check (MB 'nail it once and for all',
+    2026-07-24): every annotation carries lite provenance + hint +
+    box_convention + a source_video that exists in tier 1 and an
+    original_video that exists in tier 2; every video is <=1280 on the
+    long side, B-frame-free, and on the analytics grid its hint selects
+    from the tracker config. Legacy artifacts (video_lite/,
+    generated_h264/ at any depth, video_autolabel/, *.json.meta.json,
+    *.json.orig) are flagged — or deleted with purge_legacy=True.
+    Returns False on any violation so this can gate CI."""
+    import glob as _glob
+    import shutil as _shutil
+    import subprocess as _sp
+    from src.dataset_lite import divisor_from_config
+    root = os.path.join(T2, corpus)
+    if not os.path.isdir(root):
+        print(f"{corpus}: no tier-2 dir")
+        return False
+    problems = []
+    purged = []
+    # legacy artifacts at any depth
+    for base, dirs, files in os.walk(root):
+        for d in list(dirs):
+            if d in LEGACY_DIRS:
+                p = os.path.join(base, d)
+                if purge_legacy:
+                    _shutil.rmtree(p)
+                    purged.append(p)
+                    dirs.remove(d)
+                else:
+                    problems.append(f"legacy dir: {p}")
+        for f in files:
+            if f.endswith(".json.meta.json") or f.endswith(".json.orig"):
+                p = os.path.join(base, f)
+                if purge_legacy:
+                    os.remove(p)
+                    purged.append(p)
+                else:
+                    problems.append(f"legacy file: {p}")
+    checked = 0
+    for ap in sorted(_glob.glob(os.path.join(root, "annotation", "*.json"))):
+        if ap.endswith(".meta.json"):
+            continue
+        md = (json.load(open(ap)).get("metadata") or {})
+        stem = os.path.basename(ap)[:-5]
+        for field in ("lite", "hint", "box_convention", "source_video"):
+            if not md.get(field):
+                problems.append(f"{stem}: missing metadata.{field}")
+        sv = md.get("source_video", "")
+        if sv and not os.path.isfile(sv):
+            problems.append(f"{stem}: source_video missing on disk: {sv}")
+        if sv and not sv.startswith(T1 + "/"):
+            problems.append(f"{stem}: source_video not tier-1: {sv}")
+        ov = md.get("original_video", "")
+        if not (ov.startswith(os.path.join(root, "video") + "/")
+                and os.path.isfile(ov)):
+            problems.append(f"{stem}: original_video invalid: {ov}")
+            continue
+        out = _sp.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height,avg_frame_rate,has_b_frames",
+             "-of", "json", ov], capture_output=True, text=True)
+        try:
+            st = json.loads(out.stdout)["streams"][0]
+        except (ValueError, KeyError, IndexError):
+            problems.append(f"{stem}: unprobeable video {ov}")
+            continue
+        if max(st["width"], st["height"]) > 1280:
+            problems.append(f"{stem}: video {st['width']}x{st['height']} "
+                            f"exceeds 1280")
+        if int(st.get("has_b_frames", 0)) != 0:
+            problems.append(f"{stem}: video has B-frames")
+        num, den = st["avg_frame_rate"].split("/")
+        vfps = float(num) / float(den) if float(den) else 0.0
+        L = md.get("lite") or {}
+        src_fps, hint = L.get("source_fps"), md.get("hint")
+        if src_fps and hint:
+            want = src_fps / divisor_from_config(src_fps, hint)
+            if abs(vfps - want) > 0.15:
+                problems.append(f"{stem}: fps {vfps:.3f} != analytics grid "
+                                f"{want:.3f} (hint {hint})")
+            if abs(md.get("frame_rate", 0) - want) > 0.15:
+                problems.append(f"{stem}: metadata frame_rate "
+                                f"{md.get('frame_rate')} off grid {want:.3f}")
+        checked += 1
+    status = "CLEAN" if not problems else f"{len(problems)} PROBLEMS"
+    print(f"{corpus}: {checked} clips checked, {len(purged)} legacy "
+          f"artifacts purged, {status}", flush=True)
+    for p in problems[:20]:
+        print(f"  ! {p}", flush=True)
+    if len(problems) > 20:
+        print(f"  ... and {len(problems) - 20} more", flush=True)
+    return not problems
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     opts = dict(a[2:].split("=", 1) for a in sys.argv[1:]
                 if a.startswith("--") and "=" in a)
-    if len(args) < 2 or args[0] not in ("build", "verify", "derive"):
+    if len(args) < 2 or args[0] not in ("build", "verify", "derive", "check"):
         print(__doc__)
         sys.exit(2)
     ok = True
@@ -408,6 +506,10 @@ def main():
             ms = opts.get("max-seconds")
             r = derive_tracking(corpus, hint=opts.get("hint"),
                                 max_seconds=float(ms) if ms else None)
+        elif args[0] == "check":
+            r = check_tracking(corpus,
+                               purge_legacy="purge-legacy" in
+                               [a[2:] for a in sys.argv if a.startswith("--")])
         else:
             r = {"build": build, "verify": verify}[args[0]](corpus)
         ok = ok and (r is not False)

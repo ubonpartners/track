@@ -140,6 +140,10 @@ def rewrite_annotation(d, src_fps, divisor, dims, max_seconds, lite_video,
         if idx % divisor != 0:
             dropped += 1
             continue
+        fr = dict(fr)
+        # snap to the same clean grid the transcode restamps the video to
+        # (source pts jitter must not leak into eval timing)
+        fr["frame_time"] = round(idx / src_fps, 6)
         kept.append(fr)
     md["frame_rate"] = src_fps / float(divisor)
     md["width"], md["height"] = dims
@@ -160,6 +164,11 @@ def transcode(src, dst, divisor, dims, out_fps, max_seconds):
     vf = []
     if divisor > 1:
         vf.append(f"select='not(mod(n\\,{divisor}))'")
+    # clean-CFR restamp onto the analytics grid: jittery/VFR source pts
+    # can land 2-3% off-grid, inside the tracker gate's ~2.5-4% margin
+    # (uc_v11 min_time_delta comment) — synthetic stamps make the grid
+    # exact by construction; rewrite_annotation snaps GT times to match
+    vf.append(f"setpts=N/({out_fps}*TB)")
     w, h = dims
     vf.append(f"scale={w}:{h}")
     gop = max(1, int(round(2 * out_fps)))
