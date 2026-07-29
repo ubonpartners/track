@@ -165,7 +165,7 @@ if __name__ == '__main__':
     parser.add_argument('--cevo', action='store_true', help='make new CEVO videos')
     parser.add_argument('--test', type=str, default=None, help='test yaml file')
     parser.add_argument('--search', type=str, default=None, help='search config yaml file')
-    parser.add_argument('--eval',   type=str, default=None, help='single-pass parallel eval yaml (cartesian product of tests × datasets via mp_workqueue; num_workers defaults to "auto" — 4 workers for ≤1 GPU, 2×N for N>1 GPUs)')
+    parser.add_argument('--eval',   type=str, default=None, help='THE canonical measurement path for tracker A/Bs (set results_location in the yaml, use --eval-split val for search-comparable scores, compare runs with python -m src.eval_compare). single-pass parallel eval yaml (cartesian product of tests × datasets via mp_workqueue; num_workers defaults to "auto" — 4 workers for ≤1 GPU, 2×N for N>1 GPUs)')
     parser.add_argument('--eval-split', type=str, default='both', choices=['train', 'val', 'both'], help='dataset split for --eval')
     parser.add_argument('--eval-permissive', type=str, default='auto', choices=['auto', 'on', 'off'], help='convention-permissive matching override for --eval')
     parser.add_argument('--track', action='store_true', help='test tracker on a single sequence')
