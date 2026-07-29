@@ -1303,8 +1303,16 @@ def run_single_shared(config, tests_to_run, desc, max_streams):
                     # duration-capped runs still need the trimmed h264
                     # (no time-range support in run_on_mp4_file yet)
                     h264 = h264_for_video(video, max_seconds=cap)
+                per_stream = {}
                 if item.get("stream_hint"):
-                    st = upyc.c_track_stream(shared, _yaml.dump({"stream_hint": item["stream_hint"]}))
+                    per_stream["stream_hint"] = item["stream_hint"]
+                # cadence rows (multi_class_and_hints.md §5 extras): the
+                # debug mask is a per-STREAM key, so in the single-shared
+                # path it must ride the per-stream config like stream_hint
+                if item.get("debug_analytics_mask"):
+                    per_stream["debug_analytics_mask"] = item["debug_analytics_mask"]
+                if per_stream:
+                    st = upyc.c_track_stream(shared, _yaml.dump(per_stream))
                 else:
                     st = upyc.c_track_stream(shared)
                 st.set_name(item["ds_key"])
