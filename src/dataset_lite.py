@@ -139,6 +139,20 @@ def rewrite_annotation(d, src_fps, divisor, dims, max_seconds, lite_video,
     ids = [fr.get("frame_id") for fr in frames_in]
     dense = (len(ids) > 1 and all(isinstance(i, int) for i in ids)
              and ids == list(range(ids[0], ids[0] + len(ids))))
+    if dense:
+        # The ordinal path additionally requires that annotation frames
+        # BE the video frames (ordinal == video ordinal). Stride-N
+        # annotations (raw_movies: autolabel ran every 2nd frame) have
+        # dense ids too, but their ordinal is 1/N of the video ordinal —
+        # using it halves every rewritten timestamp. Guard: the
+        # annotation's implied rate must match src_fps (cevo's pts-true
+        # VFR drift is a per-frame jitter, not a rate change, so it
+        # still passes); otherwise fall back to the time grid.
+        span = frames_in[-1].get("frame_time", 0.0) - frames_in[0].get("frame_time", 0.0)
+        if span > 0:
+            implied = (len(frames_in) - 1) / span
+            if abs(implied - src_fps) > 0.2 * src_fps:
+                dense = False
     kept, dropped = [], 0
     for k, fr in enumerate(frames_in):
         t = fr.get("frame_time", 0.0)
