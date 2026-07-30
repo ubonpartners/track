@@ -3585,3 +3585,45 @@ measurements. The eval results above do not depend on it — `min_motion_area` i
 pre-existing knob — but the silent-absent-key failure is the same shape as the
 parsed-but-inert config knobs of E24 and E38. A counter that reads exactly zero
 deserves the same suspicion as a knob that changes nothing.
+
+### E59 — bodycam at native rate: the carry cadence is already saturated
+
+MB asked whether `/mldata/tracking/bwc-videotext` improves with carry on *all*
+non-analytics frames, believing them 12.5 fps. Two facts settle it.
+
+**The clips are 7.49 fps** (GT metadata `frame_rate`), not 12.5 — the eval divisor
+at `eval_min_framerate: 9.9` is therefore 1 and they always run native.
+
+**At 7.5 fps a 0.09 s motion clock fires every 0.675 frames**, i.e. it is due on
+every frame. Direct check on `video116.mp4` with analytics forced to 1/3
+(`debug_analytics_mask: '100'`), `min_time_delta_motion` 0.09 vs 0.001:
+
+    both: frames=450 dur=59.9s  TRACKED=150  TRACK_FRAME_MOTION=300
+
+Identical. Every non-analytics frame is already carried at the "coarse" setting,
+which is why E58 measured bodycam at −0.0003 for every-frame vs coarse — there was
+no difference to measure. **The +0.0176 in E58 IS the all-frames number.**
+
+Carry benefit for bodycam therefore scales with the analytics gap, not with cadence:
+
+| content | 1/2 rate none → carry | Δ | 1/3 rate none → carry | Δ |
+|---|---|---|---|---|
+| dashcam_jaad | 0.1830 → 0.2382 | **+0.0551** | 0.1205 → 0.1912 | **+0.0707** |
+| office_indoor | 0.7042 → 0.6880 | −0.0162 | 0.6259 → 0.6620 | +0.0360 |
+| handheld_crowd | 0.2479 → 0.2677 | +0.0198 | 0.2351 → 0.2621 | +0.0270 |
+| **bodycam** | 0.4072 → 0.4142 | **+0.0070** | 0.2900 → 0.3076 | **+0.0176** |
+| doorway | 0.5999 → 0.6081 | +0.0082 | 0.6055 → 0.6062 | +0.0007 |
+| cctv_static | 0.4725 → 0.4845 | +0.0120 | 0.4783 → 0.4691 | −0.0092 |
+| cctv_dense | 0.2960 → 0.2970 | +0.0010 | 0.3026 → 0.2874 | −0.0152 |
+| movie | 0.2556 → 0.2378 | −0.0178 | 0.1971 → 0.1666 | −0.0305 |
+| dashcam_bdd | −0.7213 → −0.7752 | −0.0538 | −0.6070 → −0.6610 | −0.0540 |
+
+Ego-motion content (JAAD, bodycam, handheld) gains monotonically with the gap;
+static/dense content is flat-to-negative at both. BDD loses at both rates and by
+the same amount — that is not a gap effect, it is the carry itself being wrong on
+that content, and it is the one bucket worth chasing separately.
+
+**Consequence for the fleet.** There is no cadence knob left to turn on bodycam:
+any input under ~11 fps already carries every frame at the default 0.09 s. The
+remaining levers on this content are the CMC gate (E58a, +0.0102 at half rate) and
+the per-hop CMC composition below.
