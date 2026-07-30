@@ -2852,6 +2852,23 @@ configuration — mixed ladder WITH carry — against a true baseline:
 Correctness of the flow path is now gated on-device by `nvof_benchmark --verify`;
 before E56 there was no such check and every optimisation was judged on timing alone.
 
+### 12.0a What actually landed
+
+This log records the whole campaign, including the ideas that failed — deliberately,
+because the failures are most of the evidence. Only a subset was ported to the clean
+branch. **Landed**: the mixed degradation ladder (cost-parameterised), the MOTION
+frame class and OF-anchor carry, `skip_mode: motion`, the OFA pool default, the
+`vpiImageLockData` flow input path, the four detector-free crash fixes,
+`detection_max_size`, `debug_analytics_mask`, `nvof_benchmark` (with `--verify`),
+and the `rt_benchmark` motion column and CSV-header fix.
+
+**Not ported**, each measured null or negative and each documented above:
+`predict_on_motion_skip` (E6), `crowding_adapt_max` (E14), the RT batch linger
+(E27), per-stream/hint ladders (E28-E30), `motiontrack.of_max_width` (E34), the
+high-priority CUDA stream (E51), `nvof_execute_chain` (E42), and all the
+investigation instrumentation (stage/CPU/in-flight timers, size-churn counters,
+per-caller distributions, detector-overlap sampling).
+
 ### 12.1 Banked — worth shipping
 
 **The mixed degradation ladder** (`performance.degrade_policy: mixed`) is the
