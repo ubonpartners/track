@@ -3518,3 +3518,70 @@ conclusion was still wrong: the 12 ms was not intrinsic — 7 ms of it was our o
 per-frame wrapper work. The intrinsic hop is ~4.5 ms and is now ~6 ms in situ. E53
 should have said "irreducible *given this implementation*", which is exactly the
 overreach MB called out.
+
+### E58 — MB's three ideas: (a) un-gating CMC, (b) carrying every decoded frame
+
+**(a) The CMC fit-validity gate is content- and gap-dependent.** `motiontrack.cmc.
+min_motion_area` defaults to 0.50 — camera compensation is disabled on any frame
+whose motion ROI covers under half the image — and `uc_v11.yaml` does not override
+it. The code's own comment says this is backwards for body-worn cameras ("a gentle
+pan lights 20-40 % of blocks and is exactly when compensation is most needed").
+Setting it to 0 (never disable), val split:
+
+| content | n | full rate | half rate |
+|---|---|---|---|
+| dashcam_jaad | 86 | −0.0063 | **+0.0304** |
+| bodycam | 23 | +0.0007 | **+0.0102** |
+| handheld_crowd | 20 | −0.0036 | +0.0074 |
+| doorway | 16 | −0.0022 | +0.0041 |
+| cctv_static | 15 | −0.0103 | +0.0011 |
+| office_indoor | 11 | −0.0065 | −0.0092 |
+| dashcam_bdd | 13 | −0.0157 | **−0.0332** |
+| movie | 3 | −0.0132 | −0.0049 |
+| **aggregate** | | **−0.0052** | **+0.0018** |
+
+Un-gating is a net loss at full rate and a net (small) gain at half rate, with
+switches 0.870 → 0.848 and false tracks 195 → 186. The value of camera compensation
+GROWS with the analytics gap, and the right threshold is content-dependent — which
+is what the existing per-stream knob is for; it simply is not set.
+
+**(b) Carrying every decoded frame beats a coarse motion cadence.** At the eval's
+usual 9.9 fps floor every clip is decimated to ~10 fps, where a 0.09 s motion clock
+lands on the analytics frames and yields NO carry at all. Re-run at native
+framerate with analytics at 1/3:
+
+| | objective | switch/obj | fp_tracks |
+|---|---|---|---|
+| no carry | 0.3791 | 0.849 | 191 |
+| carry @ 0.09 s | 0.3893 (+0.0102) | 0.738 | 174 |
+| **carry every frame** | **0.3914 (+0.0123)** | 0.740 | **170** |
+
+Per content (none → every frame, and every-frame vs coarse):
+
+| content | n | Δ vs none | Δ vs coarse |
+|---|---|---|---|
+| dashcam_jaad | 86 | **+0.0707** | +0.0078 |
+| office_indoor | 11 | +0.0360 | +0.0054 |
+| handheld_crowd | 20 | +0.0270 | +0.0000 |
+| bodycam | 23 | +0.0176 | −0.0003 |
+| doorway | 16 | +0.0007 | +0.0030 |
+| cctv_static | 15 | −0.0092 | −0.0166 |
+| cctv_dense | 3 | −0.0152 | −0.0390 |
+| movie | 3 | −0.0305 | +0.0032 |
+| dashcam_bdd | 13 | −0.0540 | −0.0430 |
+
+So the carry is worth far more than the earlier 720p5 measurements suggested — up to
++0.07 on JAAD dashcam — once the input rate genuinely exceeds the analytics rate,
+which is the production case the benchmark could not reproduce (§12.4). Carrying
+EVERY frame adds a further +0.0021 overall, but the split is sharp: it helps
+ego-motion and crowded content and hurts static and dense scenes, the same axis the
+degradation ladder splits on (E26). Carry cadence looks like another hint-keyed
+setting rather than a global one.
+
+**Method note.** An earlier probe reported "CMC is never called" and that reading was
+JUNK: it read stats through the installed python binding, which was stale and lacked
+the counter key entirely, so `dict.get(...)` returned zeros that looked like real
+measurements. The eval results above do not depend on it — `min_motion_area` is a
+pre-existing knob — but the silent-absent-key failure is the same shape as the
+parsed-but-inert config knobs of E24 and E38. A counter that reads exactly zero
+deserves the same suspicion as a knob that changes nothing.
