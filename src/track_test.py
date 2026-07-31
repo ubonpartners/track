@@ -1225,6 +1225,21 @@ def _single_metrics_worker(args):
             "time": datetime.datetime.now()}
 
 
+# Global detector performance-mode override (track.py --pm). None = leave whatever
+# the yaml says. Eval/search streams are created non-realtime (the C binding
+# defaults realtime=false), so they take the BATCH pm path — historically pinned
+# to PM0/full resolution — and `nrt_pm` is the knob that moves them. Per-test
+# `pm:` in a test entry does the same for one test; this overrides all of them.
+# See ubon_cstuff/docs/design/nrt_pm_and_detection_lanes.md.
+PM_OVERRIDE = None
+
+
+def _resolve_pm(per_test_pm):
+    """CLI --pm beats a per-test `pm:`, which beats whatever the yaml already had."""
+    pm = PM_OVERRIDE if PM_OVERRIDE is not None else per_test_pm
+    return None if pm is None else int(pm)
+
+
 def run_single_shared(config, tests_to_run, desc, max_streams):
     """The single-shared-state eval path (MB design 2026-07-23): ONE
     c_track_shared_state per test (one engine set, one CUDA context),
@@ -1266,6 +1281,10 @@ def run_single_shared(config, tests_to_run, desc, max_streams):
                             dst[k] = v
                 _deep_merge(param_dict, copy.deepcopy(override))
             param_dict.pop("target_classes", None)
+            # Detector PM for these (non-realtime) eval streams — see PM_OVERRIDE.
+            _pm = _resolve_pm(base.get("nrt_pm"))
+            if _pm is not None:
+                param_dict["nrt_pm"] = _pm
             trim_aux_outputs(param_dict)
             import yaml as _yaml
             shared = upyc.c_track_shared_state(_yaml.dump(param_dict))
@@ -1429,6 +1448,15 @@ def track_test(config, split=None, desc="track test"):
                 params={}
                 for p in test:
                     params[p]=test[p]
+                # Per-test `pm:` (and the --pm global override) select the
+                # detector tier for this test's streams. Normalised to `nrt_pm`
+                # here so BOTH the single-shared path and the per-clip path see
+                # one key — the latter passes params through to the tracker
+                # config yaml verbatim, exactly as stream_hint rides across.
+                _pm = _resolve_pm(test.get("pm"))
+                if _pm is not None:
+                    params["nrt_pm"] = _pm
+                params.pop("pm", None)
                 if not "max_duration" in params:
                     params["max_duration"]=1000
                     # metrics-window default only — NOT a media cap. The

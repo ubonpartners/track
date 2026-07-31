@@ -168,6 +168,12 @@ if __name__ == '__main__':
     parser.add_argument('--eval',   type=str, default=None, help='THE canonical measurement path for tracker A/Bs (set results_location in the yaml, use --eval-split val for search-comparable scores, compare runs with python -m src.eval_compare). single-pass parallel eval yaml (cartesian product of tests × datasets via mp_workqueue; num_workers defaults to "auto" — 4 workers for ≤1 GPU, 2×N for N>1 GPUs)')
     parser.add_argument('--eval-split', type=str, default='both', choices=['train', 'val', 'both'], help='dataset split for --eval')
     parser.add_argument('--eval-permissive', type=str, default='auto', choices=['auto', 'on', 'off'], help='convention-permissive matching override for --eval')
+    parser.add_argument('--pm', type=int, default=None, metavar='N',
+                        help='detector performance-mode tier for --eval/--search streams: '
+                             '0=full res, higher=cheaper (0..3 today = 640/512/416/320). '
+                             'Eval streams are non-realtime, so this sets nrt_pm and was '
+                             'previously fixed at 0. Global override — beats a per-test "pm:" '
+                             'key in the yaml. Omit to use whatever the yaml specifies.')
     parser.add_argument('--track', action='store_true', help='test tracker on a single sequence')
     parser.add_argument('--compare', type=str, default=None, help='compare multiple sets of tracking results')
     parser.add_argument('--display', action='store_true', help='visualise results')
@@ -205,6 +211,8 @@ if __name__ == '__main__':
     if opt.compare is not None:
         compare_track(opt.trackset, compare_config=opt.compare)
         exit()
+    if opt.pm is not None:
+        track_test.PM_OVERRIDE = opt.pm
     if opt.search is not None:
         track_search.search_track(opt.search)
         exit()
