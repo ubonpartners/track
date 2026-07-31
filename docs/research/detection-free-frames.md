@@ -3627,3 +3627,136 @@ that content, and it is the one bucket worth chasing separately.
 any input under ~11 fps already carries every frame at the default 0.09 s. The
 remaining levers on this content are the CMC gate (E58a, +0.0102 at half rate) and
 the per-hop CMC composition below.
+
+### E60 — per-hop CMC composition (PRE-REGISTERED before the A/B was run)
+
+**Mechanism.** CMC is fitted from ONE flow field spanning the whole analytics gap.
+OFA resolves a bounded displacement, so that fit should degrade as the gap grows.
+The MOTION chain already flows every pair of consecutive ingested frames — and,
+crucially, `track_stream.c` already runs the chain's FINAL hop on the analytics
+frame itself (the `min_time_delta_motion` block immediately before
+`motion_track_add_frame`). The gap is therefore ALREADY available as a chain of
+small hops, and composing them costs **no extra GPU work** — only one CPU
+`cmc_fit_solve_fast` per hop. This was the assumption most likely to sink the
+idea (a per-analytics-frame extra NVOF hop would have cost ~6 ms) and it is
+simply not needed.
+
+**The composition is exact, not approximate.** Writing the fit's raw forward map
+as `x' = a·x − α·b·y + tx`, `y' = (b/α)·x + a·y + ty` with `a = 1+p`, `b = q`,
+applying hop 1 then hop 2 gives
+`a = a₁a₂ − b₁b₂`, `b = a₁b₂ + a₂b₁` (i.e. `(a,b)` multiply as complex numbers),
+`tx = a₂·tx₁ − α·b₂·ty₁ + tx₂`, `ty = (b₂/α)·tx₁ + a₂·ty₁ + ty₂`.
+`α` is a grid property, shared. `apply_cmc` reconstructs exactly this raw map, so
+the flow-convention bridge is applied ONCE at the end. Three unit tests pin it:
+translation hops compose to their sum, rotation+scale+translation matches a
+direct fit of the analytically composed field, and a hop with no flow falls back.
+
+**Falsifier, measured FIRST (mean inlier fraction / reject rate of the single
+full-gap fit, vs gap size):**
+
+| clip | gap 1 | gap 2 | gap 3 |
+|---|---|---|---|
+| bodycam video116 | 0.485 / 55 % | 0.441 / 68 % | 0.425 / 71 % |
+| JAAD video_0001 | 0.587 / 48 % | 0.537 / 41 % | 0.584 / 26 % |
+
+Bodycam confirms the mechanism; JAAD contradicts it. **Confound not
+pre-registered and stated here rather than buried:** the inlier band is
+`0.3 × rms` of the field itself, so a larger gap widens its own tolerance.
+Bodycam degrading *despite* the widening band is the stronger signal; JAAD's
+apparent improvement may be entirely the band. So the mechanism is live on at
+most some content, and the quality A/B — not the inlier fraction — decides it.
+
+**Also measured:** carry on/off leaves the CMC counters byte-identical, so the
+carry hops feed CMC nothing today. That is the gap being closed.
+
+**Chain completion, measured before the A/B (composed / gaps):** JAAD 84–87 %,
+bodycam **23 %** at 1/3. A hop that fails the fit-validity gate breaks the chain
+and sends the gap back to the very full-gap fit the composition was meant to
+replace. That policy is a choice, not a given, so it is a knob
+(`cmc.compose_gate_hops`, default true) and both settings are measured.
+
+**Pre-registered predictions.** All arms: native framerate, analytics 1/3, carry
+every frame, `cmc.min_motion_area: 0` in EVERY arm so CMC is actually applied
+(at the 0.5 default it is skipped on most bodycam frames and the treatment could
+not show at all — one variable, and it is `compose_hops`).
+
+1. `cmp_on` > `cmp_off` on ego-motion content (bodycam, JAAD, handheld).
+2. Static content (cctv_static, cctv_dense, doorway) ≈ 0 — camera is not moving,
+   so there is no gap transform to get wrong.
+3. If (1) is null AND bodycam chain completion stays ~23 %, dilution is the
+   explanation and `cmp_ung` should recover it. If `cmp_ung` is ALSO null, the
+   mechanism is not worth what it costs and the idea is dead — recorded as such.
+4. dashcam_bdd is expected to stay negative: E59 showed its carry loss is
+   rate-independent, i.e. not a gap-transform problem.
+
+**RESULT — a measured null, and a measurement-hygiene finding that matters more.**
+
+Every prediction above failed. 4 replicates per arm (val split, 190 scored clips):
+
+| arm | mean | sd | replicates |
+|---|---|---|---|
+| off | 0.24063 | 0.00500 | 0.23835 0.23543 0.24169 0.24708 |
+| on (gated hops) | 0.24287 | 0.00406 | 0.23839 0.24758 0.24465 0.24085 |
+| on (ungated hops) | 0.24124 | 0.00737 | 0.23018 0.24501 0.24482 0.24495 |
+
+`on − off = +0.0022 (se 0.0032, 0.7σ)`; `ungated − off = +0.0006 (0.1σ)`. Per
+content, with the run-to-run sd of the baseline arm alongside:
+
+| content | off | Δ gated | Δ ungated | noise sd |
+|---|---|---|---|---|
+| bodycam | 0.3066 | −0.0005 | −0.0034 | 0.0016 |
+| dashcam_jaad | 0.1882 | +0.0040 | +0.0024 | 0.0107 |
+| handheld_crowd | 0.2689 | −0.0052 | −0.0080 | 0.0042 |
+| dashcam_bdd | −0.6543 | +0.0147 | +0.0128 | 0.0106 |
+| cctv_static | 0.4779 | +0.0026 | +0.0005 | 0.0043 |
+| doorway | 0.6095 | −0.0025 | −0.0054 | 0.0088 |
+| office_indoor | 0.6591 | +0.0022 | +0.0063 | 0.0041 |
+| cctv_dense | 0.3077 | −0.0025 | +0.0001 | 0.0256 |
+| movie | 0.1738 | −0.0029 | −0.0027 | 0.0065 |
+
+Nothing clears its own noise, and the pre-registered direction is absent exactly
+where it was predicted (bodycam −0.0005, handheld −0.0052). The dilution escape
+hatch is closed too: un-gating takes bodycam chain completion from 23 % to
+**100 %** (150/150 gaps composed, 0 fallbacks — verified on the counters) and the
+effect gets *smaller*. **Idea (1) is dead.** The code stays behind a default-off
+flag with its unit tests, because the composition itself is proven correct and
+costs no GPU; it simply buys nothing.
+
+**The finding that outlives it: this eval is NOT deterministic.** Re-running one
+config unchanged moves **137/197 clips**, and the run-to-run sd of the overall
+weighted mean is **0.0055** — an order of magnitude above the ±0.0002 that a
+single pair of runs happened to suggest. Small-n content buckets are far worse
+(cctv_dense, n=3: sd 0.026).
+
+**This is NOT a bug, and must not be "fixed" (MB).** It is the batch builder
+doing its job. The detector's adaptive picker chooses its inflation percentage
+from whatever is in the queue at that instant, and `infer_batch_pick_area` sets
+`batch_w/h = max(req dims)` over the batch — so a frame is inferred at whatever
+resolution its batchmates need, and which batchmates it gets depends on arrival
+timing. Timing-dependent batching IS the production system; the default picker
+was chosen partly *for* its lower run-to-run variance (infer_thread.c:519).
+So two runs of one config are two samples of a real distribution, not a broken
+measurement. Pinning the picker to remove the variance would measure a
+configuration we do not ship.
+
+The consequence is therefore purely methodological — replicate and report a
+spread — never a hunt for a defect.
+
+This was caught only because a stale python binding made `cmp_ung` an accidental
+config-identical REPLICATE of `cmp_on` — and the two "different" arms disagreed
+on 136/197 clips. The trap that has now cost three separate results this campaign
+(§12.6, E58, here) paid for itself once.
+
+**Consequence for everything already banked.** Single-run deltas below ~0.005 on
+the overall mean are at or under 1σ and cannot be distinguished from noise:
+- SAFE (≥2σ, or per-content deltas far above their bucket noise): mixed ladder
+  (+0.022 to +0.050), carry at native rate (+0.0102/+0.0123 overall, JAAD
+  +0.0707/+0.0551), the E59 gap-scaling result.
+- NOT ESTABLISHED, needs replicates before it is claimed again: `skip_mode:
+  motion` at +0.0025 to +0.0053, CMC un-gating at +0.0018 (E58a), and any other
+  single-run delta of that size.
+
+**Process rule added.** An A/B on this eval needs ≥3 replicates per arm and a
+reported sd, or a delta ≥0.01. Replicates are cheap — a val-split arm is ~35 s —
+so there is no excuse for a single-run claim. Prefer per-content deltas compared
+against that bucket's own measured noise, not against zero.
