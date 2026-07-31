@@ -3760,3 +3760,52 @@ the overall mean are at or under 1σ and cannot be distinguished from noise:
 reported sd, or a delta ≥0.01. Replicates are cheap — a val-split arm is ~35 s —
 so there is no excuse for a single-run claim. Prefer per-content deltas compared
 against that bucket's own measured noise, not against zero.
+
+### E61 — PM tiers do exactly what the model says (and a hand-rolled mean hid it)
+
+Confirming the PM tier -> detector-resolution model end to end, after `--pm`
+landed in track.py. Two independent checks.
+
+**Mechanism, from the enqueue trace** (`UBON_INFER_TRACE_PATH`, 24-byte records
+after a `UBONITR1` magic header — 225 detection jobs per clip, identical in every
+arm, so the cadence is untouched):
+
+| PM requested | req_pm seen | detector input sizes |
+|---|---|---|
+| 0 | 0 | **640**x352, 640x320, 640x288 |
+| 1 | 1 | **512**x288, 512x256, 512x224 |
+| 2 | 2 | **416**x224, 416x192, 416x160 |
+| 3 | 3 | **320**x192, 320x160, 320x128 |
+
+Exactly the predicted {640, 512, 416, 320} caps. No inference from quality needed.
+
+**Quality, 4 replicates per arm, canonical persisted rollup:**
+
+| PM | input | groupmean (search objective) | vs PM0 | arithmean (unweighted clips) |
+|---|---|---|---|---|
+| 0 | 640 | 0.39104 +/-0.00089 | — | 0.24116 |
+| 1 | 512 | 0.38565 +/-0.00039 | **-0.0054** | 0.26540 |
+| 2 | 416 | 0.36688 +/-0.00158 | **-0.0242** | 0.26786 |
+| 3 | 320 | 0.32096 +/-0.00131 | **-0.0701** | 0.24602 |
+
+Monotone, tight (sd ~0.001), and the 640->512 step (-0.0054) sits right next to
+the -0.0077 measured for bodycam alone in E26. **The model holds.**
+
+**The trap, and it caught me first.** The `arithmean` column is NON-monotone and
+says PM1/PM2 BEAT full resolution by +0.024/+0.027 at ~30 sigma. That is an
+artefact of averaging `fitness_multi` over clips unweighted: `dashcam_bdd` scores
+deeply negative (false-track dominated, -0.63 at PM0) and a WEAKER detector
+improves it by +0.43, which drags an unweighted mean up single-handedly. Per
+content the picture is the model's: cctv_static -0.132, cctv_dense -0.088,
+office_indoor -0.071, handheld_crowd -0.050, bodycam -0.016 from PM0 to PM3.
+
+Every hand-rolled aggregate in E58-E60 has this same exposure. It does not
+invalidate those A/Bs — both arms shared the composition, so the DELTAS are
+still like-for-like — but the absolute levels quoted there are unweighted means,
+not the search objective, and the two can move in opposite directions.
+[[canonical-eval-path]] said "never hand-roll metrics"; this is what it costs.
+Use `groupmean` (or `python -m src.eval_compare`) for anything reported.
+
+**Side note.** Within-arm sd here is ~0.001, far below the 0.0055 measured in
+E60. Run-to-run spread is config-dependent, so it must be measured per
+experiment rather than assumed from a previous one.
