@@ -202,3 +202,106 @@ before measuring, not assumed: the binding sets `log_set_level(LOG_WARN)` at
 import, so the backend's INFO line is invisible in a normal run; raising the
 level shows `nvof: using SOFTWARE backend (sse2 kernels)` under `=1` and nothing
 under `=0`.
+
+---
+
+# Second campaign: is SW good enough to replace NVOF *everywhere*? (x86)
+
+**Question.** Retire the hardware backend and run the software one on every
+platform, for the simplicity of a single implementation. What does it cost?
+
+**Answer.** ~0.003 groupmean and ~2% throughput on x86, all of the quality loss
+still on dashcam. Cheap enough to be a reasonable trade — but a second attempt
+at closing the dashcam gap **failed**, and four hypotheses are now ruled out.
+
+Measured on the canonical eval, **8 replicates per arm** (the eval now runs on
+the single-shared-state path, which is 3-5x faster but no longer
+bit-reproducible, so replicates are mandatory — see `eval_ship_baseline.yaml`).
+
+| | hardware | SW v1 | **SW v2** |
+|---|---|---|---|
+| groupmean | 0.2982 +-0.0015 | 0.2931 +-0.0031 | 0.2949 +-0.0016 |
+| vs hardware | — | -0.0051 | **-0.0033 +-0.0022** |
+| full176 | 0.4270 +-0.0003 | 0.4267 | **0.4269 +-0.0002** |
+| jaad_val (dashcam) | 0.1694 +-0.0030 | 0.1596 | **0.1630 +-0.0033** |
+| switch/obj | 0.726 | 0.756 | 0.738 |
+
+The 176 non-dashcam clips are **identical** — 0.4270 vs 0.4269 against a
++-0.0003 error bar. This reproduces the first campaign's -0.0043 on a different
+eval path and a different engine, so it is a stable property of the estimator,
+not a sampling artefact. **v2 is strictly the one to use**: cheaper than v1 AND
+better on every axis.
+
+### Cost on x86
+
+Normalised against video processed (7,002 s over 205 clips), which needs no
+assumption about how often the estimator runs:
+
+| | extra CPU | per realtime stream | wall clock |
+|---|---|---|---|
+| SW v1 | 21.4 CPU-s | 0.31% of a core | +2.6% |
+| **SW v2** | 13.4 CPU-s | **0.19% of a core** | **+2.1%** |
+
+The v1/v2 ratio is 1.6x, matching v2's known speedup — good evidence the deltas
+really are the optical flow. CPU is a non-issue (64 realtime streams cost ~0.12
+of a core on a 16-core box). The 2% wall clock is **not** CPU: it is the
+synchronous `cudaMemcpy2D` D->H of the luma plane in `nvof_cuda.c`, which
+serialises against the CUDA stream. That cost is x86-only — Jetson's memory is
+unified.
+
+## Chasing the dashcam gap, second attempt: four dead ends
+
+Iterated on a jaad-only eval (29 clips, **8.5 s per run**, 6-12 replicates per
+config). Note it scores ~0.207 where the same clips score ~0.169 inside the full
+eval — lighter load changes the dynamics, so it is a proxy, and a win there
+would still need confirming on the full eval. None was.
+
+| hypothesis | test | result |
+|---|---|---|
+| Cost is residual, not reliability: flat road/sky matches read cheap but are meaningless, and `cmc_fit` weights by cost | added an ambiguity penalty from the SAD-minimum **curvature** (`min` over the two axes, to catch the aperture problem); free on cells that reach the 4x4 tier, since the sub-pixel parabola already probes those four SADs. Swept K and REF | **rejected** — no K improved anything, and see the correction below |
+| The 4x4 descent under-fires, so a small pedestrian's vector is dominated by the fast background it shares a quadrant with (the first campaign's "obvious next step") | forced the descent on for every cell, and off entirely, to bracket it | **rejected** — always-split is *identical* to the trigger (mean cost 13.6 vs 13.6): on dashcam the trigger already fires almost everywhere. Never-split is worse (-0.0098 vs -0.0057), so the descent is already earning its keep |
+| Sub-pixel noise stops `cmc_fit`'s static gate (95% of cells under 4 ticks) from firing, so a stopped car still gets a bogus transform | dead-zone snapping near-zero vectors to exactly 0, swept 2..12 ticks | **rejected**, and the premise was an artefact — see below |
+| The smoothness penalty over-regularises a divergent (forward-motion) field | lambda 8 / 12 / **24** / 48 on jaad | **rejected** — 12 looked like +0.004 at n=6 but collapsed to +0.0020 +-0.0023 at n=12 with `switch/obj` identical (0.1935 vs 0.1939). Noise. 24 stands |
+
+### Two corrections to the record
+
+**The first campaign's cost-calibration finding no longer applies to v2.** It
+recorded hardware putting 83.1% of dashcam cells under `cost_ok` against the
+software backend's 94.8% — the software field calling itself more reliable than
+it was. Re-measured on v2 (`cmc_probe` now reports the cost distribution):
+
+| | mean cost | under `cost_ok` | dropped |
+|---|---|---|---|
+| hardware | 12.4 | 74.5% | 2.3% |
+| **SW v2** | 6.9 | **80.5%** | 0.4% |
+
+6 points apart, not 11.7. v2's cost is already close to honest, which is why
+there was nothing for the ambiguity penalty to win — and why the first
+calibration attempt should not be repeated on v2 without re-measuring first.
+The penalty was also wildly mis-scaled on the first try (K=20 drove under_ok to
+29%, K=80 discarded 41% of all cells) because per-pixel curvature truncates to
+an integer and bucket "0" spans everything from a dead-flat wall to a usable
+cell. Raw window units are needed for that knob to be tunable at all.
+
+**`cmc_probe`'s `static_fired` column cannot be trusted where it matters.** It
+infers a gate fire by comparing the gated and ungated fits, so when the field is
+exactly zero the two agree and it reports *no* fire. The software backend
+produces exact zeros MORE often (its two sub-pixel guards), so it reads 0.0%
+where hardware reads 2.9% — which looks like a smoking gun and is nothing of the
+kind. On the one frame examined directly, the software field had frac4 = 1.000
+against hardware's 0.999 while reporting "not fired".
+
+### What is left
+
+Not the cost byte, not the descent granularity, not the penalty weight, and not
+sub-pixel quantisation. The CMC fit itself is not obviously worse either —
+frame-to-frame jitter in the fitted transform is slightly *lower* for software
+(0.0024 vs 0.0036 mean |d tx| on video_0156).
+
+What remains is the vectors themselves on fast forward ego-motion, and the next
+honest step is a direct field comparison against hardware on dashcam frames —
+where do they disagree, and is the disagreement on the background (which would
+corrupt the fit) or on the pedestrians (which would corrupt association)? That
+needs a harness that runs both backends over the same decoded frames and dumps
+both fields; every diagnostic used above was indirect, and indirect is how three
+of these four hypotheses looked plausible in the first place.
