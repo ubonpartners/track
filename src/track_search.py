@@ -404,7 +404,17 @@ def search_test(
     return score, full_result
 
 
-def eval_track(yaml_file, split=None, convention_permissive=None):
+# THE objective config. There is exactly one, and search and eval BOTH read
+# it, so they cannot describe different datasets. Do not add a second file and
+# do not copy this one to change a field -- every knob an eval run needs is a
+# CLI override. History: two configs both called "canonical" (this and a
+# 205-clip eval_ship_baseline.yaml with 2 unweighted groups) disagreed by
+# 0.003-0.005 on the same runs and invalidated results three times.
+CANONICAL_SEARCH_YAML = "/mldata/config/track/search/track_search_v11_mc.yaml"
+
+
+def eval_track(yaml_file=None, split=None, convention_permissive=None,
+               results_location=None):
     """Single-pass parallel evaluation via the existing multi-process
     work queue. The yaml mirrors the search yaml minus search_params:
 
@@ -430,6 +440,19 @@ def eval_track(yaml_file, split=None, convention_permissive=None):
 
     Returns the aggregated results list (_overall + per-clip).
     """
+    if yaml_file is None:
+        yaml_file = CANONICAL_SEARCH_YAML
+    elif os.path.realpath(yaml_file) != os.path.realpath(CANONICAL_SEARCH_YAML):
+        # Not fatal -- one-off probes are legitimate -- but it must be
+        # impossible to do accidentally and then quote the number as if it
+        # were the objective.
+        print("!" * 100)
+        print("!! NOT THE OBJECTIVE CONFIG. You passed:")
+        print(f"!!     {yaml_file}")
+        print(f"!! The objective is {CANONICAL_SEARCH_YAML}")
+        print("!! Numbers from this run are NOT comparable to search scores and must not be")
+        print("!! quoted as an A/B result. Run `track.py --eval` with no path to use the objective.")
+        print("!" * 100)
     config = stuff.load_dictionary(yaml_file)
     # a SEARCH yaml is a valid eval yaml once search_params is dropped —
     # its tests.search_config block carries the tracker config + eval
@@ -449,6 +472,10 @@ def eval_track(yaml_file, split=None, convention_permissive=None):
             "idf1,IDF1,{:6.3f}",
             "fitness,FIT,{:6.3f}",
         ]
+    # Output dir is a CLI override, never a file edit: needing to change a field
+    # in the yaml is what drove people to copy it in the first place.
+    if results_location is not None:
+        config["results_location"] = results_location
     if convention_permissive is not None:
         for t in (config.get("tests") or {}).values():
             t["convention_permissive"] = convention_permissive

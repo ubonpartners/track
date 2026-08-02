@@ -165,7 +165,17 @@ if __name__ == '__main__':
     parser.add_argument('--cevo', action='store_true', help='make new CEVO videos')
     parser.add_argument('--test', type=str, default=None, help='test yaml file')
     parser.add_argument('--search', type=str, default=None, help='search config yaml file')
-    parser.add_argument('--eval',   type=str, default=None, help='THE canonical measurement path for tracker A/Bs (set results_location in the yaml, use --eval-split val for search-comparable scores, compare runs with python -m src.eval_compare). single-pass parallel eval yaml (cartesian product of tests × datasets via mp_workqueue; num_workers defaults to "auto" — 4 workers for ≤1 GPU, 2×N for N>1 GPUs)')
+    parser.add_argument('--eval', nargs='?', type=str, default=None, const='',
+                        help='THE measurement path for tracker A/Bs. Pass NO path: it runs the one '
+                             'objective config (track_search_v11_mc.yaml) that --search optimises, so eval and '
+                             'search cannot describe different datasets. Set the output dir with '
+                             '--results-location (never by copying the yaml -- that is how a second, '
+                             'differently-weighted "canonical" config appeared and invalidated results three '
+                             'times). Use --eval-split val for search-comparable scores and compare runs with '
+                             'python -m src.eval_compare. Passing a path is allowed for one-off probes and '
+                             'prints a loud warning that the result is not the objective.')
+    parser.add_argument('--results-location', type=str, default=None,
+                        help='output dir for --eval reports; overrides results_location in the yaml')
     parser.add_argument('--eval-split', type=str, default='both', choices=['train', 'val', 'both'], help='dataset split for --eval')
     parser.add_argument('--eval-permissive', type=str, default='auto', choices=['auto', 'on', 'off'], help='convention-permissive matching override for --eval')
     parser.add_argument('--pm', type=int, default=None, metavar='N',
@@ -218,8 +228,9 @@ if __name__ == '__main__':
         exit()
     if opt.eval is not None:
         perm = {"auto": None, "on": True, "off": False}[opt.eval_permissive]
-        track_search.eval_track(opt.eval, split=opt.eval_split,
-                                convention_permissive=perm)
+        track_search.eval_track(opt.eval or None, split=opt.eval_split,
+                                convention_permissive=perm,
+                                results_location=opt.results_location)
         exit()
     if opt.test is not None:
         track_test.track_test(opt.test)

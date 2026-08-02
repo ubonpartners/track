@@ -1,5 +1,22 @@
 # A software dense optical flow to stand in for NVOF
 
+> **!! ALL SCORES BELOW WERE MEASURED ON THE WRONG CONFIG (corrected 2026-08-02).**
+> Every number in this document came from `eval_ship_baseline.yaml` — 205 clips,
+> 2 unweighted groups, so 29 dashcam clips carried HALF the signal. That is a
+> "where are we now?" snapshot, not the objective. The objective is
+> `track_search_v11_mc.yaml`: 546 clips, 6 groups, `group_weights`,
+> `clip_weight_cap_pctl: 90`. The snapshot config has since been DELETED and
+> `track.py --eval` with no path now runs the objective directly.
+>
+> The distortion is not cosmetic. Hardware-vs-software optical flow reads
+> **-0.0033** on the snapshot weighting and **-0.0006 ±0.0011** — i.e. nothing —
+> on `_overall` from the same runs. The dashcam-weighted conclusions in
+> "Chasing the dashcam gap" are therefore built on a metric that gave dashcam
+> ~50% weight. The mechanism findings (which hypotheses were rejected, and why)
+> still stand; the magnitudes do not. Re-measure against the objective before
+> quoting any figure here.
+
+
 **Question.** Can a CPU optical-flow estimator produce a field good enough that
 the tracker does not care whether it came from silicon? The only software
 backend was `nvof_apple.c`, and it was not close.
@@ -190,10 +207,10 @@ from a fast-moving background, and the penalty then pulls it the rest of the
 way. Testing that needs a 4x4 SAD kernel and is the obvious next step if the
 gap ever needs closing.
 
-Method: the canonical path only. `track.py --eval` on
-`/mldata/config/track/eval/eval_ship_baseline.yaml`, val split, 205 tests,
-compared with `python -m src.eval_compare` on **groupmean** fitness_multi, 3
-replicates per arm.
+Method (SUPERSEDED — see the warning at the top): `track.py --eval` on
+`/mldata/config/track/eval/eval_ship_baseline.yaml`, val split, 205 tests, 3
+replicates per arm. That config no longer exists; the objective is
+`track_search_v11_mc.yaml`, reached by `track.py --eval` with no path.
 
 The backend is selected at runtime with `UBON_NVOF_SW=1`, which
 `nvof_cuda.c` honours — so both arms are the same binary, same frames, same

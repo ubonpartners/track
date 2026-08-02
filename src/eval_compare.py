@@ -2,13 +2,18 @@
 
 Reads the eval tool's OWN persisted rollups (results-*.json written by
 _write_eval_summary_json when the eval yaml sets `results_location`) and
-prints them verbatim — groupmean (the search-weighted objective; on the
-val split, `fitness_multi` here IS the track_search score), the group
-breakdown, and per-clip deltas of the tool's per-clip metrics.
+prints them verbatim — BOTH objective rows, the group breakdown, and
+per-clip deltas of the tool's per-clip metrics.
 
-It performs NO aggregation of its own beyond subtracting per-clip values
-between runs. If a needed view is missing, extend the eval summary
-writer or this file — do not write one-off analysis scripts.
+!! THE OBJECTIVE IS _groupmean, from the single config that track.py
+!! --search optimises: track_search_v11_mc.yaml (result_dataset_opt_key:
+!! _groupmean). _overall is box-count weighted and is NOT the objective.
+!!
+!! Quoting the wrong row, from a second differently-weighted "canonical"
+!! eval config, invalidated results three separate times: hardware-vs-
+!! software optical flow read -0.0033 on one weighting and -0.0006 +-0.0011
+!! on the other, from the same runs. That second config has been deleted and
+!! `track.py --eval` with no path now runs the objective config directly.
 
 Usage:
     python -m src.eval_compare RUN_DIR [RUN_DIR ...] [--metric fitness_multi]
@@ -57,12 +62,28 @@ def main():
 
     loaded = [(r, *load(r)) for r in a.runs]
 
-    print("== groupmean (the search-weighted objective; on a val-split run "
-          "fitness_multi = track_search score) ==")
+    print("!" * 100)
+    print("!! THE OBJECTIVE IS _groupmean, from the one config track.py --search optimises:")
+    print("!!     /mldata/config/track/search/track_search_v11_mc.yaml  (result_dataset_opt_key: _groupmean)")
+    print("!! _overall is printed BELOW for information only -- it is box-count weighted and is NOT")
+    print("!! what the tracker is tuned on. Quote _groupmean. If these runs came from any other yaml,")
+    print("!! they are not comparable to search scores at all.")
+    print("!" * 100)
+
     hdr = "run".ljust(28) + "".join(k.rjust(15) for k in HEADLINE)
+
+    print("\n== _groupmean  <-- THE OBJECTIVE (track_search_v11_mc.yaml) ==")
     print(hdr)
     for run, fname, t in loaded:
-        gm = t.get("groupmean") or {}
+        ov = t.get("groupmean") or {}
+        print(os.path.basename(run.rstrip("/")).ljust(28)
+              + "".join(fmt(ov.get(k)).rjust(15) for k in HEADLINE)
+              + f"   [{fname}]")
+
+    print("\n== _overall  (information only -- box-count weighted, NOT the objective) ==")
+    print(hdr)
+    for run, fname, t in loaded:
+        gm = t.get("overall") or {}
         print(os.path.basename(run.rstrip("/")).ljust(28)
               + "".join(fmt(gm.get(k)).rjust(15) for k in HEADLINE)
               + f"   [{fname}]")
