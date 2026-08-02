@@ -414,7 +414,7 @@ CANONICAL_SEARCH_YAML = "/mldata/config/track/search/track_search_v11_mc.yaml"
 
 
 def eval_track(yaml_file=None, split=None, convention_permissive=None,
-               results_location=None):
+               results_location=None, tracker_config=None):
     """Single-pass parallel evaluation via the existing multi-process
     work queue. The yaml mirrors the search yaml minus search_params:
 
@@ -476,6 +476,14 @@ def eval_track(yaml_file=None, split=None, convention_permissive=None,
     # in the yaml is what drove people to copy it in the first place.
     if results_location is not None:
         config["results_location"] = results_location
+    # Tracker A/Bs point every test at a variant tracker yaml. Doing that by
+    # copying the objective config is what produced a second, divergent
+    # "canonical" eval; this keeps ONE objective config and varies only the
+    # thing under test.
+    if tracker_config is not None:
+        for t in (config.get("tests") or {}).values():
+            t["config"] = tracker_config
+        print(f"tracker config overridden -> {tracker_config}")
     if convention_permissive is not None:
         for t in (config.get("tests") or {}).values():
             t["convention_permissive"] = convention_permissive

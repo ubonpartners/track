@@ -176,6 +176,10 @@ if __name__ == '__main__':
                              'prints a loud warning that the result is not the objective.')
     parser.add_argument('--results-location', type=str, default=None,
                         help='output dir for --eval reports; overrides results_location in the yaml')
+    parser.add_argument('--tracker-config', type=str, default=None,
+                        help='tracker yaml to evaluate; overrides tests.*.config. Use this for '
+                             'tracker A/Bs instead of copying the objective config -- varying the '
+                             'thing under test must not mean forking the measurement.')
     parser.add_argument('--eval-split', type=str, default='both', choices=['train', 'val', 'both'], help='dataset split for --eval')
     parser.add_argument('--eval-permissive', type=str, default='auto', choices=['auto', 'on', 'off'], help='convention-permissive matching override for --eval')
     parser.add_argument('--pm', type=int, default=None, metavar='N',
@@ -230,7 +234,8 @@ if __name__ == '__main__':
         perm = {"auto": None, "on": True, "off": False}[opt.eval_permissive]
         track_search.eval_track(opt.eval or None, split=opt.eval_split,
                                 convention_permissive=perm,
-                                results_location=opt.results_location)
+                                results_location=opt.results_location,
+                                tracker_config=opt.tracker_config)
         exit()
     if opt.test is not None:
         track_test.track_test(opt.test)
