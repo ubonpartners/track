@@ -26,15 +26,20 @@ import sys
 
 import yaml
 
-# True column order, from src/apps/rt_benchmark.c (the printed header omits four)
-COLS = ["streams", "fps_total", "fps_min", "fps_max", "skipped_percent",
-        "force_skip_rate", "force_skip_cv", "mean_batch", "lat50", "lat90",
-        "iq50", "iq99", "mean_roi", "pm0", "pm1", "pm2", "pm3",
-        "motion_percent"]   # motion_percent added later; older CSVs lack it
+# Fixed leading columns, from src/apps/rt_benchmark.c sweep_step(). The pm
+# columns between mean_roi and motion_percent are DYNAMIC (one per pm_table
+# row — the table grew from 4 to 6); parse_csv counts them per file.
+FIXED_COLS = ["streams", "fps_total", "fps_min", "fps_max", "skipped_percent",
+              "force_skip_rate", "force_skip_cv", "mean_batch", "lat50",
+              "lat90", "iq50", "iq99", "mean_roi"]
 
-# Detector input cap per PM tier (infer.c: pm_res_cap = {0,512,416,320}; tier 0
-# = engine default 640 for this model).
-TIER_RES = {0: 640, 1: 512, 2: 416, 3: 320}
+# The CURRENT pm_table (ubon_cstuff include/pm_controller.h): each row is a
+# (res_cap, rate) operating point; cap 0 = engine default 640. MUST match the
+# header — the effective resolution/rate of a measured PM mix depends on it.
+PM_TABLE = [(640, 1.00), (512, 1.00), (512, 0.50),
+            (416, 0.50), (416, 0.33), (320, 0.33)]
+# Older 4-column CSVs came from the resolution-only ladder:
+PM_TABLE_LEGACY = [(640, 1.00), (512, 1.00), (416, 1.00), (320, 1.00)]
 
 
 def parse_csv(path):
@@ -44,12 +49,19 @@ def parse_csv(path):
         if not line or line.startswith("#") or line.startswith("streams,"):
             continue
         parts = line.split(",")
-        # motion_percent is the newest column; CSVs collected before it exists
-        # are still readable, they just report no carry.
-        if len(parts) < len(COLS) - 1 or not parts[0].isdigit():
+        if len(parts) < len(FIXED_COLS) + 4 or not parts[0].isdigit():
             continue
-        row = {k: float(v) for k, v in zip(COLS, parts)}
-        row.setdefault("motion_percent", 0.0)
+        row = {k: float(v) for k, v in zip(FIXED_COLS, parts)}
+        # Everything between the fixed columns and the trailing
+        # motion_percent is the pm distribution (4 = legacy ladder, 6 =
+        # current (res,rate) table; motion_percent absent on the oldest CSVs).
+        rest = [float(v) for v in parts[len(FIXED_COLS):]]
+        if len(rest) in (5, 7):
+            row["motion_percent"], pms = rest[-1], rest[:-1]
+        else:
+            row["motion_percent"], pms = 0.0, rest
+        row["pm"] = pms
+        row["pm_table"] = PM_TABLE if len(pms) >= 6 else PM_TABLE_LEGACY
         rows.append(row)
     return rows
 
@@ -87,10 +99,14 @@ def quality_at(table, group, res, rate):
 def curve(rows, table, table_carry, group):
     out = []
     for r in rows:
-        # effective resolution = PM-fraction-weighted mean of the tier caps
-        wsum = sum(r[f"pm{t}"] for t in range(4))
-        res = (sum(r[f"pm{t}"] * TIER_RES[t] for t in range(4)) / wsum) if wsum > 0 else 640
-        # effective analytics rate = what survives the controller's frame skip
+        # effective resolution = PM-fraction-weighted mean of the row caps
+        pmt = r["pm_table"]
+        wsum = sum(r["pm"])
+        res = (sum(f * pmt[i][0] for i, f in enumerate(r["pm"])) / wsum) if wsum > 0 else 640
+        # effective analytics rate = what survives the controller's frame
+        # skip. force_skip_rate is the MEASURED realized skip, which already
+        # includes the table rows' own rate dithering — do not multiply the
+        # row rates in again.
         rate = max(0.0, 1.0 - r["force_skip_rate"])
         # What fraction of the shed frames kept an optical-flow carry instead of
         # vanishing? With performance.skip_mode: motion nothing is dropped at the
