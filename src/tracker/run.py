@@ -1,6 +1,7 @@
 """Run a tracker over a video (or a GT TrackSet's frames) and fill a
 TrackSet with its results: the body of the old TrackSet.import_create,
-moved verbatim with `self` renamed `ts` (repo_cleanup.md stage 4c). It
+moved verbatim with `self` renamed `ts` and `trackers.create_tracker`
+spelt `factory.create_tracker` (repo_cleanup.md stage 4c). It
 lives in the tracker layer because it creates the tracker; core must not
 import tracker.
 """

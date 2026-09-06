@@ -543,8 +543,9 @@ Steps
    `globals()` that nothing sets anywhere: delete it or make it a
    parameter.
 5. Before deleting the shims: the autolabel repo imports
-   `src.track_test` (compute_metrics, summary_string) and
-   `src.corpus_manifest` (set_audit); switch those four files first.
+   `src.track_test` (compute_metrics, summary_string), `src.trackset`
+   (TrackSet) and `src.corpus_manifest` (set_audit); switch those files
+   first.
 
 Exit criteria: `vulture`-style pass (or the grep from section 1)
 reports no unreferenced top-level function. Tests green. Smoke eval

@@ -193,7 +193,7 @@ def run_single_shared(config, tests_to_run, desc, max_streams):
     from src.tracker.upyc import trim_aux_outputs, h264_for_video
     from multiprocessing import Pool
     from collections import deque
-    import src.core.trackset as _  # noqa: ensure module import before workers fork
+    import src.core.trackset as _  # noqa: kept from the old file; the tracker runtime is already loaded via src.tracker.run at module level, so this only pins the core module before the fork
 
     by_test = {}
     for p in tests_to_run:

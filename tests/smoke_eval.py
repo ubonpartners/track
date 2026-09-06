@@ -83,12 +83,23 @@ def load_rows(out_dir):
     return paths[-1], test
 
 
+REL_TOL = 1e-9   # below this a float difference is summation-order noise (seen: MOTP, 1 ulp)
+
+
+def _same(x, y):
+    if isinstance(x, float) and isinstance(y, float):
+        return x == y or abs(x - y) <= REL_TOL * max(abs(x), abs(y))
+    return x == y
+
+
 def compare(a_dir, b_dir):
-    """Exact cell-by-cell diff of every clip and rollup metric. Returns the
-    list of differing cells (empty = identical)."""
+    """Cell-by-cell diff of every clip and rollup metric. Float cells within
+    REL_TOL (relative) are reported as ulp-level noise, not differences.
+    Returns the list of differing cells (empty = identical)."""
     pa, ta = load_rows(a_dir)
     pb, tb = load_rows(b_dir)
     diffs = []
+    noise = []
     for section in ("clips", "groups", "overall", "groupmean", "arithmean"):
         va, vb = ta.get(section), tb.get(section)
         if section in ("clips", "groups"):
@@ -98,11 +109,13 @@ def compare(a_dir, b_dir):
                     diffs.append((section, key, "<missing>", ra is None, rb is None)); continue
                 for m in sorted(set(ra) | set(rb)):
                     if ra.get(m) != rb.get(m):
-                        diffs.append((section, key, m, ra.get(m), rb.get(m)))
+                        (noise if _same(ra.get(m), rb.get(m)) else diffs).append(
+                            (section, key, m, ra.get(m), rb.get(m)))
         else:
             for m in sorted(set(va or {}) | set(vb or {})):
-                if (va or {}).get(m) != (vb or {}).get(m):
-                    diffs.append((section, "", m, (va or {}).get(m), (vb or {}).get(m)))
+                x, y = (va or {}).get(m), (vb or {}).get(m)
+                if x != y:
+                    (noise if _same(x, y) else diffs).append((section, "", m, x, y))
     print(f"A: {pa}\nB: {pb}")
     for f in ("provenance.json",):
         qa, qb = os.path.join(a_dir, f), os.path.join(b_dir, f)
@@ -111,12 +124,14 @@ def compare(a_dir, b_dir):
             for k in ("objective_sha256", "tracker_config_sha256", "git_head"):
                 flag = "" if ja.get(k) == jb.get(k) else "   <-- DIFFERS"
                 print(f"  {k}: {str(ja.get(k))[:12]} vs {str(jb.get(k))[:12]}{flag}")
+    for d in noise:
+        print("   ulp-level noise (ignored):", *d)
     if diffs:
         print(f"{len(diffs)} differing cells:")
         for d in diffs:
             print("  ", *d)
     else:
-        print("identical: every clip and rollup metric matches")
+        print("identical: every clip and rollup metric matches" + (f" ({len(noise)} ulp-level float cells ignored)" if noise else ""))
     return diffs
 
 
