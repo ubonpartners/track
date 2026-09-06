@@ -1,5 +1,5 @@
-"""Compatibility shim, KEPT for the autolabel repo (ledger 2026-09-06
-Repo cleanup): delete once autolabel imports src.corpus.manifest directly.
+"""Compatibility shim, KEPT for the autolabel repo
+(ledger 2026-09-06 Repo cleanup): delete once autolabel imports src.corpus.manifest directly.
 
 The registry lives in src/corpus/manifest.py, derivation and the tier-2
 check in src/corpus/derive.py. The autolabel repo imports set_audit from

@@ -389,9 +389,7 @@ def search_test_batch(
 # THE objective config. There is exactly one, and search and eval BOTH read
 # it, so they cannot describe different datasets. Do not add a second file and
 # do not copy this one to change a field -- every knob an eval run needs is a
-# CLI override. History: two configs both called "canonical" (this and a
-# 205-clip eval_ship_baseline.yaml with 2 unweighted groups) disagreed by
-# 0.003-0.005 on the same runs and invalidated results three times.
+# CLI override. (ledger 2026-07-24 One objective config)
 
 
 def eval_track(yaml_file=None, split=None, convention_permissive=None,
@@ -439,7 +437,7 @@ def eval_track(yaml_file=None, split=None, convention_permissive=None,
     # a SEARCH yaml is a valid eval yaml once search_params is dropped —
     # its tests.search_config block carries the tracker config + eval
     # parameters. This gives a one-off eval of the exact search substrate
-    # (MB request 2026-07-24): track.py --eval <search yaml> --eval-split ...
+    # (ledger 2026-07-24 One objective config): src.cli eval <search yaml> --split ...
     config.pop("search_params", None)
     if "num_workers" not in config:
         config["num_workers"] = "auto"

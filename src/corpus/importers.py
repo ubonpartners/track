@@ -616,7 +616,7 @@ def convert_bdd100k_kaggle(src_root=None, output_folder=None, limit=0, lite=True
     """Convert the 50-video Kaggle BDD100K MOT subset (original 30fps
     .mov clips + flattened scalabel CSV) into JSON+mp4 tracksets.
 
-    Frame mapping MEASURED 2026-07-22: label frameIndex k corresponds to
+    Frame mapping (ledger 2026-07-22 BDD100K frame mapping): label frameIndex k corresponds to
     video time (k-1)/5 s, NOT k/5 — detector-vs-GT IoU sweep over 40
     sampled pedestrian boxes peaks at -1.0 interval (mean best-IoU 0.592
     vs 0.307 at k/5; offsets -2..0 swept). Likely 1-based jpg numbering

@@ -1,8 +1,7 @@
 # Antare body-worn labelled clips -> tier-1 corpus (/mldata/tracking_original/
-# antare_bwc). Replaces the 2026-07 labelled_videos importer (sparse 1Hz GT
-# over extracted jpegs + densification): that drop and its derived clips
-# were retired 2026-09-06 — the "individuals - body camera" drop is dense,
-# per-frame, human-labelled GT and needs none of it.
+# antare_bwc). Replaces the earlier labelled_videos importer
+# (ledger 2026-09-06 antare_bwc replaced): these drops are dense,
+# per-frame, human-labelled GT and need no densification.
 #
 # Sources (tier 0), two drops with the same per-clip files:
 #   flat   "individuals - body camera":   <src>/<cam>.mp4 + <src>/<cam>/gt/

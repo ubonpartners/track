@@ -18,7 +18,7 @@ def trim_aux_outputs(params):
     """Disable the aux stages metric runs never read (shared by the per-clip
     tracker and the single-shared-state eval path — ONE definition so the two
     paths can never drift)."""
-    # preview_stream is the current name (2026-07-23 rename); the old two
+    # preview_stream is the current name (ledger 2026-07-23 Stale h264 cache); the old two
     # are kept so ancient configs still trim. Missing the new name meant
     # every eval encoded preview H.264 for nothing.
     for _k in ("preview_stream", "thumbnail_stream", "main_jpeg"):
@@ -46,7 +46,7 @@ def h264_for_video(video, max_seconds=None):
     cache is invalidated when the source mp4 is newer: a re-transcoded
     lite video with a different framerate against a stale .h264 plays the
     old frame set on the new clock, silently corrupting every timing —
-    this exact bug cost a night of search on 2026-07-23."""
+    (ledger 2026-07-23 Stale h264 cache)."""
     p = Path(video)
     suffix = f"_t{int(max_seconds)}" if max_seconds else ""
     gen_dir = p.with_name("generated_h264")

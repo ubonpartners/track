@@ -2,7 +2,7 @@
 annotation rewrite (was src/dataset_lite.py) and derive_tracking /
 check_tracking (were in src/corpus_manifest.py).
 
-Eval-spec view of a corpus (MB spec 2026-07-23/24):
+Eval-spec view of a corpus (ledger 2026-07-24 Tier-2 eval spec):
   - longest side capped at 1280 (never upscaled; boxes are normalized so
     annotations are resolution-free — only metadata w/h changes);
   - framerate reduced by an INTEGER divisor N (keep every Nth frame) to the
@@ -266,7 +266,7 @@ def main():
 
 def derive_tracking(corpus, hint=None, max_seconds=None, hint_overrides=None,
                     divisor=None):
-    """tier 1 -> tier 2 EVAL-SPEC derivation (MB spec 2026-07-24): for
+    """tier 1 -> tier 2 EVAL-SPEC derivation (ledger 2026-07-24 Tier-2 eval spec): for
     every tier-1 video+annotation pair, produce in tier 2 the version
     track.py actually evaluates — resolution capped at 1280, framerate
     decimated to the analytics grid the tracker config's
@@ -279,7 +279,7 @@ def derive_tracking(corpus, hint=None, max_seconds=None, hint_overrides=None,
 
     `divisor` (optional) FORCES the framerate divisor instead of deriving
     it from the hint (e.g. 1 = keep the native frame timing; antare_bwc
-    2026-09-06: 10 fps source kept at 10 fps by MB instruction, where the
+    (ledger 2026-09-06 antare_bwc replaced): 10 fps source kept at 10 fps, where the
     bodycam gate would have halved it). Recorded in the recipe so
     `check` judges the clip against the same grid.
 
@@ -363,8 +363,7 @@ LEGACY_DIRS = ("video_lite", "generated_h264", "video_autolabel")
 
 
 def check_tracking(corpus, purge_legacy=False):
-    """Tier-2 spec conformance check (MB 'nail it once and for all',
-    2026-07-24): every annotation carries lite provenance + hint +
+    """Tier-2 spec conformance check (ledger 2026-07-24 Tier-2 eval spec): every annotation carries lite provenance + hint +
     box_convention + a source_video that exists in tier 1 and an
     original_video that exists in tier 2; every video is <=1280 on the
     long side, B-frame-free, and on the analytics grid its hint selects

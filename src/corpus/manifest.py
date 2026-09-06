@@ -45,7 +45,7 @@ def T1():
 # eval/gt_audit.py via set_audit(). approved_uses vocabulary:
 #   screen val frozen_test train_detector train_reid train_joiner
 #   gate_detection gate_association fp_gating recall_gating
-# Seed values = migration of autolabel's registry (audit 2026-07-23).
+# Seed values = migration of autolabel's registry (ledger 2026-07-23 Capability registry seed).
 CAPABILITIES_SEED = {
     "mot": {"box_convention": "fullbody",
             "completeness": "complete_with_ignore_regions",
@@ -74,7 +74,7 @@ CAPABILITIES_SEED = {
              "artifacts": None,
              "approved_uses": ["screen", "val", "frozen_test",
                                "train_joiner", "gate_association"]},
-    "cevo": {"box_convention": "visible",  # MB ruling 2026-07-24: cevo GT is visible-extent (importer comment concurs; fullbody seed was migrated unaudited)
+    "cevo": {"box_convention": "visible",  # cevo GT is visible-extent (ledger 2026-07-24 Convention-permissive matching; importer comment concurs; fullbody seed was migrated unaudited)
              "completeness": "complete",
              "density": "per_frame", "geometry": "unaudited",
              "occlusion": "unaudited", "artifacts": None,
@@ -82,7 +82,7 @@ CAPABILITIES_SEED = {
                                "train_joiner", "gate_association",
                                "gate_detection", "fp_gating",
                                "recall_gating"]},
-    "cevo_april25": {"box_convention": "visible",  # same MB ruling as cevo
+    "cevo_april25": {"box_convention": "visible",  # same ruling as cevo (ledger 2026-07-24 Convention-permissive matching)
                      "completeness": "complete",
                      "density": "per_frame", "geometry": "unaudited",
                      "occlusion": "unaudited", "artifacts": None,

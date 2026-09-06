@@ -1,5 +1,5 @@
-"""Compatibility shim, KEPT for the autolabel repo (ledger 2026-09-06
-Repo cleanup): delete once autolabel imports src.core.trackset directly.
+"""Compatibility shim, KEPT for the autolabel repo
+(ledger 2026-09-06 Repo cleanup): delete once autolabel imports src.core.trackset directly.
 
 TrackSet lives in src/core/trackset.py, the viewer in src/core/display.py,
 and the tracker-driving import_create is now src.tracker.run.import_create(ts, ...).

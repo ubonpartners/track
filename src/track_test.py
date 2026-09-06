@@ -1,5 +1,5 @@
-"""Compatibility shim, KEPT for the autolabel repo (ledger 2026-09-06
-Repo cleanup): delete once autolabel imports src.eval.* directly.
+"""Compatibility shim, KEPT for the autolabel repo
+(ledger 2026-09-06 Repo cleanup): delete once autolabel imports src.eval.* directly.
 
 The eval engine now lives in src/eval/{matching,metrics,runner,report}.
 Everything is re-exported here so old imports keep working, EXCEPT the

@@ -11,7 +11,7 @@ from src.core.trackset import TrackSet
 
 import yaml
 
-# libyaml-backed loader when available: ~10x faster on MEVA's multi-MB KPF
+# libyaml-backed loader when available: ~10x faster on MEVA's multi-megabyte KPF
 # files, identical output to yaml.safe_load
 _YAML_SAFE_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 

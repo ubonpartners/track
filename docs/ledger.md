@@ -78,6 +78,88 @@ that the tier-2 transcode change only resolution and B-frames, so
 honoured by `check`); the bodycam spec would have halved 10 fps to 5.
 Memory note: `antare-bwc-native-fps`.
 
+## 2026-07-24 One objective config
+
+Two eval configs were both called "canonical": the search yaml
+(`track_search_v11_mc.yaml`, group-mean objective) and a 205-clip
+`eval_ship_baseline.yaml` with two unweighted groups. They disagreed by
+0.003 to 0.005 on the same runs and invalidated results three separate
+times. Decision: exactly one objective config; `eval` with no path runs
+it, and search and eval both read it so they cannot describe different
+datasets. Every knob an eval run needs is a CLI override
+(`--tracker-config`, `--results-location`, `--split`), never a copied
+yaml. `eval <search yaml>` is allowed for one-off probes of the exact
+search substrate (Mark's request) and prints a loud warning. Code:
+`src/track_search.py` eval_track, `src/eval_compare.py`.
+
+## 2026-07-24 Convention-permissive matching
+
+GT corpora differ in box convention (visible extent vs fullbody through
+occlusion). Mark's rulings for the matcher in `src/eval/matching.py`:
+forgiveness is DIRECTIONAL (only the mismatch the GT convention
+predicts is forgiven, so the optimiser cannot drift box extents
+freely; an A/B that day showed symmetric forgiveness rewarding taller
+boxes) and bounded by a plausibility aspect ratio (a forgiven box must
+stay within a standing-human aspect; beyond h <= max_aspect*w plain
+IoU applies). The convention comes from the corpus registry
+(`box_convention` stamped per clip by derive). Same day's ruling on the
+registry itself: cevo and cevo_april25 GT are visible-extent (the
+fullbody seed had been migrated unaudited).
+
+## 2026-07-24 Tier-2 eval spec
+
+Mark's spec for what track evaluates ("nail it once and for all"):
+tier 2 is a derived view of tier 1 with the longest side capped at
+1280, frame rate decimated to the analytics grid the tracker config's
+`min_time_delta_process` selects for the camera hint, I+P h264, the
+annotation subset to retained frames with lite provenance, and a
+conformance check (`corpus check`) that flags anything off spec. Spec:
+`docs/specs/data_tiers_and_corpus_registry.md` section 6. Code:
+`src/corpus/derive.py`.
+
+## 2026-07-23 Single-shared eval
+
+Mark's design for the eval runner (`src/eval/runner.py`
+run_single_shared): one engine set, N concurrent tracker streams, CPU
+pool scoring. Three measured facts recorded with it:
+
+- Harvest any completed stream, no polling: each in-flight stream gets
+  a thread that blocks in the C wait; the old harvest-oldest loop was
+  head-of-line blocking (NVDEC burst to 84 percent then sat idle).
+- Largest-first dispatch was tried and reverted: 793 s against 182 s
+  unsorted. Sorting by annotation size co-schedules the giant-GT clips
+  (MOT20, PersonPath22, 100 to 200 MB jsons) into one window and the
+  memory pressure dwarfs the queue tail it was meant to save.
+- `max_duration` is a real compute cap: the h264 is truncated at
+  extraction with a duration-suffixed cache entry. The metrics-window
+  default (1000 s) must not build `_t1000` variants of every clip; it
+  once caused 306 pointless serial demuxes.
+
+## 2026-07-23 Stale h264 cache
+
+The elementary-stream cache (`src/tracker/upyc.py` h264_for_video) is
+invalidated when the source mp4 is newer. Before that, a re-transcoded
+lite video with a different frame rate against a stale .h264 played the
+old frame set on the new clock and silently corrupted every timing;
+it cost a night of search. The same day the preview stream key was
+renamed to `preview_stream`; the old names are still trimmed so ancient
+configs do not encode preview h264 for nothing.
+
+## 2026-07-23 Capability registry seed
+
+`CAPABILITIES_SEED` in `src/corpus/manifest.py` is the migration of the
+autolabel repo's GT registry as audited that day; autolabel's
+`eval/gt_audit.py` writes measured numbers back through `set_audit`.
+
+## 2026-07-22 BDD100K frame mapping
+
+Measured while importing the Kaggle BDD100K MOT subset
+(`convert_bdd100k_kaggle`): label frameIndex k corresponds to video
+time (k-1)/5 s, not k/5. A detector-vs-GT IoU sweep over 40 sampled
+pedestrian boxes peaks at the -1 offset (mean best IoU 0.592 against
+0.307), consistent with 1-based jpg numbering in the original 5 fps
+extraction.
+
 ## 2026-07-23 `densify_sparse_gt` (8e3dd0f)
 
 Autolabel motion transfer to densify the sparse 1 Hz antare GT. Its

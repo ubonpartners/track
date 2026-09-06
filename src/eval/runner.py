@@ -31,8 +31,9 @@ def track_test_work_fn(params, mpwq_context, mpwq_progress_fn):
                            params=params,
                            mpwq_context=mpwq_context,
                            mpwq_progress_fn=mpwq_progress_fn,
-                           # max_duration is a REAL compute cap since
-                           # 2026-07-23: upyc_tracker truncates the h264 at
+                           # max_duration is a REAL compute cap
+                           # (ledger 2026-07-23 Single-shared eval):
+                           # upyc truncates the h264 at
                            # extraction (duration-suffixed cache entry, so
                            # capped and full evals never share files) — the
                            # C pipeline only ever sees the window. Scoring
@@ -184,7 +185,7 @@ def _resolve_pm(per_test_pm):
 
 
 def run_single_shared(config, tests_to_run, desc, max_streams):
-    """The single-shared-state eval path (MB design 2026-07-23): ONE
+    """The single-shared-state eval path (ledger 2026-07-23 Single-shared eval): ONE
     c_track_shared_state per test (one engine set, one CUDA context),
     every clip submitted as its own c_track_stream — at most max_streams
     in flight, harvesting the OLDEST before submitting the next. Per-clip
@@ -234,7 +235,7 @@ def run_single_shared(config, tests_to_run, desc, max_streams):
             md = shared.get_model_description()
             class_names, attr_names = md["class_names"], md["person_attribute_names"]
 
-            # Harvest-ANY-completed, NO polling (MB 2026-07-23): each
+            # Harvest-ANY-completed, NO polling (ledger 2026-07-23 Single-shared eval): each
             # in-flight stream gets a thread that BLOCKS in the C wait
             # (get_results_packed releases the GIL for wait+pack), so
             # completions are event-driven and the executor refills the
@@ -405,7 +406,7 @@ def track_test(config, split=None, desc="track test"):
                     params["max_duration"]=1000
                     # metrics-window default only — NOT a media cap. The
                     # truncated-h264 path must never build _t1000 variants
-                    # of every clip off this default (found 2026-07-23:
+                    # of every clip off this default (ledger 2026-07-23 Single-shared eval:
                     # 306 pointless serial demuxes).
                     params["max_duration_is_default"]=True
                 # copy some parameters from top level to each test config
@@ -434,7 +435,7 @@ def track_test(config, split=None, desc="track test"):
                 output_results.append(result)
 
 
-    # LARGEST-FIRST dispatch: tried 2026-07-23 and REVERTED on measurement —
+    # LARGEST-FIRST dispatch was tried and REVERTED on measurement (ledger 2026-07-23 Single-shared eval) —
     # 793s vs 182s unsorted (4.3x WORSE). Sorting by annotation size
     # co-schedules the giant-GT clips (MOT20/PP22, 100-200MB JSONs ->
     # gigabytes parsed EACH) into one concurrency window; the resulting
@@ -442,7 +443,7 @@ def track_test(config, split=None, desc="track test"):
     # If tail-packing is ever revisited it must interleave memory monsters,
     # not cluster them.
 
-    # single_shared_streams: N = the MB single-shared-state path (one engine
+    # single_shared_streams: N = the single-shared-state path (ledger 2026-07-23 Single-shared eval; one engine
     # set, N concurrent streams, CPU-pool scoring). Absent = the mp path.
     if config.get("single_shared_streams"):
         results = run_single_shared(config, tests_to_run, desc,

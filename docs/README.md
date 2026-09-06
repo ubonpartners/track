@@ -5,6 +5,8 @@ Plans record design decisions and their execution. Research is dated
 investigation logs, kept for the numbers; read the status line at the
 top of each before trusting a figure.
 
+- `ledger.md` — dated decisions and incidents; code comments point here with `ledger YYYY-MM-DD <title>`.
+
 ## user_guides/ — how to do things
 
 - `import_and_annotation.md` — the three data tiers, what derive does, the annotation json format, importing a new dataset step by step, autolabel for unlabelled footage.

@@ -109,7 +109,7 @@ def probe_audio(video):
 
 
 def audio_args(codec):
-    """ffmpeg output args that PRESERVE the source audio (MB 2026-09-06:
+    """ffmpeg output args that PRESERVE the source audio (ledger 2026-09-06 Transcodes preserve audio:
     eval media must keep audio when the source has it — the tracker
     runs audio analytics). codec = probe_audio(src)."""
     if codec is None:

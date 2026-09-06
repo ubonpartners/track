@@ -23,7 +23,7 @@ def permissive_iou_matrix(gt_boxes, test_boxes, gt_convention=None,
     GT corpora use two box conventions — 'fullbody' (amodal, includes the
     occluded lower body) and 'visible' (visible extent only) — and the
     tracker's own convention is mixed. The difference is almost purely
-    VERTICAL extent. DIRECTIONAL (MB 2026-07-24): only the mismatch the
+    VERTICAL extent. DIRECTIONAL (ledger 2026-07-24 Convention-permissive matching): only the mismatch the
     other legitimate convention would produce is forgiven —
       gt_convention == "visible":  max(iou, iou(g, t_vclip))  — a TALLER
         tracker box (legitimate fullbody emission) matches; a shorter one
@@ -34,7 +34,7 @@ def permissive_iou_matrix(gt_boxes, test_boxes, gt_convention=None,
       gt_convention None/other: symmetric (both directions) — legacy.
     A symmetric version forgave generic vertical sloppiness everywhere
     (fullbody corpora gained +0.02-0.09 with zero convention mismatch in
-    the 2026-07-24 A/B), which would let the optimizer drift box extents
+    the A/B in that ledger entry), which would let the optimizer drift box extents
     without objective pressure; the directional form keeps geometry
     honest on every axis except the one where the labels genuinely
     disagree. x-axis discrimination is untouched in all modes.
@@ -61,7 +61,7 @@ def permissive_iou_matrix(gt_boxes, test_boxes, gt_convention=None,
     iou = inter / np.maximum(area_g + area_t - inter, eps)
     iou_gclip = inter / np.maximum(gw * iy + area_t - inter, eps)
     iou_tclip = inter / np.maximum(area_g + tw * iy - inter, eps)
-    # plausibility bound (MB 2026-07-24): the forgiven (taller) box must
+    # plausibility bound (ledger 2026-07-24 Convention-permissive matching): the forgiven (taller) box must
     # itself stay within a typical standing-human aspect ratio — beyond
     # h <= max_aspect*w the extra height is not a legitimate fullbody
     # interpretation, just a bad box, and plain IoU applies.
