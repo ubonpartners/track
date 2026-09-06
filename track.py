@@ -1,6 +1,8 @@
 import src.trackset as ts
 import src.trackset_import as tsi
-import src.track_test as track_test
+import src.eval.metrics as eval_metrics
+import src.eval.report as eval_report
+import src.eval.runner as eval_runner
 import src.paths as paths
 import src.track_search as track_search
 import os
@@ -58,7 +60,7 @@ def compare_track(t, compare_config=None, display=True):
         trackset.name=c
         import_time=time.time()
         print("Computing metrics....")
-        metrics, frame_events=track_test.compute_metrics(trackset_gt, trackset,
+        metrics, frame_events=eval_metrics.compute_metrics(trackset_gt, trackset,
                                                          frame_metrics=True,
                                                          eval_rate_divisor=1)
         metrics_time=time.time()
@@ -67,7 +69,7 @@ def compare_track(t, compare_config=None, display=True):
         #print(frame_events)
         print(metrics)
         print("--Summary--")
-        print(track_test.summary_string(metrics)+f"  Import: {elapsed_import:.2f}s Metrics: {elapsed_metrics:.2f}s")
+        print(eval_report.summary_string(metrics)+f"  Import: {elapsed_import:.2f}s Metrics: {elapsed_metrics:.2f}s")
         trackset_compare.append(trackset)
         metrics_compare.append(metrics)
         frame_events_list.append(frame_events)
@@ -115,7 +117,7 @@ def compare_track(t, compare_config=None, display=True):
 
     print("\nComparison:")
     for i, x in enumerate(trackset_compare):
-        print(f"{i} {names_compare[i]:20s}) {track_test.summary_string(metrics_compare[i])}")
+        print(f"{i} {names_compare[i]:20s}) {eval_report.summary_string(metrics_compare[i])}")
     if display:
         ts.display_trackset(trackset_list=trackset_compare, trackset_gt=trackset_gt, frame_events_list=frame_events_list, output=None)
 
@@ -134,7 +136,7 @@ def test_track(t, config_file, display=False, output=None, proxy=None, save_trac
                            params=params)
 
     import_time=time.time()
-    metrics, frame_events=track_test.compute_metrics(trackset_gt,
+    metrics, frame_events=eval_metrics.compute_metrics(trackset_gt,
                                                      trackset,
                                                      frame_metrics=True,
                                                      eval_rate_divisor=1,
@@ -145,7 +147,7 @@ def test_track(t, config_file, display=False, output=None, proxy=None, save_trac
     elapsed_metrics=metrics_time-import_time
     print(metrics)
     print("--Summary--")
-    print(track_test.summary_string(metrics)+f"  Import: {elapsed_import:.2f}s Metrics: {elapsed_metrics:.2f}s")
+    print(eval_report.summary_string(metrics)+f"  Import: {elapsed_import:.2f}s Metrics: {elapsed_metrics:.2f}s")
     if save_trackset is not None:
         trackset.export_track_file(save_trackset)
         print(f"Saved tracked run to {save_trackset}")
@@ -232,7 +234,7 @@ if __name__ == '__main__':
         compare_track(opt.trackset, compare_config=opt.compare)
         exit()
     if opt.pm is not None:
-        track_test.PM_OVERRIDE = opt.pm
+        eval_runner.PM_OVERRIDE = opt.pm
     if opt.search is not None:
         track_search.search_track(opt.search)
         exit()
@@ -244,7 +246,7 @@ if __name__ == '__main__':
                                 tracker_config=opt.tracker_config)
         exit()
     if opt.test is not None:
-        track_test.track_test(opt.test)
+        eval_runner.track_test(opt.test)
         exit()
     if opt.view and opt.trackset is not None:
         ts.display_trackset(trackset_gt=opt.trackset)

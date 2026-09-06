@@ -39,7 +39,7 @@ CLIPS = ("antare_knife_drawn_fixed_06",     # static, 1080p source
          "antare_knife_drawn_bwc_04",       # moving (bodycam), 1080p source
          "antare_refused_entry_fixed_03")   # static, 4K source (1280x720 in tier 2)
 # keys copied from the objective. single_shared_streams selects the
-# shared-stream runner (track_test.py) that every real search/eval uses;
+# shared-stream runner (src/eval/runner.py) that every real search/eval uses;
 # without it the eval takes the multiprocess path and the smoke would be
 # blind to regressions in the path that matters.
 COPY_KEYS = ("result_test_opt_key", "result_dataset_opt_key",

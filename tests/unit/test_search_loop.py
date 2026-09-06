@@ -1,6 +1,6 @@
 # The search LOOP against a fake objective (search_review.md §3): batched
 # probes, memoisation across splits, journal + resume, val checkpoint,
-# per-group validate deltas, html report. No tracker, no GPU — track_test
+# per-group validate deltas, html report. No tracker, no GPU — eval_runner.track_test
 # is monkeypatched with a quadratic bowl.
 
 import json
@@ -67,9 +67,9 @@ def _latest(logdir, pattern):
 
 def test_search_loop_converges_and_journals(tmp_path, monkeypatch):
     counter = {"evals": 0}
-    monkeypatch.setattr(tsr.track_test, "track_test",
+    monkeypatch.setattr(tsr.eval_runner, "track_test",
                         _fake_track_test_factory(counter))
-    monkeypatch.setattr(tsr.track_test, "summary_string",
+    monkeypatch.setattr(tsr.eval_report, "summary_string",
                         lambda r: f"MOTA:{r['mota']:0.4f}")
     ypath, logdir = _write_search_yaml(tmp_path)
     tsr.search_track(str(ypath))
@@ -96,9 +96,9 @@ def test_search_loop_converges_and_journals(tmp_path, monkeypatch):
 
 def test_search_resume_skips_cached_evals(tmp_path, monkeypatch):
     first = {"evals": 0}
-    monkeypatch.setattr(tsr.track_test, "track_test",
+    monkeypatch.setattr(tsr.eval_runner, "track_test",
                         _fake_track_test_factory(first))
-    monkeypatch.setattr(tsr.track_test, "summary_string",
+    monkeypatch.setattr(tsr.eval_report, "summary_string",
                         lambda r: f"MOTA:{r['mota']:0.4f}")
     ypath, logdir = _write_search_yaml(tmp_path)
     tsr.search_track(str(ypath))
@@ -110,7 +110,7 @@ def test_search_resume_skips_cached_evals(tmp_path, monkeypatch):
     ypath2 = tmp_path / "search2.yaml"
     ypath2.write_text(yaml.dump(cfg))
     second = {"evals": 0}
-    monkeypatch.setattr(tsr.track_test, "track_test",
+    monkeypatch.setattr(tsr.eval_runner, "track_test",
                         _fake_track_test_factory(second))
     tsr.search_track(str(ypath2))
     assert first["evals"] > 10

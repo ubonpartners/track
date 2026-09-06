@@ -6,7 +6,8 @@ import os
 import stuff
 
 import src.paths as paths
-import src.track_test as track_test
+import src.eval.report as eval_report
+import src.eval.runner as eval_runner
 
 
 def _is_int_param_value(value):
@@ -338,7 +339,7 @@ def search_test_batch(
             for pi, pname in enumerate(params):
                 _set_nested_param(t["config"], pname, cand_vecs[i][pi])
             run_cfg["tests"][tk] = t
-        results = track_test.track_test(run_cfg, split=split, desc=desc)
+        results = eval_runner.track_test(run_cfg, split=split, desc=desc)
 
         for i in to_eval:
             tk = tk_of[i]
@@ -490,7 +491,7 @@ def eval_track(yaml_file=None, split=None, convention_permissive=None,
             t["convention_permissive"] = convention_permissive
     if split in ("both", ""):
         split = None
-    return track_test.track_test(config, split=split,
+    return eval_runner.track_test(config, split=split,
                                   desc=f"eval {yaml_file}"
                                        f" split={split or 'both'}")
 
@@ -745,7 +746,7 @@ def search_track(yaml_file):
     successive_improvements = 0
     best_val = {"score": None, "vec": None}
     last_val_groups = None
-    search_log(logfile, f"Iter {iter_count:04d} initial score {score_best:0.4f}  [{track_test.summary_string(best_full_result) if best_full_result else '(memoised)'} ]")
+    search_log(logfile, f"Iter {iter_count:04d} initial score {score_best:0.4f}  [{eval_report.summary_string(best_full_result) if best_full_result else '(memoised)'} ]")
     search_log(logfile, f"  initial vector: {dict(zip(param_names, vec_best))}")
 
     total_improvement = [0.0] * len(param_names)
@@ -776,7 +777,7 @@ def search_track(yaml_file):
                                    "mota_vehicle", "idf1_vehicle", "fitness_multi")
                                   if full_result_val and k in full_result_val})
                 search_log(logfile, "======================================================")
-                vs = track_test.summary_string(full_result_val) if full_result_val else "(memoised)"
+                vs = eval_report.summary_string(full_result_val) if full_result_val else "(memoised)"
                 search_log(logfile, f"Iter {iter_count:04d}  **VALIDATE** score {validate_score:0.4f}  [{vs} ]")
                 search_log(logfile, f"  vector: {dict(zip(param_names, vec_best))}")
                 # Per-group deltas vs the previous validate — the "bwc got
@@ -831,7 +832,7 @@ def search_track(yaml_file):
             last_improvement_iter = iter_count
         if last_improvement_iter == iter_count:
             new_val = vec_best[index]
-            fr = track_test.summary_string(best_full_result) if best_full_result else "(memoised)"
+            fr = eval_report.summary_string(best_full_result) if best_full_result else "(memoised)"
             search_log(
                 logfile,
                 f"Iter {iter_count:04d} mult:{step_multiplier:>4} "

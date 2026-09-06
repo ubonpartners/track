@@ -30,7 +30,7 @@ def match_at(gt, ts, t, min_iou=0.4):
            if ts.metadata["classes"][o.cl] == "person"]
     if not gto or not tso:
         return {}, gto
-    from src.track_test import permissive_iou_matrix
+    from src.eval.matching import permissive_iou_matrix
     M = permissive_iou_matrix([g.box for g in gto], [s.box for s in tso])
     out = {}
     used_g, used_s = set(), set()
