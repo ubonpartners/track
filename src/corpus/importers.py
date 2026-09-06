@@ -37,7 +37,7 @@ def convert_mot(lite=True):
     if lite:
         # tier 2 eval-spec derive; MOT mixes static and moving cameras,
         # so the moving MOT17 sequences override the corpus-level hint
-        from src.corpus_manifest import derive_tracking
+        from src.corpus.derive import derive_tracking
         derive_tracking("mot", hint="static",
                         hint_overrides={"MOT17-05": "bodycam",
                                         "MOT17-10": "bodycam",
@@ -109,7 +109,7 @@ def convert_personpath22(src_root=None, output_folder=None,
         print(f"Done. Skipped {skipped_missing} samples with no source video.")
     if lite:
         # tier 2 eval-spec derive (handheld/moving-camera footage)
-        from src.corpus_manifest import derive_tracking
+        from src.corpus.derive import derive_tracking
         derive_tracking("personpath22", hint="bodycam")
 
 
@@ -161,7 +161,7 @@ def convert_jaad(src_root=None, output_folder=None, lite=True):
     print(f"Done. missing_video={skipped_missing_video} failed={skipped_failed}")
     if lite:
         # tier 2 eval-spec derive (dashcam = moving camera)
-        from src.corpus_manifest import derive_tracking
+        from src.corpus.derive import derive_tracking
         derive_tracking("jaad", hint="bodycam")
 
 
@@ -255,7 +255,7 @@ def convert_chirla(src_root=None, output_folder=None, lite=True):
     print(f"chirla done. {counts}")
     if lite:
         # tier 2 eval-spec derive (fixed indoor cameras)
-        from src.corpus_manifest import derive_tracking
+        from src.corpus.derive import derive_tracking
         derive_tracking("chirla", hint="static")
 
 
@@ -279,7 +279,7 @@ def convert_roundabouthd(src_root=None, output_folder=None, lite=True):
                              "-rc", "vbr", "-cq", "22", "-b:v", "0"]),
                            (["-c:v", "libx264", "-preset", "medium",
                              "-crf", "22"])):
-            from src.dataset_lite import audio_args, probe_audio
+            from src.corpus.derive import audio_args, probe_audio
             cmd = (["ffmpeg", "-y", "-v", "error", "-i", src] + codec_args +
                    ["-g", "30", "-pix_fmt", "yuv420p",
                     "-movflags", "+faststart"] + audio_args(probe_audio(src))
@@ -313,7 +313,7 @@ def convert_roundabouthd(src_root=None, output_folder=None, lite=True):
     print("roundabouthd done.")
     if lite:
         # tier 2 eval-spec derive (fixed elevated cameras)
-        from src.corpus_manifest import derive_tracking
+        from src.corpus.derive import derive_tracking
         derive_tracking("roundabouthd", hint="static")
 
 
@@ -383,7 +383,7 @@ def convert_uvg_vcm(src_root=None, output_folder=None, lite=True):
     print("uvg_vcm done.")
     if lite:
         # tier 2 eval-spec derive (fixed cameras)
-        from src.corpus_manifest import derive_tracking
+        from src.corpus.derive import derive_tracking
         derive_tracking("uvg_vcm", hint="static")
 
 
@@ -450,7 +450,7 @@ def convert_meva(src_root=None, output_folder=None,
     if lite:
         # tier 2 eval-spec derive AFTER augmentation (autolabel needs
         # native framerate; native truth stays in tier 1)
-        from src.corpus_manifest import derive_tracking
+        from src.corpus.derive import derive_tracking
         derive_tracking(os.path.basename(output_folder.rstrip("/")),
                         hint="static", max_seconds=120)
 
@@ -539,7 +539,7 @@ def convert_otw(src_root=None, output_folder=None,
         # tier 2 eval-spec derive AFTER augmentation (native-fps
         # invariant; broken-pts sources are already handled at tier-1
         # import via the pts-checked _remux_to_mp4)
-        from src.corpus_manifest import derive_tracking
+        from src.corpus.derive import derive_tracking
         derive_tracking(os.path.basename(output_folder.rstrip("/")),
                         hint="static")
 
@@ -623,7 +623,7 @@ def convert_cevo(lite=True):
     fix_cevo25_vfr_times()
     if lite:
         # tier 2 eval-spec derive (fixed front-door camera)
-        from src.corpus_manifest import derive_tracking
+        from src.corpus.derive import derive_tracking
         derive_tracking("cevo_april25", hint="static")
 
 
@@ -735,7 +735,7 @@ def convert_bdd100k_kaggle(src_root=None, output_folder=None, limit=0, lite=True
     print(f"convert_bdd100k_kaggle: {done} sequences -> {output_folder}")
     if lite:
         # tier 2 eval-spec derive (dashcam = moving camera)
-        from src.corpus_manifest import derive_tracking
+        from src.corpus.derive import derive_tracking
         derive_tracking("bdd100k_mot", hint="bodycam")
 
 
@@ -825,7 +825,7 @@ def convert_raw_movies(src_folder=None, output_folder=None, shard="", lite=True)
     convert_autolabel_folder(src_folder, output_folder, shard=shard,
                              cuts=True)
     if lite:
-        from src.corpus_manifest import derive_tracking
+        from src.corpus.derive import derive_tracking
         derive_tracking(os.path.basename(output_folder.rstrip("/")),
                         hint="bodycam")
 
@@ -836,7 +836,7 @@ def convert_bwc_videotext(src_folder=None, output_folder=None, shard="", lite=Tr
     output_folder = output_folder or paths.tier1("bwc-videotext")
     convert_autolabel_folder(src_folder, output_folder, shard=shard)
     if lite:
-        from src.corpus_manifest import derive_tracking
+        from src.corpus.derive import derive_tracking
         derive_tracking(os.path.basename(output_folder.rstrip("/")),
                         hint="bodycam")
 

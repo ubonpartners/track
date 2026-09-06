@@ -35,7 +35,7 @@ def _remux_to_mp4(src, dst):
     tmp = dst + ".part.mp4"
     fps = _native_fps(src)
     copy_args = ["-c", "copy"]
-    from src.dataset_lite import audio_args, probe_audio
+    from src.corpus.derive import audio_args, probe_audio
     transcode_args = ["-vf", f"setpts=N/{fps}/TB", "-r", f"{fps}",
                       "-c:v", "libx264", "-preset", "medium", "-crf", "18"
                       ] + audio_args(probe_audio(src))
@@ -81,7 +81,7 @@ def _transcode_h264(src, dst):
     crf 18) for source codecs autolabel's rfdetr worker env cannot decode
     (AV1). Temp-name write so interrupted runs can't leave a partial mp4."""
     import subprocess
-    from src.dataset_lite import audio_args, probe_audio
+    from src.corpus.derive import audio_args, probe_audio
     tmp = f"{dst}.part{os.getpid()}.mp4"
     r = subprocess.run(
         ["ffmpeg", "-y", "-v", "error", "-i", src,

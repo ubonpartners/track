@@ -38,7 +38,7 @@ tier 1.
 
 ## What the tier-2 derive does
 
-`python -m src.corpus_manifest derive <corpus> --hint=static|bodycam`
+`python -m src.corpus.manifest derive <corpus> --hint=static|bodycam`
 walks every tier-1 clip and produces the eval-spec version:
 
 - longest side capped at 1280, never upscaled;
@@ -125,22 +125,22 @@ Points that matter when writing an importer:
    json beside it. Keep ffmpeg out of it unless the codec forces a
    transcode; the derive step does the eval-spec encoding.
 
-3. **Declare the corpus** in `src/corpus_manifest.py`: a
+3. **Declare the corpus** in `src/corpus/manifest.py`: a
    `CAPABILITIES_SEED` block (box convention, completeness, density,
    what the corpus may be used for) and a `CORPUS_INFO` block
    (licence, source root, import recipe). `build` refuses an
    undeclared corpus.
 
 4. **Build the manifest**:
-   `python -m src.corpus_manifest build <corpus>`
+   `python -m src.corpus.manifest build <corpus>`
    hashes every file and stamps the capabilities.
 
 5. **Derive tier 2**:
-   `python -m src.corpus_manifest derive <corpus> --hint=bodycam`
+   `python -m src.corpus.manifest derive <corpus> --hint=bodycam`
    (or `static`).
 
 6. **Check it**:
-   `python -m src.corpus_manifest check <corpus>`
+   `python -m src.corpus.manifest check <corpus>`
    verifies resolution, B-frames, frame grid, and that every annotation
    carries the provenance fields. Run `verify <corpus>` for a full
    tier-1 hash check.
@@ -193,9 +193,9 @@ constant-rate with a label on every frame.
 
 ```
 python -m src.import_antare                                   # copies mp4, writes json
-python -m src.corpus_manifest build antare_bwc
-python -m src.corpus_manifest derive antare_bwc --hint=bodycam --divisor=1
-python -m src.corpus_manifest check antare_bwc
+python -m src.corpus.manifest build antare_bwc
+python -m src.corpus.manifest derive antare_bwc --hint=bodycam --divisor=1
+python -m src.corpus.manifest check antare_bwc
 ```
 
 The corpus mixes moving and fixed cameras, so the importer writes the

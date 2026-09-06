@@ -619,7 +619,7 @@ def _registry_check(config, logfile):
     fails while the `tune_tracker` vocabulary decision is pending —
     derived-GT corpora (meva/otw/bwc/movies) are currently registered
     train_detector-only yet sit in the search sets."""
-    from src.corpus_manifest import load_capabilities
+    from src.corpus.manifest import load_capabilities
     unapproved = {}
     for name, row in (config.get("datasets") or {}).items():
         path = row.get("path", "")

@@ -42,9 +42,9 @@
 #     "other" keeps ignore-region semantics).
 #
 # Then:
-#   python -m src.corpus_manifest build antare_bwc
-#   python -m src.corpus_manifest derive antare_bwc --hint=bodycam [--divisor=1]
-#   python -m src.corpus_manifest check antare_bwc
+#   python -m src.corpus.manifest build antare_bwc
+#   python -m src.corpus.manifest derive antare_bwc --hint=bodycam [--divisor=1]
+#   python -m src.corpus.manifest check antare_bwc
 # and register the clips in the search yaml (group: moving,
 # stream_hint: bodycam) by hand.
 

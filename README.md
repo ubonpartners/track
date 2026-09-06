@@ -50,7 +50,7 @@ checkout is `$AUTOLABEL_PATH`, else a sibling directory of this repo.
 | `src/track_search.py` | Parameter search over `ubon_cstuff` config values |
 | `src/eval_compare.py` | Canonical comparator for two eval runs |
 | `src/corpus/importers.py`, `src/import_antare.py` | Dataset importers: tier 0 -> tier 1 (`src/formats/` holds the parsers, `src/corpus/media.py` the ffmpeg helpers) |
-| `src/corpus_manifest.py`, `src/dataset_lite.py` | Tier-1 manifest/registry and tier-2 eval-spec derivation |
+| `src/corpus/manifest.py`, `src/corpus/derive.py` | Tier-1 manifest/registry and tier-2 eval-spec derivation + check |
 | `src/autolabel_bridge.py` | Optional bridge to the autolabel repo (auto-labelling, GT augmentation) |
 | `tools/` | Research and one-off tooling (cadence tests, capacity curve, quality grid, GPU attribution); not part of the package |
 | `tests/` | pytest suite (`python -m pytest`); `tests/smoke_eval.py` is the three-clip eval smoke |

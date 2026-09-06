@@ -1,7 +1,7 @@
 # Pure-logic tests for the lite dataset import: divisor choice, scaling,
 # and annotation subsetting (incl. BDD's sparse 5fps GT case). No ffmpeg.
 
-import src.dataset_lite as dl
+import src.corpus.derive as dl
 
 
 def test_choose_divisor():
@@ -62,7 +62,7 @@ def test_rewrite_annotation_time_cap():
 
 
 def test_audio_args():
-    import src.dataset_lite as dl
+    import src.corpus.derive as dl
     assert dl.audio_args(None) == ["-an"]
     assert dl.audio_args("aac")[-2:] == ["-c:a", "copy"]
     assert "-map" in dl.audio_args("aac")

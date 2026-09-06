@@ -61,7 +61,7 @@ Contracts:
 
 ## 3. MANIFEST.json — the shared registry
 
-One per tier-1 corpus. Written ONLY by `src/corpus_manifest.py`
+One per tier-1 corpus. Written ONLY by `src/corpus/manifest.py`
 (schema + seed + all writers live there). Autolabel reads it through
 `eval/gt_manifest.py` (a loader exposing the same
 `corpus_for`/`allows` API its enforcement tests always had).
@@ -175,12 +175,12 @@ narrowing change breaks autolabel's tests loudly.
 3. Declare capabilities: add the corpus to `CAPABILITIES_SEED` (or
    hand the block to `build` via an existing manifest). Unclassified
    corpora are refused.
-4. `python -m src.corpus_manifest build <corpus>` — hashes everything,
+4. `python -m src.corpus.manifest build <corpus>` — hashes everything,
    stamps capabilities + provenance.
 5. Record per-file sources where known:
    `set_file_source(corpus, "video/x.mp4", {...})` (importers should
    do this inline as they convert).
-6. `python -m src.corpus_manifest derive <corpus> --hint=static|bodycam`
+6. `python -m src.corpus.manifest derive <corpus> --hint=static|bodycam`
    — produce the tier-2 eval-spec view for this repo (§6).
 7. Autolabel side (whoever runs it): build detection caches, run
    `python -m eval.gt_audit --write-back` so measured quality lands in
@@ -207,7 +207,7 @@ tier 1 and tier 2 follows at the next derive.
 
 ### 5.4 Integrity check
 
-`python -m src.corpus_manifest verify <corpus> [...]` — full sha256
+`python -m src.corpus.manifest verify <corpus> [...]` — full sha256
 re-hash + missing/unmanifested/no-capabilities detection. Run after
 any import or GT pass, and whenever tier-1 tampering is suspected
 (e.g. before cutting a release). Autolabel's unit tests check layout
@@ -249,7 +249,7 @@ for lite-provenance clips; B-framed full-rate mp4s keep the h264 path.
 
 ## 7. APIs
 
-Track (`src/corpus_manifest.py` — sole writer):
+Track (`src/corpus/manifest.py` — sole writer; derivation in `src/corpus/derive.py`):
 
 | function | role |
 |---|---|
