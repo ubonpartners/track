@@ -34,6 +34,11 @@ def _boxes(ts):
     return [(f["frame_time"], sorted(f["objects"])) for f in ts.frames]
 
 
+# NB track-id KEY TYPES differ per parser and are asserted as-is below:
+# mot/jaad/otw/personpath22 key objects by int, chirla/roundabouthd/uvg_vcm
+# by str. Pre-existing; json round-trips make them all str downstream.
+
+
 def test_mot(tmp_path):
     seq = tmp_path / "MOT-01"
     (seq / "gt").mkdir(parents=True)
@@ -68,6 +73,10 @@ def test_trackset_no_longer_parses_native_formats(tmp_path):
     p.write_text("[Sequence]\n")
     with pytest.raises(ValueError, match="src.formats.load"):
         tsmod.TrackSet(str(p))
+    g = tmp_path / "clip.geom.yml"                 # also ends in .yml: must not fall into import_yaml
+    g.write_text("- {geom: {id1: 1, ts0: 0, g0: '0 0 1 1'}}\n")
+    with pytest.raises(ValueError, match="src.formats.load"):
+        tsmod.TrackSet(str(g))
 
 
 def test_personpath22():
@@ -97,6 +106,7 @@ def test_meva(tmp_path):
     types.write_text("- {types: {id1: 1, cset3: {person: 1.0}}}\n"
                      "- {types: {id1: 2, cset3: {vehicle: 0.9, person: 0.1}}}\n")
     ts = meva.read(str(geom), width=64, height=48, frame_rate=10.0)
+    assert _boxes(formats.load(str(geom), width=64, height=48, frame_rate=10.0)) == _boxes(ts)
     assert ts.metadata["box_convention"] == "fullbody"
     assert ts.frame_times == [0.0, 0.1]
     assert ts.frames[0]["objects"][1]["box"] == [0.0, 0.0, 0.5, 0.5]

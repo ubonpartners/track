@@ -31,13 +31,14 @@ class TrackSet:
                     analysis_mode=analysis_mode,
                 )
                 return
+            if path.endswith(".ini") or path.endswith((".geom.yml", ".geom.yaml")):
+                # native dataset formats moved to src/formats (stage 3);
+                # TrackSet only reads its own formats now. Checked before
+                # the generic yaml branch: a .geom.yml also ends in .yml.
+                raise ValueError(f"{path}: use src.formats.load() for MOT/MEVA sources")
             if path.endswith(".yml") or path.endswith(".yaml") or path.endswith(".json"):
                 self.import_yaml(path)
                 return
-            if path.endswith(".ini") or path.endswith((".geom.yml", ".geom.yaml")):
-                # native dataset formats moved to src/formats (stage 3);
-                # TrackSet only reads its own formats now
-                raise ValueError(f"{path}: use src.formats.load() for MOT/MEVA sources")
 
     def _encode_frame_objects_for_storage(self, objects):
         if objects is None:

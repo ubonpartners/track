@@ -359,6 +359,8 @@ Steps
    `trackset_import` importing `trackset` is now the only edge.
 5. Move `src/import_antare.py`'s parser into `formats/antare.py`; its
    discovery and copy logic goes to `corpus/importers.py` in stage 4.
+   (`formats/bdd100k.py` is deferred: the BDD parse is inline in
+   `convert_bdd100k_kaggle` and comes out in stage 4b.)
 
 Exit criteria: no import cycle (`python -X importtime` or the graph
 test's cycle check). Tests green, including a new unit test per format

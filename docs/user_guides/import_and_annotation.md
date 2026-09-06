@@ -115,11 +115,12 @@ Points that matter when writing an importer:
    frame is labelled, not only scripted actors), unblurred faces, and a
    licence that permits our use.
 
-2. **Write the importer.** Existing ones live in
-   `src/trackset_import.py` (`convert_mot`, `convert_personpath22`,
-   `convert_jaad`, `convert_meva`, `convert_chirla`, ...) and
-   standalone files such as `src/import_antare.py`. An importer reads
-   tier 0, copies or remuxes video into
+2. **Write the importer.** Two parts: a parser in `src/formats/<name>.py`
+   exposing `read(...) -> TrackSet` (one module per source format, unit
+   tested on a tiny fixture in `tests/unit/test_formats.py`), and a
+   `convert_<name>` driver in `src/trackset_import.py` (or a standalone
+   file such as `src/import_antare.py`) that walks the drop. The driver
+   reads tier 0, copies or remuxes video into
    `/mldata/tracking_original/<corpus>/video/` and writes annotation
    json beside it. Keep ffmpeg out of it unless the codec forces a
    transcode; the derive step does the eval-spec encoding.

@@ -24,6 +24,8 @@
 #                                by a pixel or two (clipped here).
 #   <cam>/gt/labels.txt          class names, 1-based line order = class ints
 #
+# Parser: src/formats/antare.py (load_gt, build_annotation, CLASS_MAP).
+#
 # Import (per clip):
 #   - video copied UNCHANGED into tier 1 (the source is the truth; the
 #     eval copy is made by `corpus_manifest derive`: 1280 long edge, I+P,
@@ -55,6 +57,8 @@ import sys
 from fractions import Fraction
 
 import src.paths as paths
+from src.formats.antare import (CLASS_MAP, GT_CLASSES, build_annotation,  # noqa: F401 (re-exported for callers/tests)
+                                load_gt)
 
 
 
@@ -85,20 +89,6 @@ SCENE_SLUGS = {
     "653": "box-dropped",        # heavy equipment box dropped near colleague
 }
 
-# class-name -> our GT scheme. Anything unlisted -> "other" (ignore-region
-# semantics: not an FN when missed, matches not charged as FP).
-CLASS_MAP = {
-    "person": "person",
-    "bicycle": "vehicle",     # REVISABLE: rideables as vehicles
-    "car": "vehicle",
-    "motorbike": "vehicle",
-    "bus": "vehicle",
-    "truck": "vehicle",
-    "other": "other",
-}
-GT_CLASSES = ["person", "vehicle", "other"]
-
-
 def probe(video):
     """(width, height, fps, n_frames). Frame count from packet count, not
     the container's nb_frames tag. Refuses VFR sources: frame k -> t=(k-1)/fps
@@ -114,27 +104,6 @@ def probe(video):
     assert avg == r, f"{video}: VFR ({avg} avg vs {r} r) — not importable as-is"
     return (int(st["width"]), int(st["height"]), float(avg),
             int(st["nb_read_packets"]))
-
-
-def load_gt(gt_dir):
-    """gt.txt + labels.txt -> [(frame_1based, track_id, x, y, w, h, cls_name)]."""
-    labels = [l.strip() for l in open(os.path.join(gt_dir, "labels.txt"))
-              if l.strip()]
-    rows = []
-    for line in open(os.path.join(gt_dir, "gt.txt")):
-        parts = line.strip().split(",")
-        if len(parts) < 8:
-            continue
-        fr, tid = int(parts[0]), int(parts[1])
-        x, y, w, h = (float(v) for v in parts[2:6])
-        cls_i = int(parts[7])
-        name = labels[cls_i - 1] if 1 <= cls_i <= len(labels) else "other"
-        rows.append((fr, tid, x, y, w, h, name))
-    return rows
-
-
-def _clip01(v):
-    return min(1.0, max(0.0, v))
 
 
 def camera_hint(cam):
@@ -181,40 +150,6 @@ def discover(src, flat_hint="bodycam"):
                 out.append((clip_stem(d, cam), os.path.join(folder, f),
                             os.path.join(folder, cam, "gt"), camera_hint(cam), d))
     return out
-
-
-def build_annotation(rows, n_frames, fps, src_w, src_h, video_path,
-                     hint="bodycam", scene=None):
-    """Dense GT rows -> trackset json dict with one record per video frame
-    (frame_id k, frame_time (k-1)/fps), boxes normalised+clipped."""
-    by_frame = {k: {} for k in range(1, n_frames + 1)}
-    dropped = 0
-    for (fr, tid, x, y, w, h, name) in rows:
-        if fr < 1 or fr > n_frames:
-            dropped += 1
-            continue
-        cls = CLASS_MAP.get(name, "other")
-        box = [_clip01(x / src_w), _clip01(y / src_h),
-               _clip01((x + w) / src_w), _clip01((y + h) / src_h)]
-        by_frame[fr][str(tid)] = {"box": [round(v, 5) for v in box],
-                                  "class": GT_CLASSES.index(cls), "conf": 1.0}
-    frames = [{"frame_id": k, "frame_time": round((k - 1) / fps, 6),
-               "objects": by_frame[k]} for k in range(1, n_frames + 1)]
-    doc = {
-        "metadata": {
-            "frame_rate": fps,
-            "width": src_w, "height": src_h,
-            "classes": GT_CLASSES,
-            "original_video": video_path,
-            "hint": hint,                    # camera class; derive reads it per clip
-            "gt_source": {"kind": "human_dense_mot",
-                          "source": "antare labelled clips",
-                          "scene": scene,
-                          "frame_mapping": "gt frame k == video frame k-1"},
-        },
-        "frames": frames,
-    }
-    return doc, dropped
 
 
 def import_clip(stem, src_video, gt_dir, hint, scene, out_root):

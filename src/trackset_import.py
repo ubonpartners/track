@@ -20,6 +20,10 @@ from scipy.io import loadmat
 import stuff
 
 import src.paths as paths
+import src.trackset as trackset
+from src.formats import (chirla as fmt_chirla, jaad as fmt_jaad, meva as fmt_meva,
+                         mot as fmt_mot, otw as fmt_otw, personpath22 as fmt_personpath22,
+                         roundabouthd as fmt_roundabouthd, uvg_vcm as fmt_uvg_vcm)
 
 
 def convert_mot(lite=True):
@@ -35,7 +39,7 @@ def convert_mot(lite=True):
             output_path=output_folder+"/annotation/"+s+".json"
             output_video_path=output_folder+"/video/"+s+".mp4"
             print("Processing",f,s,"....")
-            ts=trackset.TrackSet(input_path)
+            ts=fmt_mot.read(input_path)
             ts.export_yaml(output_path, output_video_path)
     if lite:
         # tier 2 eval-spec derive; MOT mixes static and moving cameras,
@@ -1123,12 +1127,3 @@ def dofix():
         on=on.replace(".yaml",".json")
         with open(on, 'w') as json_file:
                 json.dump(d, json_file, indent=4)
-
-
-# Imported at module bottom so the circular dependency with trackset.py is
-# safe in either import order: by the time either module needs the other's
-# attributes, both class definitions above exist.
-import src.trackset as trackset
-from src.formats import (chirla as fmt_chirla, jaad as fmt_jaad, meva as fmt_meva,
-                         mot as fmt_mot, otw as fmt_otw, personpath22 as fmt_personpath22,
-                         roundabouthd as fmt_roundabouthd, uvg_vcm as fmt_uvg_vcm)

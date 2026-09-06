@@ -62,7 +62,7 @@ checkout is `$AUTOLABEL_PATH`, else a sibling directory of this repo.
 
 These remain supported as tracking inputs:
 
-- MOT `seqinfo.ini` + `gt/gt.txt`
+- MOT `seqinfo.ini` + `gt/gt.txt` and the other native dataset formats, via `src.formats.load()` (one parser per format under `src/formats/`)
 - JSON/YAML annotation files used as input sequence metadata, for example `/mldata/tracking/mot/annotation/MOT17-05.json`
 - Caltech `.vbb`
 

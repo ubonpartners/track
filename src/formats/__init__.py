@@ -13,9 +13,13 @@ from src.trackset import TrackSet
 
 
 def load(path, **kw):
-    """Open any supported annotation file as a TrackSet."""
+    """Open any supported annotation file as a TrackSet. Keyword arguments
+    go to the parser the extension selects (meva.read's video_path /
+    width / height / frame_rate; TrackSet's decode_payloads /
+    analysis_mode); mot.read takes none."""
     if path.endswith(".ini"):
         from src.formats import mot
+        assert not kw, f"mot.read takes no options: {sorted(kw)}"
         return mot.read(path)
     if path.endswith(".geom.yml") or path.endswith(".geom.yaml"):
         from src.formats import meva

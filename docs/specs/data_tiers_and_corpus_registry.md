@@ -166,8 +166,9 @@ narrowing change breaks autolabel's tests loudly.
 
 1. Acquire into tier 0 (`/mldata/downloaded_datasets/...`). Never
    modify what you fetched.
-2. Write/extend the importer (`src/trackset_import.py` `import_*` +
-   `convert_*`). Converters default their `output_folder` to tier 1.
+2. Write/extend the importer: a parser in `src/formats/<name>.py`
+   (`read(...) -> TrackSet`) plus a `convert_*` driver in
+   `src/trackset_import.py`. Converters default their `output_folder` to tier 1.
    Mezzanine policy: remux losslessly if the codec is mp4-compatible
    and sane; otherwise pin an explicit transcode recipe and put it in
    `CORPUS_INFO[corpus]["import_recipe"]`.
