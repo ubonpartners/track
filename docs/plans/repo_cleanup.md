@@ -89,7 +89,7 @@ or `pytest.ini`, no markers for GPU or data tests, and no CI.
 track/
   pyproject.toml              installable package `track`; console script `track`
   README.md                   short: what it is, install, the five commands, links into docs/
-  track/
+  src/                        (rename to track/ is a later decision, see rules below)
     paths.py                  the /mldata roots and tracker-config path, env-overridable
     core/
       trackset.py             TrackSet: storage format, frames, interpolation
@@ -137,13 +137,16 @@ Rules that keep it this way:
 
 - `core` imports nothing else in the package. `formats` imports `core`.
   `corpus` imports `core`, `formats`. `eval` imports `core`, `tracker`.
-  `search` imports `eval`. `cli` imports everything. `tools` is outside
-  the package. A test asserts this graph.
+  `search` imports `eval` and `corpus` (the registry consultation in the
+  tiers spec). `cli` imports everything. `tools` is outside the package.
+  `tests/test_import_graph.py` asserts this graph.
 - Every `/mldata` path goes through `paths.py`. A test greps for
   literals.
 - A code comment states an invariant and links to the ledger entry for
   its history. Dates and names go in the ledger.
-- Tests never import `src.`; they import `track.`.
+- The package stays `src` for now: a package called `track` cannot
+  coexist with `track.py` at the repo root, and the rename is a
+  separate decision once stage 6 has made `track.py` a shim.
 
 ## 3. Verification and review protocol
 
@@ -152,11 +155,17 @@ until all four are done.
 
 1. **Tests green.** `python -m pytest tests -q -m "not gpu and not data"`.
 2. **Smoke eval.** Three clips through the objective config (one static,
-   one moving, one 4K), about 15 seconds:
-   `python track.py --eval <smoke yaml> --eval-split both`. The per-clip
-   rows must match the previous stage's rows exactly. Exact-shape
-   batching makes repeat runs agree to the third decimal, so any change
-   is a defect, not noise. Keep the smoke yaml in `tests/data/`.
+   one moving, one whose source is 4K; all evaluated on their 1280x720
+   tier-2 copies), through the same shared-stream runner the objective
+   uses, about 15 seconds: `python tests/smoke_eval.py --out <dir>`.
+   Then `python tests/smoke_eval.py --compare <previous stage dir> <dir>`
+   must report every clip and rollup cell identical. Repeat runs of the
+   same code were shown identical at stage 0 (exact-shape batching), so
+   any change is a defect, not noise. The script builds its yaml from
+   the objective at run time and records the sha256 of the objective
+   and tracker yamls plus the git revision, so a config edit under the
+   repo's feet shows up in the comparison rather than being blamed on
+   the stage.
 3. **Adversarial review.** A second reader (a fresh agent session or a
    colleague, never the author of the stage) is given the diff and the
    stage's checklist below, and told to find what is wrong or missing
@@ -221,6 +230,8 @@ Reviewability
 ### Stage 0. Scaffolding
 
 Goal: the tools the later stages rely on exist before anything moves.
+`pyproject.toml` is a pytest configuration carrier at this stage; it
+does not declare a build system or make the package installable.
 
 Steps
 
@@ -230,9 +241,10 @@ Steps
 2. Add `tests/conftest.py` with fixtures for a tiny synthetic
    `TrackSet` (two frames, two objects, one vehicle) and a temporary
    corpus tree (tier 1 and tier 2 with one clip).
-3. Add `tests/data/smoke.yaml`: the objective test block plus three
-   antare clips, `num_workers: 1`, `results_location` under the
-   scratch dir.
+3. Add `tests/smoke_eval.py`: builds the smoke yaml from the objective
+   at run time (three antare clips, the objective's test block and
+   `single_shared_streams`), writes provenance, and has an exact
+   `--compare` mode.
 4. Add `tests/test_import_graph.py`: parses every module's imports and
    asserts the allowed edges from section 2. It fails today; mark it
    `xfail` with a note until stage 5 closes.
@@ -240,8 +252,10 @@ Steps
    `/mldata` and `/home/` literals outside `paths.py`. Also `xfail`
    until stage 2.
 
-Exit criteria: `pytest` discovers the existing 51 tests from the new
-location and both graph tests report `xfail`, not `error`.
+Exit criteria: both structure tests report `xfail` for the right
+reasons (layer violations, literal paths) and their live-guards pass;
+two consecutive smoke runs compare identical. (The existing 51 tests
+still run from `src/` until stage 1 moves them.)
 
 Review checklist
 
@@ -257,8 +271,10 @@ Goal: files land in their final directories with no content change.
 Steps
 
 1. `git mv src/test_*.py tests/unit/`. Fix their `import src.x` lines
-   only if the move breaks discovery; otherwise leave imports alone
-   (they change in stage 3).
+   only if the move breaks discovery; otherwise leave imports alone.
+   No `__init__.py` under `tests/` (another repo on PYTHONPATH owns a
+   top-level `tests` package) and unique test basenames across
+   subdirectories. Narrow `testpaths` to `tests` only.
 2. `git mv` the ten research tools to `tools/`:
    `cadence_test.py cadence_diag.py capacity_curve.py capacity_plot.py
    quality_grid.py quality_table.py gpu_attrib.py make_rt_configs.py

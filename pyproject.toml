@@ -1,0 +1,16 @@
+[project]
+name = "track"
+version = "0.1.0"
+description = "Tracker evaluation, parameter search and dataset import harness"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+# tests/ is the home for tests (repo_cleanup.md stage 1). The package is
+# importable as `src.` from the repo root, so put the root on sys.path
+# rather than the test file's directory.
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "gpu: needs the tracker runtime (ubon_pycstuff + a GPU); run by hand on the dev box",
+    "data: needs /mldata corpora on disk; run by hand on the dev box",
+]
