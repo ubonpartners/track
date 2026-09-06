@@ -19,6 +19,8 @@ from scipy.io import loadmat
 
 import stuff
 
+import src.paths as paths
+
 
 def convert_mot(lite=True):
     output_folder=paths.tier1("mot")
@@ -48,8 +50,6 @@ def convert_mot(lite=True):
 
 def convert_personpath22(src_root=None, output_folder=None,
                          anno_variant="visible", lite=True):
-    src_root = src_root or paths.downloads("other", "personpath22", "dataset", "personpath22")
-    output_folder = output_folder or paths.tier1("personpath22")
     """Convert PersonPath22 (gluoncv-motion format) into MOT-equivalent
     JSON+mp4 pairs under output_folder/{annotation,video}/.
 
@@ -57,6 +57,8 @@ def convert_personpath22(src_root=None, output_folder=None,
     The src_root default matches the layout produced by download.py
     (which nests under <root>/dataset/personpath22/{annotation,raw_data}).
     """
+    src_root = src_root or paths.downloads("other", "personpath22", "dataset", "personpath22")
+    output_folder = output_folder or paths.tier1("personpath22")
     variant_stem = {
         "visible": "anno_visible_2022",
         "amodal":  "anno_amodal_2022",
@@ -239,8 +241,6 @@ def _convert_meva_clip(args):
     return ("done", stem)
 
 def convert_chirla(src_root=None, output_folder=None, lite=True):
-    src_root = src_root or paths.downloads("other", "chirla")
-    output_folder = output_folder or paths.tier1("chirla")
     """Convert CHIRLA camera clips into trackset JSON + mp4 pairs.
 
     Output stems: chirla_<seq>_<camera>_<timestamp> with ':' -> '-'
@@ -248,6 +248,8 @@ def convert_chirla(src_root=None, output_folder=None, lite=True):
     remuxed to mp4 (transcode fallback on broken pts, see
     _remux_to_mp4). Existing outputs are not redone.
     """
+    src_root = src_root or paths.downloads("other", "chirla")
+    output_folder = output_folder or paths.tier1("chirla")
     stuff.makedir(output_folder + "/annotation/")
     stuff.makedir(output_folder + "/video/")
 
@@ -363,8 +365,6 @@ def convert_roundabouthd(src_root=None, output_folder=None, lite=True):
 
 
 def convert_uvg_vcm(src_root=None, output_folder=None, lite=True):
-    src_root = src_root or paths.downloads("other", "uvg_vcm")
-    output_folder = output_folder or paths.tier1("uvg_vcm")
     """Convert downloaded UVG-VCM sequences into trackset JSON + mp4.
 
     Only sequences with BOTH a raw YUV on disk and a tracking-schema
@@ -373,6 +373,8 @@ def convert_uvg_vcm(src_root=None, output_folder=None, lite=True):
     x264 crf 18 yuv420p at native fps — raw source is yuv444p16le
     parsed from the filename `<Seq>_<W>x<H>_<fps>fps_..._<frames>.yuv`.
     """
+    src_root = src_root or paths.downloads("other", "uvg_vcm")
+    output_folder = output_folder or paths.tier1("uvg_vcm")
     import re
     import subprocess
     stuff.makedir(output_folder + "/annotation/")
@@ -434,8 +436,6 @@ def convert_uvg_vcm(src_root=None, output_folder=None, lite=True):
 
 def convert_meva(src_root=None, output_folder=None,
                  workers=8, augment=True, augment_limit=0, lite=True):
-    src_root = src_root or paths.downloads("other", "MEVA")
-    output_folder = output_folder or paths.tier1("meva")
     """Convert MEVA (KF1) KPF clips into trackset JSON + video pairs under
     output_folder/{annotation,video}/.
 
@@ -448,6 +448,8 @@ def convert_meva(src_root=None, output_folder=None,
     are not redone. MEVA ships h264-in-avi; output videos are losslessly
     remuxed to mp4 (see _remux_to_mp4).
     """
+    src_root = src_root or paths.downloads("other", "MEVA")
+    output_folder = output_folder or paths.tier1("meva")
     stuff.makedir(output_folder + "/annotation/")
     stuff.makedir(output_folder + "/video/")
 
@@ -501,8 +503,6 @@ def convert_meva(src_root=None, output_folder=None,
 
 def convert_otw(src_root=None, output_folder=None,
                 augment=True, augment_limit=0, lite=True):
-    src_root = src_root or paths.downloads("other", "otw", "otw")
-    output_folder = output_folder or paths.tier1("otw")
     """Convert Out the Window (OTW) into MOT-equivalent JSON+mp4 pairs
     under output_folder/{annotation,video}/.
 
@@ -512,6 +512,8 @@ def convert_otw(src_root=None, output_folder=None,
     collide. Videos whose annotations carry no object tracks (all of lots/
     — it only has actor-less activity regions) are skipped.
     """
+    src_root = src_root or paths.downloads("other", "otw", "otw")
+    output_folder = output_folder or paths.tier1("otw")
     import csv as _csv
 
     stuff.makedir(output_folder + "/annotation/")
@@ -846,12 +848,12 @@ def convert_autolabel_folder(src_folder, output_folder, shard="",
 
 
 def convert_raw_movies(src_folder=None, output_folder=None, shard="", lite=True):
-    src_folder = src_folder or paths.video("youtube")
-    output_folder = output_folder or paths.tier1("raw_movies")
     """Raw movie/trailer mp4s, fully autolabelled. Edited multi-shot
     content, so autolabel's scene-cut detection (TransNetV2) is enabled:
     tracks must not survive or merge across cuts. Moving camera: the
     final lite pass decimates to the analytics grid (hint:bodycam)."""
+    src_folder = src_folder or paths.video("youtube")
+    output_folder = output_folder or paths.tier1("raw_movies")
     convert_autolabel_folder(src_folder, output_folder, shard=shard,
                              cuts=True)
     if lite:
@@ -986,8 +988,8 @@ def estimate_bdd_time_offsets(detector_cache_root=None):
     caches) and restamps frame_time in place; idempotent via
     metadata.time_offset_intervals. Alignment recovery of an acquisition
     artifact — boxes are never modified."""
-    import sys as _sys
-    _sys.path.insert(0, paths.autolabel_repo())
+    from src.autolabel_bridge import load_autolabel
+    load_autolabel()          # puts the checkout on sys.path or raises with setup help
     from autolabel.pipeline import cache_dir_for
     from autolabel.detect import load_detections
     folder = paths.tier1("bdd100k_mot")
@@ -1054,7 +1056,6 @@ def estimate_bdd_time_offsets(detector_cache_root=None):
 
 
 def fix_cevo25_vfr_times(folder=None):
-    folder = folder or paths.tier1("cevo_april25")
     """Restamp cevo_april25 GT frame_times from the video's real decoded
     PTS. Most of these cameras record variable frame rate (intervals
     0.03-0.13s) but the annotations carried synthetic times from a
@@ -1068,6 +1069,7 @@ def fix_cevo25_vfr_times(folder=None):
     order-count — yields locally swapped stamps. The stamp multiset is
     still the display timeline (one frame per coded picture); sorting
     reconstructs it exactly. Idempotent; safe to re-run."""
+    folder = folder or paths.tier1("cevo_april25")
     import av
     import numpy as np
     for name in sorted(os.listdir(folder + "/annotation")):
@@ -1126,7 +1128,6 @@ def dofix():
 # Imported at module bottom so the circular dependency with trackset.py is
 # safe in either import order: by the time either module needs the other's
 # attributes, both class definitions above exist.
-import src.paths as paths
 import src.trackset as trackset
 from src.formats import (chirla as fmt_chirla, jaad as fmt_jaad, meva as fmt_meva,
                          mot as fmt_mot, otw as fmt_otw, personpath22 as fmt_personpath22,

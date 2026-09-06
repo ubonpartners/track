@@ -29,7 +29,7 @@ import os
 import sys
 import time
 
-from src import paths
+import src.paths as paths
 
 
 def T1():
@@ -156,62 +156,65 @@ CAPABILITIES_SEED = {
                    "approved_uses": []},
 }
 
-CORPUS_INFO = {
-    "mot": {"license": "CC BY-NC-SA 3.0 (MOTChallenge)",
-            "source_root": "legacy import (MOTChallenge release zips)",
-            "import_recipe": "convert_mot: seq images/video -> mp4 copy + GT"},
-    "personpath22": {"license": "Apache-2.0 (dataset terms)",
-                     "source_root": paths.downloads("other", "personpath22"),
-                     "import_recipe": "import_personpath22: mp4 copy + keyframe GT"},
-    "jaad": {"license": "MIT (JAAD terms)",
-             "source_root": paths.downloads("other", "JAAD"),
-             "import_recipe": "import_jaad: mp4 copy + CVAT XML GT"},
-    "bdd100k_mot": {"license": "BSD-3 (BDD100K terms)",
-                    "source_root": "kaggle bdd100k-mot drop",
-                    "import_recipe": "convert_bdd100k_kaggle: mp4 + restamped keyframe GT"},
-    "cevo": {"license": "internal", "source_root": "internal capture",
-             "import_recipe": "internal import"},
-    "cevo_april25": {"license": "internal", "source_root": "internal capture",
-                     "import_recipe": "internal import"},
-    "meva": {"license": "Apache-2.0 (MEVA)",
-             "source_root": paths.downloads("other", "MEVA"),
-             "import_recipe": "import_meva: h264-avi remux -> mp4 (x264 crf18 "
-                              "fallback on broken pts) + KPF GT",
-             "gt_passes": ["tighten (2026-07-23)", "consistency (2026-07-23)",
-                           "densify (2026-07-23)", "augment (2026-07-23)"]},
-    "otw": {"license": "research (OTW terms)",
-            "source_root": paths.downloads("other", "otw"),
-            "import_recipe": "import_otw",
-            "gt_passes": ["densify (2026-07-23)", "augment (2026-07-23)"]},
-    "chirla": {"license": "CC BY 4.0",
-               "source_root": paths.downloads("other", "chirla"),
-               "import_recipe": "import_chirla: mpeg4-avi remux -> mp4 "
-                                "(bit-identical stream) + per-frame GT"},
-    "roundabouthd": {"license": "MIT (Bath 1574)",
-                     "source_root": paths.downloads("other", "bath_1574"),
-                     "import_recipe": "import_roundabouthd: mpeg4-SP 4K -> "
-                                      "h264 nvenc cq22 (no desktop hw decode "
-                                      "for source codec) + SCT GT"},
-    "uvg_vcm": {"license": "CC BY 4.0",
-                "source_root": paths.downloads("other", "uvg_vcm"),
-                "import_recipe": "import_uvg_vcm: raw yuv444p16 -> x264 crf18 "
-                                 "yuv420p + COCO-class track GT"},
-    "bwc-videotext": {"license": "internal",
-                      "source_root": "internal bwc footage",
-                      "import_recipe": "autolabel-labelled (no human GT)"},
-    "antare_bwc": {"license": "internal (antare)",
-                   "source_root": paths.downloads("antare") + " {individuals - body camera-"
-                                  "20260902T102854Z-1-001, multiple views - body camera and "
-                                  "fixed-20260906T050034Z-1-001}",
-                   "import_recipe": "import_antare: mp4 copied unchanged + "
-                                    "dense MOT GT (frame k == video frame k-1); "
-                                    "per-clip camera hint in metadata (bodycam/static)"},
-    "raw_movies": {"license": "unlicensed movie/trailer footage — "
-                              "INTERNAL EVAL ONLY, never train, never ship",
-                   "source_root": paths.video("youtube"),
-                   "import_recipe": "convert_raw_movies: autolabel with "
-                                    "scene cuts (AV1 sources h264-transcoded)"},
-}
+def corpus_info():
+    """Licence / provenance per corpus (written into MANIFEST.json by build).
+    A function so the tier-0 roots are resolved when build runs."""
+    return {
+        "mot": {"license": "CC BY-NC-SA 3.0 (MOTChallenge)",
+                "source_root": "legacy import (MOTChallenge release zips)",
+                "import_recipe": "convert_mot: seq images/video -> mp4 copy + GT"},
+        "personpath22": {"license": "Apache-2.0 (dataset terms)",
+                         "source_root": paths.downloads("other", "personpath22"),
+                         "import_recipe": "import_personpath22: mp4 copy + keyframe GT"},
+        "jaad": {"license": "MIT (JAAD terms)",
+                 "source_root": paths.downloads("other", "JAAD"),
+                 "import_recipe": "import_jaad: mp4 copy + CVAT XML GT"},
+        "bdd100k_mot": {"license": "BSD-3 (BDD100K terms)",
+                        "source_root": "kaggle bdd100k-mot drop",
+                        "import_recipe": "convert_bdd100k_kaggle: mp4 + restamped keyframe GT"},
+        "cevo": {"license": "internal", "source_root": "internal capture",
+                 "import_recipe": "internal import"},
+        "cevo_april25": {"license": "internal", "source_root": "internal capture",
+                         "import_recipe": "internal import"},
+        "meva": {"license": "Apache-2.0 (MEVA)",
+                 "source_root": paths.downloads("other", "MEVA"),
+                 "import_recipe": "import_meva: h264-avi remux -> mp4 (x264 crf18 "
+                                  "fallback on broken pts) + KPF GT",
+                 "gt_passes": ["tighten (2026-07-23)", "consistency (2026-07-23)",
+                               "densify (2026-07-23)", "augment (2026-07-23)"]},
+        "otw": {"license": "research (OTW terms)",
+                "source_root": paths.downloads("other", "otw"),
+                "import_recipe": "import_otw",
+                "gt_passes": ["densify (2026-07-23)", "augment (2026-07-23)"]},
+        "chirla": {"license": "CC BY 4.0",
+                   "source_root": paths.downloads("other", "chirla"),
+                   "import_recipe": "import_chirla: mpeg4-avi remux -> mp4 "
+                                    "(bit-identical stream) + per-frame GT"},
+        "roundabouthd": {"license": "MIT (Bath 1574)",
+                         "source_root": paths.downloads("other", "bath_1574"),
+                         "import_recipe": "import_roundabouthd: mpeg4-SP 4K -> "
+                                          "h264 nvenc cq22 (no desktop hw decode "
+                                          "for source codec) + SCT GT"},
+        "uvg_vcm": {"license": "CC BY 4.0",
+                    "source_root": paths.downloads("other", "uvg_vcm"),
+                    "import_recipe": "import_uvg_vcm: raw yuv444p16 -> x264 crf18 "
+                                     "yuv420p + COCO-class track GT"},
+        "bwc-videotext": {"license": "internal",
+                          "source_root": "internal bwc footage",
+                          "import_recipe": "autolabel-labelled (no human GT)"},
+        "antare_bwc": {"license": "internal (antare)",
+                       "source_root": paths.downloads("antare") + "/ {individuals - body camera-"
+                                      "20260902T102854Z-1-001, multiple views - body camera and "
+                                      "fixed-20260906T050034Z-1-001}",
+                       "import_recipe": "import_antare: mp4 copied unchanged + "
+                                        "dense MOT GT (frame k == video frame k-1); "
+                                        "per-clip camera hint in metadata (bodycam/static)"},
+        "raw_movies": {"license": "unlicensed movie/trailer footage — "
+                                  "INTERNAL EVAL ONLY, never train, never ship",
+                       "source_root": paths.video("youtube"),
+                       "import_recipe": "convert_raw_movies: autolabel with "
+                                        "scene cuts (AV1 sources h264-transcoded)"},
+    }
 
 
 def _sha256(path, chunk=1 << 22):
@@ -238,7 +241,7 @@ def build(corpus):
     root = os.path.join(T1(), corpus)
     mpath = os.path.join(root, "MANIFEST.json")
     old = json.load(open(mpath)) if os.path.isfile(mpath) else {"files": {}}
-    info = CORPUS_INFO.get(corpus, {})
+    info = corpus_info().get(corpus, {})
     caps = old.get("capabilities") or CAPABILITIES_SEED.get(corpus)
     if caps is None:
         raise SystemExit(

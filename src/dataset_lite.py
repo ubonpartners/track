@@ -327,8 +327,8 @@ def main():
                         "config change)")
     g.add_argument("--min-fps", type=float,
                    help="legacy fixed framerate floor")
-    ap.add_argument("--config", default=None,
-                    help="tracker config for --hint mode")
+    ap.add_argument("--config", default=None, metavar="YAML",
+                    help="tracker config for --hint mode (default: the production config, see src/paths.py)")
     ap.add_argument("--max-seconds", type=float, default=None)
     ap.add_argument("--drop-jitter", action="store_true")
     ap.add_argument("--max-edge", type=int, default=1280)

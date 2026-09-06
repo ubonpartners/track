@@ -20,9 +20,9 @@ spawns its own conda env internally).
 import json
 import os
 import sys
+import time
 
 import src.paths as paths
-import time
 import traceback
 
 _HELP = (
@@ -37,7 +37,7 @@ _HELP = (
 
 
 def _autolabel_root():
-    cand = [paths.autolabel_repo()]          # $AUTOLABEL_PATH, else sibling of this repo
+    cand = [paths.autolabel_repo(), paths.autolabel_sibling()]   # $AUTOLABEL_PATH first, sibling as fallback
     for c in cand:
         if c and os.path.isfile(os.path.join(c, "autolabel", "pipeline.py")):
             return c

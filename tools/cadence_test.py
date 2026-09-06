@@ -25,10 +25,12 @@ import subprocess
 import sys
 
 import yaml
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root, for src.*
+import src.paths as paths
 
-T1 = os.environ.get("TRACK_TIER1") or "/mldata/tracking_original"   # research tool: mirrors src.paths.tier1()
-OUT_ROOT = "/mldata/tracking/cadence_test"
-SEARCH_YAML = "/mldata/config/track/search/track_search_v11_mc.yaml"
+T1 = paths.tier1()
+OUT_ROOT = paths.tier2("cadence_test")
+SEARCH_YAML = paths.search_yaml()
 TARGET_FPS = 5.0
 MIN_SRC_FPS = 23.9
 MAX_CLIPS = 30
@@ -173,7 +175,6 @@ def select_clips(max_clips=MAX_CLIPS):
 
 
 def build_clip(clip, variant, gen, target_fps=TARGET_FPS, max_edge=1280):
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root, for src.*
     import src.trackset as trackset
     from src.dataset_lite import scale_dims
     from src.corpus_manifest import load_capabilities
@@ -286,9 +287,9 @@ def write_eval_config(manifest):
                 row["stream_hint"] = "bodycam"
             datasets[f"{v}_{clip['key']}"] = row
     out = {"tests": {"search_config": sc}, "datasets": datasets,
-           "result_log_file_path": "/mldata/results/cadence_test",
+           "result_log_file_path": paths.results("cadence_test"),
            "num_workers": "auto", "sort_key": "fitness"}
-    path = "/mldata/config/track/search/cadence_eval.yaml"
+    path = paths.config_dir("search", "cadence_eval.yaml")
     with open(path, "w") as f:
         yaml.safe_dump(out, f, sort_keys=False)
     print(f"eval config -> {path} ({len(datasets)} rows)", flush=True)

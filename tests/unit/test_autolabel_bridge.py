@@ -196,8 +196,8 @@ def test_autolabel_export_contract_reads():
     repo's readers assume (dense 1-based grid, normalized xyxy boxes,
     class indices into metadata classes)."""
     import os
-    golden = os.path.expanduser(
-        "~/stuff/ubonpartners/autolabel/tests/golden/contract_trackset.json")
+    import src.paths as paths
+    golden = os.path.join(paths.autolabel_repo(), "tests", "golden", "contract_trackset.json")
     if not os.path.isfile(golden):
         import pytest
         pytest.skip("autolabel repo not present")

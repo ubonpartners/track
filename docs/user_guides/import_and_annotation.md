@@ -13,6 +13,11 @@ working summary.
 /mldata/tracking/<corpus>/          tier 2   eval copy: what track.py actually reads
 ```
 
+These are the defaults. The code resolves every root through
+`src/paths.py`, which reads `TRACK_MLDATA`, `TRACK_TIER1`, `TRACK_TIER2`
+and friends from the environment; `python track.py --paths` shows what
+is in effect.
+
 **Tier 0** is whatever you fetched: zips, AVIs, PNG sequences, MOT text
 files. Leave it exactly as it arrived.
 

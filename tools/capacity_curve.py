@@ -25,6 +25,7 @@ import argparse
 import sys
 
 import yaml
+import src.paths as paths
 
 # Fixed leading columns, from src/apps/rt_benchmark.c sweep_step(). The pm
 # columns between mean_roi and motion_percent are DYNAMIC (one per pm_table
@@ -129,7 +130,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", action="append", required=True,
                     metavar="NAME=PATH", help="policy name = rt_benchmark csv")
-    ap.add_argument("--table", default="/mldata/config/track/quality_table.yaml")
+    ap.add_argument("--table", default=paths.config_dir("quality_table.yaml"))
     ap.add_argument("--group", default="ALL",
                     help="content group: ALL, static, moving, movie, ...")
     a = ap.parse_args()

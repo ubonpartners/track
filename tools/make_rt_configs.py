@@ -20,8 +20,9 @@ yaml is silently ineffective (learned the hard way — E38, E43):
 import argparse
 import os
 import re
+import src.paths as paths
 
-BASE = "/mldata/config/track/trackers/uc_v11.yaml"
+BASE = paths.tracker_config()
 
 # name -> (description, transform). Transforms take the base yaml text.
 def _perf(block):
@@ -125,7 +126,7 @@ CONFIGS = {
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default=BASE)
-    ap.add_argument("--out", default=os.path.expanduser("~/rtcfg_pm_opt"))
+    ap.add_argument("--out", default=os.path.join(os.environ.get("HOME", "."), "rtcfg_pm_opt"))
     a = ap.parse_args()
 
     base = open(a.base).read()

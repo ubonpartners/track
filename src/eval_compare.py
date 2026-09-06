@@ -28,6 +28,8 @@ import json
 import math
 import os
 
+import src.paths as track_paths
+
 
 HEADLINE = ("fitness_multi", "fitness", "idf1", "mota",
             "switch_per_obj", "frag_per_obj", "fp_tracks")
@@ -64,7 +66,7 @@ def main():
 
     print("!" * 100)
     print("!! THE OBJECTIVE IS _groupmean, from the one config track.py --search optimises:")
-    print("!!     /mldata/config/track/search/track_search_v11_mc.yaml  (result_dataset_opt_key: _groupmean)")
+    print(f"!!     {track_paths.search_yaml()}  (result_dataset_opt_key: _groupmean)")
     print("!! _overall is printed BELOW for information only -- it is box-count weighted and is NOT")
     print("!! what the tracker is tuned on. Quote _groupmean. If these runs came from any other yaml,")
     print("!! they are not comparable to search scores at all.")

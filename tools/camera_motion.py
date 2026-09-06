@@ -17,6 +17,7 @@ import os
 
 import cv2
 import numpy as np
+import src.paths as paths
 
 # fraction of frame width the min-background-cell moves per second;
 # clips under the threshold are `static`. Validated on mot (11/11):
@@ -98,7 +99,8 @@ def classify(video):
     return "ambiguous", m
 
 
-def classify_corpus(corpus, t2="/mldata/tracking"):
+def classify_corpus(corpus, t2=None):
+    t2 = t2 or paths.tier2()
     out = {}
     for v in sorted(glob.glob(os.path.join(t2, corpus, "video", "*.mp4"))):
         hint, m = classify(v)

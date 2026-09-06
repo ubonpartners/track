@@ -140,8 +140,9 @@ Rules that keep it this way:
   `search` imports `eval` and `corpus` (the registry consultation in the
   tiers spec). `cli` imports everything. `tools` is outside the package.
   `tests/test_import_graph.py` asserts this graph.
-- Every `/mldata` path goes through `paths.py`. A test greps for
-  literals.
+- Every `/mldata` path goes through `paths.py`, in `tools/` and `tests/`
+  too. `tests/test_no_literal_paths.py` scans code (not docstrings or
+  comments) for `/mldata`, `/home/`, `~/` and `expanduser(`.
 - A code comment states an invariant and links to the ledger entry for
   its history. Dates and names go in the ledger.
 - The package stays `src` for now: a package called `track` cannot
@@ -436,7 +437,7 @@ every per-clip row identical.
 Review checklist
 
 - For each moved function, which module-level names did it read
-  (`_FP_TRACK_COEF`, `PM_OVERRIDE`, `_FORCE_DICT`, `CANONICAL_SEARCH_YAML`)?
+  (`_FP_TRACK_COEF`, `PM_OVERRIDE`, `_FORCE_DICT`)?
   Each must be reachable from its new home by the same name, and
   anything set from outside (`track_test.PM_OVERRIDE = opt.pm` in
   `track.py`) must still land where the reader looks.

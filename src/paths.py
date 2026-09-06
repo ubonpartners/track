@@ -28,7 +28,10 @@ import os
 
 def _env(name, default):
     v = os.environ.get(name)
-    return v if v else default
+    if not v:
+        return default
+    v = v.rstrip("/")            # "/t1/" must not become "/t1//clip" in string builds
+    return v or "/"
 
 
 def _join(root, parts):
@@ -85,9 +88,14 @@ def repo_root():
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def autolabel_sibling():
+    """Where the autolabel checkout lives by convention: beside this repo."""
+    return os.path.join(os.path.dirname(repo_root()), "autolabel")
+
+
 def autolabel_repo():
-    """The autolabel checkout: $AUTOLABEL_PATH, else a sibling of this repo."""
-    return _env("AUTOLABEL_PATH", os.path.join(os.path.dirname(repo_root()), "autolabel"))
+    """The autolabel checkout: $AUTOLABEL_PATH, else the sibling dir."""
+    return _env("AUTOLABEL_PATH", autolabel_sibling())
 
 
 def describe():

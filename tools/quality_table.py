@@ -36,10 +36,11 @@ import sys
 from collections import defaultdict
 
 import yaml
+import src.paths as paths
 
-QTAB = "/mldata/tracking/results/qtab"
-TRACKING = "/mldata/tracking"
-OUT = "/mldata/config/track/quality_table.yaml"
+QTAB = paths.tier2("results", "qtab")
+TRACKING = paths.tier2()
+OUT = paths.config_dir("quality_table.yaml")
 
 # Clip-key prefix -> content type. The eval already tags every clip with its
 # source corpus in the key it reports, so the source is read off the data rather

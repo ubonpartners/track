@@ -32,9 +32,10 @@ import subprocess
 import sys
 
 import yaml
+import src.paths as paths
 
-OBJECTIVE = "/mldata/config/track/search/track_search_v11_mc.yaml"
-QTAB = "/mldata/tracking/results/qtab"
+OBJECTIVE = paths.search_yaml()
+QTAB = paths.tier2("results", "qtab")
 
 # res cap -> pm index in the CURRENT pm_table ((res,rate) rows; pick the first
 # row with that cap — eval streams are non-realtime so only the cap half acts).

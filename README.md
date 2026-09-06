@@ -28,6 +28,15 @@ Runtime requirements:
 - `ffmpeg` on `PATH` for MP4 → H.264 conversion in the `upyc` path
 - datasets reachable under `/mldata/...` or via equivalent local layout
 
+## Filesystem roots
+
+Every `/mldata` root the code uses is resolved in `src/paths.py` from
+`TRACK_*` environment variables (`TRACK_MLDATA`, `TRACK_TIER1`,
+`TRACK_TIER2`, `TRACK_CONFIG_DIR`, `TRACK_TRACKER_CONFIG`,
+`TRACK_SEARCH_YAML`, ...) with the dev-box layout as the default;
+`python track.py --paths` prints the resolved values. The autolabel
+checkout is `$AUTOLABEL_PATH`, else a sibling directory of this repo.
+
 ## Repository Layout
 
 | Path | Purpose |

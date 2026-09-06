@@ -17,12 +17,17 @@ import matplotlib.pyplot as plt
 import yaml
 
 from tools.capacity_curve import curve, parse_csv
+import src.paths as paths
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", action="append", required=True, metavar="NAME=PATH")
-    ap.add_argument("--table", default="/mldata/config/track/quality_table.yaml")
+    ap.add_argument("--ref", action="append", default=[], metavar="NAME=N:Q,N:Q,...",
+                    help="reference curve from archived point values (e.g. a "
+                         "digitized historical chart) — plotted thin/dotted, "
+                         "excluded from the gap shading")
+    ap.add_argument("--table", default=paths.config_dir("quality_table.yaml"))
     ap.add_argument("--group", default="ALL")
     ap.add_argument("--title", default="Jetson Orin Nano — quality vs concurrent streams")
     ap.add_argument("-o", "--out", default="capacity.png")

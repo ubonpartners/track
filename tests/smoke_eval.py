@@ -32,7 +32,9 @@ import sys
 
 import yaml
 
-OBJECTIVE = "/mldata/config/track/search/track_search_v11_mc.yaml"
+import src.paths as paths
+
+OBJECTIVE = paths.search_yaml()
 CLIPS = ("antare_knife_drawn_fixed_06",     # static, 1080p source
          "antare_knife_drawn_bwc_04",       # moving (bodycam), 1080p source
          "antare_refused_entry_fixed_03")   # static, 4K source (1280x720 in tier 2)
