@@ -1,5 +1,5 @@
 import src.trackset as ts
-import src.trackset_import as tsi
+import src.corpus.importers as importers
 import src.eval.metrics as eval_metrics
 import src.eval.report as eval_report
 import src.eval.runner as eval_runner
@@ -209,23 +209,23 @@ if __name__ == '__main__':
     stuff.makedir(log_dir)
     stuff.configure_root_logger(opt.logging, log_dir=log_dir)
     if opt.mot:
-        tsi.convert_mot()
+        importers.convert_mot()
         exit()
     if opt.personpath22:
         variant = "amodal" if opt.personpath22_amodal else "visible"
-        tsi.convert_personpath22(anno_variant=variant)
+        importers.convert_personpath22(anno_variant=variant)
         exit()
     if opt.jaad:
-        tsi.convert_jaad()
+        importers.convert_jaad()
         exit()
     if opt.otw:
-        tsi.convert_otw()
+        importers.convert_otw()
         exit()
     if opt.meva:
-        tsi.convert_meva()
+        importers.convert_meva()
         exit()
     if opt.cevo:
-        tsi.convert_cevo()
+        importers.convert_cevo()
         exit()
     if opt.track:
         test_track(opt.trackset, opt.config, display=opt.display, output=opt.output, proxy=opt.proxy, save_trackset=opt.save_trackset)

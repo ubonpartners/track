@@ -259,7 +259,7 @@ def augment_dataset(folder, limit=0, names=None, manifest=None, workers=None,
     already-augmented). Manifest runs default to two long-lived GPU workers;
     set AUTOLABEL_AUGMENT_WORKERS=1 for serial execution. Restrict scope with
     names=[stems] or manifest=path-to-reduced_N.json (see
-    trackset_import.reduce_dataset)."""
+    corpus.importers.reduce_dataset)."""
     anno_dir = os.path.join(folder, "annotation")
     if manifest:
         names = json.load(open(manifest))

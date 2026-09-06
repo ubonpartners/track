@@ -26,7 +26,7 @@ LAYER = {
     "track_search": "search",
 }
 # subpackages: every module under the prefix belongs to the layer
-PREFIX_LAYER = {"formats.": "formats", "eval.": "eval"}
+PREFIX_LAYER = {"formats.": "formats", "eval.": "eval", "corpus.": "corpus"}
 ALLOWED = {
     "paths": set(),
     "core": {"paths"},
