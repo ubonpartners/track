@@ -37,9 +37,15 @@ Runtime requirements:
 | `src/track_util.py` | Detection/track object helpers, interpolation, drawing |
 | `src/trackers.py` | `upyc`-only tracker factory |
 | `src/upyc_tracker/` | Python wrapper over `ubon_pycstuff` tracking results |
-| `src/track_test.py` | MOT metrics, detection metrics, benchmark/test orchestration |
+| `src/track_test.py` | MOT metrics, detection metrics, benchmark/test orchestration (the eval engine, not a test) |
 | `src/track_search.py` | Parameter search over `ubon_cstuff` config values |
-| `docs/specs/TRACKER_DEBUG.md` | Detailed tracker-result/debug format and migration/design notes |
+| `src/eval_compare.py` | Canonical comparator for two eval runs |
+| `src/trackset_import.py`, `src/import_antare.py` | Dataset importers: tier 0 -> tier 1 |
+| `src/corpus_manifest.py`, `src/dataset_lite.py` | Tier-1 manifest/registry and tier-2 eval-spec derivation |
+| `src/autolabel_bridge.py` | Optional bridge to the autolabel repo (auto-labelling, GT augmentation) |
+| `tools/` | Research and one-off tooling (cadence tests, capacity curve, quality grid, GPU attribution); not part of the package |
+| `tests/` | pytest suite (`python -m pytest`); `tests/smoke_eval.py` is the three-clip eval smoke |
+| `docs/` | Guides, specs, plans, research logs; start at `docs/README.md` |
 
 ## Supported Formats
 
@@ -129,7 +135,7 @@ Large arrays, vectors, embeddings, and JPEG blobs are stored inline as typed
 payload wrappers rather than in sidecar files.
 
 For low-level container and payload wrapper documentation, see the
-`stuff` repo README and `stuff/stuff/ubtrk2.py`.
+`stuff` repo README and its `ubtrk2` module.
 
 ## CLI Workflows
 
@@ -187,8 +193,9 @@ within the loaded config tree, and ambiguous repeated keys are rejected.
 
 ## Testing And Validation
 
+- `python -m pytest` runs the unit suite (`tests/`; no GPU or data needed)
+- `python tests/smoke_eval.py --out DIR` runs a three-clip eval through the objective config; `--compare A B` diffs two runs exactly
 - `--test` benchmarks tracker configs over datasets with caching and summary tables
-- `--metrics c` uses `ubon_pycstuff.c_mota_metrics` for faster metric computation
 - the replay viewer can inspect saved UBTRK2 runs directly
 - the UBTRK2 run format is tested in the shared `stuff` repo
 

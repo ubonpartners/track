@@ -98,7 +98,7 @@ sources. Five synthetic variants × 30 clips + the practical pair on the
 
 ## 4. Build tooling
 
-New `src/cadence_test.py` (builder + manifest emitter):
+New `tools/cadence_test.py` (builder + manifest emitter):
 
 - **Input**: tier-1 source video + tier-1 native annotation (never tier-2 —
   we need the full frame grid to select from).

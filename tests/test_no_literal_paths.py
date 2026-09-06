@@ -12,18 +12,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "src")
 PATTERN = re.compile(r"[\"'](/mldata|/home/|~/)")
 ALLOWED_FILES = {"paths.py"}
-# research tooling that stage 1 moves to tools/ (outside the package)
-TOOLS_PENDING_MOVE = {"cadence_test.py", "cadence_diag.py", "capacity_curve.py",
-                      "capacity_plot.py", "quality_grid.py", "quality_table.py",
-                      "gpu_attrib.py", "make_rt_configs.py", "camera_motion.py"}
 
 
 def _files():
     yield os.path.join(ROOT, "track.py")          # the CLI is part of the package
     for dp, _d, fns in os.walk(SRC):
         for fn in fns:
-            if (fn.endswith(".py") and fn not in ALLOWED_FILES
-                    and not fn.startswith("test_") and fn not in TOOLS_PENDING_MOVE):
+            if fn.endswith(".py") and fn not in ALLOWED_FILES:
                 yield os.path.join(dp, fn)
 
 

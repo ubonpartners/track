@@ -1607,12 +1607,12 @@ move that curve out.
 
 Built two tools so the curve is a measurement rather than an argument:
 
-- `src/quality_table.py` — quality at each (resolution cap × analytics rate)
+- `tools/quality_table.py` — quality at each (resolution cap × analytics rate)
   operating point, per content type, from `track.py --eval` on the val split,
   reading the eval's own `results-*.json` rollups. Content type = the corpus the
   clip came from; the mapping is explicit and unmapped clips are reported, not
   silently bucketed.
-- `src/capacity_curve.py` — joins that table with `rt_benchmark --csv` operating
+- `tools/capacity_curve.py` — joins that table with `rt_benchmark --csv` operating
   points (PM tier distribution + shed rate) to emit quality vs streams.
 
 **Long-window sweep on Orin** (12–60 streams, 60 s measurement + 15 s warmup per
@@ -2390,7 +2390,7 @@ attempt.
 
 Four earlier explanations for the carry's cost were wrong because every counter on
 the contended path mixes work with waiting. Built the missing instrument
-(`src/gpu_attrib.py` over `nsys cuda_gpu_kern_sum`, kernels bucketed by the actual
+(`tools/gpu_attrib.py` over `nsys cuda_gpu_kern_sum`, kernels bucketed by the actual
 names in `src/cuda/*.cu` and the TRT/NPP families) and then isolated the mechanism
 by config alone.
 
@@ -2972,10 +2972,10 @@ too, so a detector-free control run is now possible — which is how E52 was mea
 
 | tool | what it does |
 |---|---|
-| `src/quality_table.py` | builds the quality table from `track.py --eval` JSON rollups, per content type, with a MOTION-carry axis |
-| `src/capacity_curve.py` | joins that table with `rt_benchmark --csv` operating points → quality vs streams |
-| `src/gpu_attrib.py` | buckets `nsys cuda_gpu_kern_sum` by pipeline stage → GPU seconds per wall second |
-| `src/make_rt_configs.py` | regenerates every campaign config from the base tracker yaml |
+| `tools/quality_table.py` | builds the quality table from `track.py --eval` JSON rollups, per content type, with a MOTION-carry axis |
+| `tools/capacity_curve.py` | joins that table with `rt_benchmark --csv` operating points → quality vs streams |
+| `tools/gpu_attrib.py` | buckets `nsys cuda_gpu_kern_sum` by pipeline stage → GPU seconds per wall second |
+| `tools/make_rt_configs.py` | regenerates every campaign config from the base tracker yaml |
 | `nvof_benchmark` (app) | isolated OFA: latency/throughput vs flow size, session count, hops-per-sync |
 | `rt_benchmark` additions | `motion_percent`, `nvof_execute:` per-stage line with flow size, `nvof_sizes:` churn, `nvof_inflight:` concurrency, `--stream-hints`, fixed CSV header |
 

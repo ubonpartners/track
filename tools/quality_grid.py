@@ -1,7 +1,7 @@
 """Run the (resolution x rate) eval grid that quality_table.py consumes.
 
 One eval per operating point, on the val split, results into
-/mldata/tracking/results/qtab/<point>/ where `python -m src.quality_table`
+/mldata/tracking/results/qtab/<point>/ where `python -m tools.quality_table`
 expects them. Points (see quality_table.py):
 
     grid_r{1,2,3}_{640,512,416,320}    plain drop of non-analytics frames
@@ -19,8 +19,8 @@ runs are deliberately NOT the objective; track.py prints its not-the-objective
 warning for each, which is right.
 
 Usage:
-    python -m src.quality_grid [--only REGEX] [--dry-run]
-    python -m src.quality_table          # then build the table from the runs
+    python -m tools.quality_grid [--only REGEX] [--dry-run]
+    python -m tools.quality_table          # then build the table from the runs
 
 Rebuild this grid whenever the tracker config or eval data changes — the
 table is a property of BOTH. ~20 val evals run back to back; expect hours.
@@ -87,7 +87,7 @@ def main():
         rc = subprocess.call(cmd)
         if rc != 0:
             sys.exit(f"{name} failed rc={rc}")
-    print("grid complete; now: python -m src.quality_table")
+    print("grid complete; now: python -m tools.quality_table")
 
 
 if __name__ == "__main__":

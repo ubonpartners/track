@@ -8,7 +8,7 @@ Each config is the base tracker yaml plus a small, named delta — that is the w
 point: one variable at a time, so a result can be attributed. Run on the machine
 under test (the base yaml path must resolve there):
 
-    python -m src.make_rt_configs --out ~/rtcfg_pm_opt
+    python -m tools.make_rt_configs --out ~/rtcfg_pm_opt
     ./build/rt_benchmark --tracker-yaml ~/rtcfg_pm_opt/L_mixed.yaml --min 36 --max 36 ...
 
 Knobs that rt_benchmark OVERRIDES from its own CLI defaults, so setting them in the
@@ -135,7 +135,7 @@ def main():
         path = os.path.join(a.out, name + ".yaml")
         with open(path, "w") as f:
             f.write(f"# {name}: {desc}\n"
-                    f"# Regenerate with: python -m src.make_rt_configs --out {a.out}\n")
+                    f"# Regenerate with: python -m tools.make_rt_configs --out {a.out}\n")
             f.write(text)
         print(f"{name:22s} {desc[:78]}")
     print(f"\n{len(CONFIGS)} configs written to {a.out}")

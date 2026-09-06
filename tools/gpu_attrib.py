@@ -14,7 +14,7 @@ work, and where" without another plausible story.
 Usage:
     nsys profile -o prof_X -t cuda ./rt_benchmark ...
     nsys stats --report cuda_gpu_kern_sum --format csv -o kern_X prof_X.nsys-rep
-    python -m src.gpu_attrib --window 20 \
+    python -m tools.gpu_attrib --window 20 \
         --csv baseline=kern_A_cuda_gpu_kern_sum.csv \
         --csv carry=kern_B_cuda_gpu_kern_sum.csv
 

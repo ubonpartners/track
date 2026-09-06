@@ -14,11 +14,11 @@ changes. Rebuild both when in doubt — each is a one-command, walk-away job.
 point, then a rollup:
 
 ```bash
-python -m src.quality_grid            # runs the grid into /mldata/tracking/results/qtab/ (hours)
-python -m src.quality_table           # rolls up into /mldata/config/track/quality_table.yaml
+python -m tools.quality_grid            # runs the grid into /mldata/tracking/results/qtab/ (hours)
+python -m tools.quality_table           # rolls up into /mldata/config/track/quality_table.yaml
 ```
 
-Mechanics (all in `src/quality_grid.py`): resolution is imposed with
+Mechanics (all in `tools/quality_grid.py`): resolution is imposed with
 `--pm <idx>` where idx is looked up by res cap in the CURRENT `pm_table`
 (`ubon_cstuff include/pm_controller.h` — rows are (res,rate) pairs, so the
 index↔cap mapping is not 1:1 and the script's `PM_FOR_RES` must match the
@@ -36,8 +36,8 @@ show MOTION frames in its log / a lower quality delta vs its `grid_*` twin at
 # on the Jetson, in ubon_cstuff (build rt_benchmark first — older binaries
 # emit only 4 of the 6 pm columns):
 cmake --build build --target rt_benchmark -j6
-./src/jetson_pm_sweep.sh rt_new.csv                      # current config
-./src/jetson_pm_sweep.sh rt_old.csv /tmp/old_policy.yaml # optional comparison policy
+./tools/jetson_pm_sweep.sh rt_new.csv                      # current config
+./tools/jetson_pm_sweep.sh rt_old.csv /tmp/old_policy.yaml # optional comparison policy
 ```
 
 ~35 min per policy (8 points × 30 s). The CSV rows carry the realized PM
@@ -48,8 +48,8 @@ motion-carry fraction — the complete operating point.
 
 ```bash
 scp jetson:.../rt_new.csv .
-python -m src.capacity_curve --csv "pm_table (new)=rt_new.csv" --group ALL   # numbers
-python -m src.capacity_plot  --csv "pm_table (new)=rt_new.csv" \
+python -m tools.capacity_curve --csv "pm_table (new)=rt_new.csv" --group ALL   # numbers
+python -m tools.capacity_plot  --csv "pm_table (new)=rt_new.csv" \
                              --csv "old policy=rt_old.csv" -o capacity.png   # the chart
 ```
 

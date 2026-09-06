@@ -5,7 +5,7 @@ deltas between the first two. Joins the same two halves as capacity_curve
 (quality_table.yaml x rt_benchmark CSVs); this is just the picture.
 
 Usage:
-    python -m src.capacity_plot --csv "new=rt_new.csv" [--csv "old=rt_old.csv"] \
+    python -m tools.capacity_plot --csv "new=rt_new.csv" [--csv "old=rt_old.csv"] \
         [--group ALL] [--table /mldata/config/track/quality_table.yaml] \
         [--title "..."] [-o capacity.png]
 """
@@ -16,7 +16,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import yaml
 
-from src.capacity_curve import curve, parse_csv
+from tools.capacity_curve import curve, parse_csv
 
 
 def main():

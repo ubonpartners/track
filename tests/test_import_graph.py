@@ -38,18 +38,9 @@ ALLOWED = {
 }
 
 
-# research tooling that stage 1 moves to tools/; excluded here so the test
-# fails only for layering reasons. Delete this set once tools/ exists.
-TOOLS_PENDING_MOVE = {"cadence_test", "cadence_diag", "capacity_curve", "capacity_plot",
-                      "quality_grid", "quality_table", "gpu_attrib", "make_rt_configs",
-                      "camera_motion"}
-
-
 def _modules():
     for dp, _d, fns in os.walk(SRC):
         for fn in fns:
-            if fn[:-3] in TOOLS_PENDING_MOVE:
-                continue
             if fn.endswith(".py") and not fn.startswith("test_") and fn != "__init__.py":
                 rel = os.path.relpath(os.path.join(dp, fn), SRC)[:-3].replace(os.sep, ".")
                 yield rel, os.path.join(dp, fn)

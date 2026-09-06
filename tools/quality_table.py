@@ -25,7 +25,7 @@ key; the mapping below is explicit and exhaustive, and an unrecognised clip is
 a hard error rather than a silent omission.
 
 Usage:
-    python -m src.quality_table [--qtab DIR] [--out PATH]
+    python -m tools.quality_table [--qtab DIR] [--out PATH]
 """
 import argparse
 import glob
@@ -171,7 +171,7 @@ def main():
                 " frames are delivered as MOTION/NVOF carry frames"
                 " (performance.skip_mode: motion). Rate 1.0 is shared: with no"
                 " skipped frames the carry cannot apply.",
-        "source": "python -m src.quality_table, from track.py --eval"
+        "source": "python -m tools.quality_table, from track.py --eval"
                   " grid_*/gridm_* runs on the val split",
         "table": table,
         "table_motion_carry": table_carry,

@@ -15,7 +15,7 @@ Output: quality vs number of streams, per content group, for one or more
 policies — so two policies can be compared as curves rather than as anecdotes.
 
 Usage:
-    python -m src.capacity_curve --csv POLICY=path/to/rt.csv [POLICY2=...] \
+    python -m tools.capacity_curve --csv POLICY=path/to/rt.csv [POLICY2=...] \
         [--table /mldata/config/track/quality_table.yaml] [--group ALL]
 
 The rt_benchmark CSV header is stale (fewer names than the rows have values);
