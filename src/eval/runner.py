@@ -318,8 +318,7 @@ def on_result_callback(mpwq_context, result):
     if cache is True and mpwq_context["resultfile"] is not None:
         mpwq_context["cached_results"].append(result)
         stuff.save_atomic_pickle(mpwq_context["cached_results"], mpwq_context["resultfile"])
-
-
+        #logging.info(f"Saved {len(mpwq_context["cached_results"])} cached results")
 
 def track_test(config, split=None, desc="track test"):
     start_time=time.time()

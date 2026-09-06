@@ -4,6 +4,11 @@ The eval engine now lives in src/eval/{matching,metrics,runner,report}.
 Everything is re-exported here so old imports keep working, EXCEPT the
 mutable module global PM_OVERRIDE: set src.eval.runner.PM_OVERRIDE
 instead (a copy here would be silently ignored by the runner).
+
+Known out-of-repo importers of this shim (autolabel repo: eval/score_eval.py,
+eval/score_sweep.py, eval/iterate.py, eval/error_report.py use
+compute_metrics and summary_string) must be switched to src.eval.metrics /
+src.eval.report before this file is deleted.
 """
 from src.eval.matching import (  # noqa: F401
     mot_obj,

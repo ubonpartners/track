@@ -431,8 +431,11 @@ own sub-stage with the full protocol.
 `verify`, `load_capabilities`, `set_audit`, `set_file_source`, `allows`
 and becomes `corpus/manifest.py`.
 
-Exit criteria per sub-stage: `git diff -M` shows the moved bodies as
-renames. Tests green. Smoke eval unchanged. For 4a also a full val eval
+Exit criteria per sub-stage: for a 1-to-N split `git diff -M` cannot
+show renames, so the reviewer reconstructs the old file from the new
+modules (concatenate the top-level function/assignment bodies in the
+original order) and diffs it against `git show <commit>~1:<old file>`;
+every non-import, non-docstring difference must be explained. Tests green. Smoke eval unchanged. For 4a also a full val eval
 compared with any saved run of the same config using `eval_compare`:
 every per-clip row identical.
 
@@ -535,6 +538,12 @@ Steps
 3. Decide `allows` and `set_file_source`: wire the registry check in
    `track_search._registry_check` to `allows`, or delete both and
    amend the tiers spec.
+4. `_FORCE_DICT` in `eval/runner.py` is a debug hook read through
+   `globals()` that nothing sets anywhere: delete it or make it a
+   parameter.
+5. Before deleting the shims: the autolabel repo imports
+   `src.track_test` (compute_metrics, summary_string) and
+   `src.corpus_manifest` (set_audit); switch those four files first.
 
 Exit criteria: `vulture`-style pass (or the grep from section 1)
 reports no unreferenced top-level function. Tests green. Smoke eval

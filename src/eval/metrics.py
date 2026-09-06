@@ -27,7 +27,6 @@ from src.eval.matching import _box_in_ignore, mot_obj, permissive_iou, permissiv
 _FP_TRACK_COEF = 0.35   # per honest-FP episode per second of video
 
 
-_FP_TRACK_COEF = 0.35   # per honest-FP episode per second of video
 def fitness_score(r):
     h = r.get("fp_tracks_honest_v2")
     if h is None:                       # legacy rows w/o the honest field

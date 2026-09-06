@@ -46,7 +46,7 @@ checkout is `$AUTOLABEL_PATH`, else a sibling directory of this repo.
 | `src/track_util.py` | Detection/track object helpers, interpolation, drawing |
 | `src/trackers.py` | `upyc`-only tracker factory |
 | `src/upyc_tracker/` | Python wrapper over `ubon_pycstuff` tracking results |
-| `src/track_test.py` | MOT metrics, detection metrics, benchmark/test orchestration (the eval engine, not a test) |
+| `src/eval/` | The eval engine: `matching` (IoU, conventions), `metrics` (MOT metrics, fitness), `runner` (work queue, shared-stream runner, `track_test`), `report` (rollups, json/html) |
 | `src/track_search.py` | Parameter search over `ubon_cstuff` config values |
 | `src/eval_compare.py` | Canonical comparator for two eval runs |
 | `src/trackset_import.py`, `src/import_antare.py` | Dataset importers: tier 0 -> tier 1 |
