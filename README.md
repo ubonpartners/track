@@ -42,10 +42,10 @@ checkout is `$AUTOLABEL_PATH`, else a sibling directory of this repo.
 | Path | Purpose |
 |------|---------|
 | `track.py` | CLI entry point for view/track/test/compare/search and dataset conversion helpers |
-| `src/trackset.py` | `TrackSet` input loader, UBTRK2 run import/export, and replay viewer |
-| `src/track_util.py` | Detection/track object helpers, interpolation, drawing |
-| `src/trackers.py` | `upyc`-only tracker factory |
-| `src/upyc_tracker/` | Python wrapper over `ubon_pycstuff` tracking results |
+| `src/core/` | `trackset` (TrackSet: json/yaml + UBTRK2 storage, interpolation), `objects` (Object helpers, drawing), `display` (replay viewer) |
+| `src/tracker/` | `upyc` (wrapper over `ubon_pycstuff`), `factory` (tracker creation), `run` (`import_create(ts, ...)`: drive a tracker into a TrackSet) |
+| `src/formats/` | One parser per native dataset format, `read(...) -> TrackSet`; `formats.load(path)` dispatches by extension |
+| `src/paths.py` | Every filesystem root, env-overridable |
 | `src/eval/` | The eval engine: `matching` (IoU, conventions), `metrics` (MOT metrics, fitness), `runner` (work queue, shared-stream runner, `track_test`), `report` (rollups, json/html) |
 | `src/track_search.py` | Parameter search over `ubon_cstuff` config values |
 | `src/eval_compare.py` | Canonical comparator for two eval runs |

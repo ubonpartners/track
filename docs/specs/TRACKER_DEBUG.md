@@ -96,7 +96,7 @@ Wrappers are decoded by `stuff.decode_payload` / `stuff.decode_nested_payloads`.
 
 ---
 
-## TrackSet Mapping (`track/src/trackset.py`)
+## TrackSet Mapping (`track/src/core/trackset.py`)
 
 `TrackSet.export_track_file(path)` writes:
 
