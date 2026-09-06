@@ -11,7 +11,7 @@ import os
 import cv2
 import stuff
 
-from src.corpus.media import _native_fps, _remux_to_mp4, _transcode_h264, _video_codec
+import src.corpus.media as media
 from src.formats import (chirla as fmt_chirla, jaad as fmt_jaad, meva as fmt_meva,
                          mot as fmt_mot, otw as fmt_otw, personpath22 as fmt_personpath22,
                          roundabouthd as fmt_roundabouthd, uvg_vcm as fmt_uvg_vcm)
@@ -184,7 +184,7 @@ def _convert_meva_clip(args):
         if len(ts.frames) == 0:
             return ("empty", stem)
         if not os.path.isfile(out_video):
-            _remux_to_mp4(ts.metadata["original_video"], out_video)
+            media.remux_to_mp4(ts.metadata["original_video"], out_video)
         ts.metadata["original_video"] = out_video
         ts.export_yaml(out_anno)
     except Exception as e:
@@ -242,7 +242,7 @@ def convert_chirla(src_root=None, output_folder=None, lite=True):
                 counts["empty_gt"] += 1
                 continue
             if not os.path.isfile(out_video):
-                _remux_to_mp4(video_path, out_video)
+                media.remux_to_mp4(video_path, out_video)
             ts.metadata["original_video"] = out_video
             ts.export_yaml(out_anno)
         except Exception as e:
@@ -274,20 +274,10 @@ def convert_roundabouthd(src_root=None, output_folder=None, lite=True):
     stuff.makedir(output_folder + "/video/")
 
     def _transcode(src, dst):
-        tmp = dst + ".part.mp4"
-        for codec_args in ((["-c:v", "h264_nvenc", "-preset", "p5",
-                             "-rc", "vbr", "-cq", "22", "-b:v", "0"]),
-                           (["-c:v", "libx264", "-preset", "medium",
-                             "-crf", "22"])):
-            from src.corpus.derive import audio_args, probe_audio
-            cmd = (["ffmpeg", "-y", "-v", "error", "-i", src] + codec_args +
-                   ["-g", "30", "-pix_fmt", "yuv420p",
-                    "-movflags", "+faststart"] + audio_args(probe_audio(src))
-                   + [tmp])
-            if subprocess.run(cmd, capture_output=True).returncode == 0:
-                os.replace(tmp, dst)
-                return
-        raise RuntimeError(f"transcode failed for {src}")
+        # nvenc p5 vbr cq22, x264 medium crf22 fallback; 30-frame GOP, yuv420p,
+        # faststart, audio kept (media.transcode; recipe pinned in test_media)
+        media.transcode(src, dst, [media.NVENC_P5_VBR_CQ22, media.X264_MEDIUM_CRF22],
+                        tmp=".part.mp4", gop=30, pix_fmt="yuv420p", faststart=True)
 
     for cam in ("c001", "c002", "c003", "c004"):
         stem = "roundabouthd_" + cam
@@ -363,18 +353,15 @@ def convert_uvg_vcm(src_root=None, output_folder=None, lite=True):
             print(f"  {stem} already converted")
             continue
         if not os.path.isfile(out_video):
-            tmp = out_video + ".part.mp4"
-            cmd = ["ffmpeg", "-y", "-v", "error",
-                   "-f", "rawvideo", "-pix_fmt", "yuv444p16le",
-                   "-s", f"{w}x{h}", "-r", str(fps),
-                   "-i", os.path.join(seq_dir, yuvs[0]),
-                   "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-                   "-pix_fmt", "yuv420p", "-movflags", "+faststart", tmp]
-            r = subprocess.run(cmd, capture_output=True, text=True)
-            if r.returncode != 0:
-                print(f"  {stem}: transcode failed: {r.stderr[-200:]}")
+            try:
+                media.transcode(os.path.join(seq_dir, yuvs[0]), out_video, [media.X264_MEDIUM_CRF18],
+                                tmp=".part.mp4", keep_audio=None,
+                                pre_input=["-f", "rawvideo", "-pix_fmt", "yuv444p16le",
+                                           "-s", f"{w}x{h}", "-r", str(fps)],
+                                pix_fmt="yuv420p", faststart=True)
+            except RuntimeError as e:
+                print(f"  {stem}: transcode failed: {str(e)[-200:]}")
                 continue
-            os.replace(tmp, out_video)
         ts = trackset.TrackSet()
         fmt_uvg_vcm.read_into(ts, anno_path, out_video, w, h, fps)
         ts.export_yaml(out_anno)
@@ -524,7 +511,7 @@ def convert_otw(src_root=None, output_folder=None,
             # pts-monotonicity-checked remux (transcode fallback) rather
             # than copying bytes verbatim — mirrors the MEVA worker.
             if not os.path.isfile(out_video):
-                _remux_to_mp4(video_path, out_video)
+                media.remux_to_mp4(video_path, out_video)
             ts.metadata["original_video"] = out_video
             ts.export_yaml(out_anno, output_video=None)
 
@@ -682,18 +669,12 @@ def convert_bdd100k_kaggle(src_root=None, output_folder=None, limit=0, lite=True
             # that read the raw stream (NVDEC/C paths) would see them
             # sideways. Re-encoding applies the rotation to pixels and
             # strips the metadata (ffmpeg autorotate default).
-            tmp = f"{out_video}.part{os.getpid()}.mp4"
-            rc = subprocess.run(
-                ["ffmpeg", "-y", "-v", "error", "-i", src_video,
-                 "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-                 "-pix_fmt", "yuv420p", "-movflags", "+faststart",
-                 tmp])
-            if rc.returncode != 0:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
+            try:
+                media.transcode(src_video, out_video, [media.X264_FAST_CRF18], keep_audio=None,
+                                pix_fmt="yuv420p", faststart=True)
+            except RuntimeError:
                 print(f"  FAIL remux {vid}")
                 continue
-            os.replace(tmp, out_video)
         track_id_map = {}
         by_frame = {}
         for r in by_video[vid]:
@@ -774,9 +755,9 @@ def convert_autolabel_folder(src_folder, output_folder, shard="",
                 # AV1 sources: rfdetr's worker env can't decode them, so
                 # transcode to h264 as the dataset-local copy up front and
                 # autolabel that file instead of the original
-                if _video_codec(src) == "av1":
+                if media.video_codec(src) == "av1":
                     if not os.path.isfile(out_video):
-                        _transcode_h264(src, out_video)
+                        media.transcode_h264(src, out_video)
                     src = out_video
                 autolabel_video(src, out_anno, convention=convention,
                                 cuts=cuts)
@@ -790,7 +771,7 @@ def convert_autolabel_folder(src_folder, output_folder, shard="",
                     # .mov/.avi/.mkv sources: repackage into a real mp4
                     # container (pts-checked, transcode fallback) rather
                     # than copying foreign bytes to a .mp4 name
-                    _remux_to_mp4(src, out_video)
+                    media.remux_to_mp4(src, out_video)
                 else:
                     shutil.copy(src, out_video)
             # point the annotation at the dataset-local video copy
@@ -800,7 +781,7 @@ def convert_autolabel_folder(src_folder, output_folder, shard="",
             # frame_rate; track consumers treat frame_rate as the video's
             # native clock (the tracker times decoded frames as index/fps,
             # so a halved rate plays detections at 2x their true time)
-            d["metadata"]["frame_rate"] = _native_fps(out_video)
+            d["metadata"]["frame_rate"] = media.native_fps(out_video)
             # fully-autolabelled: annotation completeness only above the
             # detector-reliability knee (normalized height, per-class)
             d["metadata"]["min_annotated_height"] = {"person": 0.045}

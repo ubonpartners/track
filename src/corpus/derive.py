@@ -52,7 +52,6 @@ audio codecs that can be stream-copied into mp4 and that the tracker's
 mp4 demuxer hands on (ubon_cstuff mp4_demux.h: audio comes out as raw
 AAC). Anything else present is re-encoded to AAC; no audio -> -an.
 """
-from fractions import Fraction
 import argparse
 import json
 import math
@@ -63,6 +62,9 @@ import sys
 
 from src.corpus.manifest import load_capabilities
 import src.paths as paths
+import src.corpus.media as media
+from src.corpus.media import MP4_COPY_AUDIO, audio_args, probe_audio  # noqa: F401 (re-exported for the dataset_lite shim)
+from src.corpus.media import has_backward_pts, scale_dims  # noqa: F401 (used here and re-exported)
 
 
 def choose_divisor(src_fps, min_fps):
@@ -100,68 +102,36 @@ def divisor_from_config(src_fps, hint, config_path=None):
     return max(1, int(math.ceil(delta * src_fps - 1e-9)))
 
 
-def scale_dims(w, h, max_edge=1280):
-    """Longest side capped at max_edge, aspect kept, both sides even.
-    Never upscales."""
-    long_side = max(w, h)
-    if long_side <= max_edge:
-        return w, h
-    s = max_edge / float(long_side)
-    return (int(round(w * s / 2)) * 2, int(round(h * s / 2)) * 2)
-
-
 def probe(video):
-    out = subprocess.check_output(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0",
-         "-show_entries", "stream=width,height,avg_frame_rate",
-         "-of", "json", video])
-    st = json.loads(out)["streams"][0]
-    fps = float(Fraction(st["avg_frame_rate"]))
-    return int(st["width"]), int(st["height"]), fps
+    """(width, height, fps) of the first video stream."""
+    i = media.probe_video(video)
+    return i.width, i.height, i.fps
 
 
-# audio codecs that can be stream-copied into mp4 and that the tracker's
-# mp4 demuxer hands on (ubon_cstuff mp4_demux.h: audio comes out as raw
-# AAC). Anything else present is re-encoded to AAC; no audio -> -an.
-MP4_COPY_AUDIO = {"aac"}
-
-
-def probe_audio(video):
-    """codec name of the first audio stream, or None."""
-    out = subprocess.check_output(
-        ["ffprobe", "-v", "error", "-select_streams", "a:0",
-         "-show_entries", "stream=codec_name", "-of", "csv=p=0", video])
-    name = out.decode().strip().rstrip(",")
-    return name or None
-
-
-def audio_args(codec):
-    """ffmpeg output args that PRESERVE the source audio (MB 2026-09-06:
-    eval media must keep audio when the source has it — the tracker
-    runs audio analytics). codec = probe_audio(src)."""
-    if codec is None:
-        return ["-an"]
-    if codec in MP4_COPY_AUDIO:
-        return ["-map", "0:v:0", "-map", "0:a:0", "-c:a", "copy"]
-    return ["-map", "0:v:0", "-map", "0:a:0", "-c:a", "aac", "-b:a", "160k"]
-
-
-def has_backward_pts(video):
-    """True when any DISPLAY-order packet timestamp steps backward — the
-    broken-container jitter that corrupts time-based analytics."""
-    out = subprocess.check_output(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0",
-         "-show_entries", "frame=pts_time", "-of", "csv=p=0", video])
-    last = None
-    for line in out.decode().split("\n"):
-        line = line.strip().rstrip(",")
-        if not line:
-            continue
-        t = float(line)
-        if last is not None and t < last:
-            return True
-        last = t
-    return False
+def transcode(src, dst, divisor, dims, out_fps, max_seconds, dry_run=False):
+    """The tier-2 eval-spec encode: keep every divisor-th frame, restamp
+    onto a clean out_fps grid, scale to dims, I+P only, ~2 s GOP, audio
+    preserved. NVENC first, x264 fallback (media.transcode). Written
+    straight to dst: derive_tracking passes its own temp name."""
+    vf = []
+    if divisor > 1:
+        vf.append(f"select='not(mod(n\\,{divisor}))'")
+    # clean-CFR restamp onto the analytics grid: jittery/VFR source pts
+    # can land 2-3% off-grid, inside the tracker gate's ~2.5-4% margin
+    # (uc_v11 min_time_delta comment) — synthetic stamps make the grid
+    # exact by construction; rewrite_annotation snaps GT times to match
+    vf.append(f"setpts=N/({out_fps}*TB)")
+    w, h = dims
+    vf.append(f"scale={w}:{h}")
+    gop = max(1, int(round(2 * out_fps)))
+    pre = []
+    if max_seconds is not None:
+        pre = ["-t", str(max_seconds + 0.5)]  # pad half a frame period; the select+json caps exactly
+    # NVENC session churn fails intermittently (exit 187) on long batch
+    # runs; x264 keeps the same I+P contract (-bf 0)
+    return media.transcode(src, dst, [media.NVENC_P4_CQ23, media.X264_VERYFAST_CRF23],
+                           tmp=None, vf=vf, pre_input=pre, fps_mode="vfr",
+                           gop=gop, bf=0, dry_run=dry_run)
 
 
 def rewrite_annotation(d, src_fps, divisor, dims, max_seconds, lite_video,
@@ -220,35 +190,6 @@ def rewrite_annotation(d, src_fps, divisor, dims, max_seconds, lite_video,
     out["metadata"] = md
     out["frames"] = kept
     return out, len(kept), dropped
-
-
-def transcode(src, dst, divisor, dims, out_fps, max_seconds):
-    vf = []
-    if divisor > 1:
-        vf.append(f"select='not(mod(n\\,{divisor}))'")
-    # clean-CFR restamp onto the analytics grid: jittery/VFR source pts
-    # can land 2-3% off-grid, inside the tracker gate's ~2.5-4% margin
-    # (uc_v11 min_time_delta comment) — synthetic stamps make the grid
-    # exact by construction; rewrite_annotation snaps GT times to match
-    vf.append(f"setpts=N/({out_fps}*TB)")
-    w, h = dims
-    vf.append(f"scale={w}:{h}")
-    gop = max(1, int(round(2 * out_fps)))
-    cmd = ["ffmpeg", "-y", "-loglevel", "error"]
-    if max_seconds is not None:
-        cmd += ["-t", str(max_seconds + 0.5)]  # pad half a frame period; the select+json caps exactly
-    cmd += ["-i", src, "-vf", ",".join(vf), "-fps_mode", "vfr"]
-    cmd += audio_args(probe_audio(src))
-    tail = ["-g", str(gop), "-bf", "0", dst]
-    try:
-        subprocess.check_call(
-            cmd + ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"] + tail)
-    except subprocess.CalledProcessError:
-        # NVENC session churn fails intermittently (exit 187) on long
-        # batch runs; x264 keeps the same I+P contract (-bf 0)
-        subprocess.check_call(
-            cmd + ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]
-            + tail)
 
 
 def process_dataset(root, min_fps=None, max_seconds=None, drop_jitter=False,

@@ -52,10 +52,9 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
 import sys
-from fractions import Fraction
 
+import src.corpus.media as media
 import src.paths as paths
 from src.formats.antare import (CLASS_MAP, GT_CLASSES, build_annotation,  # noqa: F401 (re-exported for callers/tests)
                                 load_gt)
@@ -93,17 +92,9 @@ def probe(video):
     """(width, height, fps, n_frames). Frame count from packet count, not
     the container's nb_frames tag. Refuses VFR sources: frame k -> t=(k-1)/fps
     is only true on a constant-rate stream."""
-    out = subprocess.check_output(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_packets",
-         "-show_entries",
-         "stream=width,height,avg_frame_rate,r_frame_rate,nb_read_packets",
-         "-of", "json", video])
-    st = json.loads(out)["streams"][0]
-    avg = Fraction(st["avg_frame_rate"])
-    r = Fraction(st["r_frame_rate"])
-    assert avg == r, f"{video}: VFR ({avg} avg vs {r} r) — not importable as-is"
-    return (int(st["width"]), int(st["height"]), float(avg),
-            int(st["nb_read_packets"]))
+    i = media.probe_video(video, count=True)
+    assert i.fps == i.r_fps, f"{video}: VFR ({i.fps} avg vs {i.r_fps} r) — not importable as-is"
+    return i.width, i.height, i.fps, i.n_frames
 
 
 def camera_hint(cam):
