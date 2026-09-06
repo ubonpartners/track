@@ -11,7 +11,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root, for src.*
-import src.trackset as trackset
+import src.core.trackset as trackset
 
 
 def iou(a, b):

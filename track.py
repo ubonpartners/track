@@ -1,5 +1,5 @@
 import src.core.trackset as ts
-import src.core.display as display
+import src.core.display as core_display
 import src.corpus.importers as importers
 import src.eval.metrics as eval_metrics
 import src.eval.report as eval_report
@@ -121,7 +121,7 @@ def compare_track(t, compare_config=None, display=True):
     for i, x in enumerate(trackset_compare):
         print(f"{i} {names_compare[i]:20s}) {eval_report.summary_string(metrics_compare[i])}")
     if display:
-        display.display_trackset(trackset_list=trackset_compare, trackset_gt=trackset_gt, frame_events_list=frame_events_list, output=None)
+        core_display.display_trackset(trackset_list=trackset_compare, trackset_gt=trackset_gt, frame_events_list=frame_events_list, output=None)
 
 def test_track(t, config_file, display=False, output=None, proxy=None, save_trackset=None):
     trackset_gt=ts.TrackSet(t)
@@ -154,7 +154,7 @@ def test_track(t, config_file, display=False, output=None, proxy=None, save_trac
         trackset.export_track_file(save_trackset)
         print(f"Saved tracked run to {save_trackset}")
     if display:
-        display.display_trackset(trackset_list=[trackset], trackset_gt=trackset_gt, frame_events_list=[frame_events], output=output)
+        core_display.display_trackset(trackset_list=[trackset], trackset_gt=trackset_gt, frame_events_list=[frame_events], output=output)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='view.py')
@@ -251,7 +251,7 @@ if __name__ == '__main__':
         eval_runner.track_test(opt.test)
         exit()
     if opt.view and opt.trackset is not None:
-        display.display_trackset(trackset_gt=opt.trackset)
+        core_display.display_trackset(trackset_gt=opt.trackset)
         exit()
 
     print("No option specified")

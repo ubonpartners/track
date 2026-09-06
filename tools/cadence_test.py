@@ -175,9 +175,9 @@ def select_clips(max_clips=MAX_CLIPS):
 
 
 def build_clip(clip, variant, gen, target_fps=TARGET_FPS, max_edge=1280):
-    import src.trackset as trackset
-    from src.dataset_lite import scale_dims
-    from src.corpus_manifest import load_capabilities
+    import src.core.trackset as trackset
+    from src.corpus.derive import scale_dims
+    from src.corpus.manifest import load_capabilities
 
     p = clip["src_fps"] / target_fps
     kept, cycle = gen(p)
