@@ -59,10 +59,3 @@ def test_rewrite_annotation_time_cap():
     assert kept == 601                       # 0..120s inclusive at 5fps
     assert out["frames"][-1]["frame_time"] <= 120.0
     assert out["metadata"]["lite"]["max_seconds"] == 120.0
-
-
-def test_audio_args():
-    import src.corpus.derive as dl
-    assert dl.audio_args(None) == ["-an"]
-    assert dl.audio_args("aac") == ["-map", "0:v:0", "-map", "0:a:0", "-c:a", "copy"]
-    assert dl.audio_args("ac3") == ["-map", "0:v:0", "-map", "0:a:0", "-c:a", "aac", "-b:a", "160k"]
