@@ -12,6 +12,8 @@
 #     correspond to retained frames. BDD's sparse 5fps GT lands on the
 #     retained cadence for any N dividing 6;
 #   - no B-frames, I+P only, GOP ~2s of output frames;
+#   - audio PRESERVED when the source has it (AAC copied, else re-encoded
+#     to AAC; the tracker runs audio analytics on the same file);
 #   - optional hard duration cap (MEVA: 120s);
 #
 # AUTOLABEL ORDERING (the invariant that keeps GT quality): auto-annotation
@@ -107,6 +109,32 @@ def probe(video):
     return int(st["width"]), int(st["height"]), fps
 
 
+# audio codecs that can be stream-copied into mp4 and that the tracker's
+# mp4 demuxer hands on (ubon_cstuff mp4_demux.h: audio comes out as raw
+# AAC). Anything else present is re-encoded to AAC; no audio -> -an.
+MP4_COPY_AUDIO = {"aac"}
+
+
+def probe_audio(video):
+    """codec name of the first audio stream, or None."""
+    out = subprocess.check_output(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0",
+         "-show_entries", "stream=codec_name", "-of", "csv=p=0", video])
+    name = out.decode().strip().rstrip(",")
+    return name or None
+
+
+def audio_args(codec):
+    """ffmpeg output args that PRESERVE the source audio (MB 2026-09-06:
+    eval media must keep audio when the source has it — the tracker
+    runs audio analytics). codec = probe_audio(src)."""
+    if codec is None:
+        return ["-an"]
+    if codec in MP4_COPY_AUDIO:
+        return ["-map", "0:v:0", "-map", "0:a:0", "-c:a", "copy"]
+    return ["-map", "0:v:0", "-map", "0:a:0", "-c:a", "aac", "-b:a", "160k"]
+
+
 def has_backward_pts(video):
     """True when any DISPLAY-order packet timestamp steps backward — the
     broken-container jitter that corrupts time-based analytics."""
@@ -198,7 +226,8 @@ def transcode(src, dst, divisor, dims, out_fps, max_seconds):
     cmd = ["ffmpeg", "-y", "-loglevel", "error"]
     if max_seconds is not None:
         cmd += ["-t", str(max_seconds + 0.5)]  # pad half a frame period; the select+json caps exactly
-    cmd += ["-i", src, "-vf", ",".join(vf), "-fps_mode", "vfr", "-an"]
+    cmd += ["-i", src, "-vf", ",".join(vf), "-fps_mode", "vfr"]
+    cmd += audio_args(probe_audio(src))
     tail = ["-g", str(gop), "-bf", "0", dst]
     try:
         subprocess.check_call(
@@ -267,7 +296,7 @@ def process_dataset(root, min_fps=None, max_seconds=None, drop_jitter=False,
             if not os.path.exists(adst):
                 subprocess.check_call(
                     ["ffmpeg", "-y", "-loglevel", "error", "-t", str(max_seconds),
-                     "-i", src, "-c", "copy", "-an", adst])
+                     "-i", src, "-c", "copy", adst])
         new, kept, droppedf = rewrite_annotation(d, fps, divisor, dims,
                                                  max_seconds, dst,
                                                  hint=hint,

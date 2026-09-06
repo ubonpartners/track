@@ -228,7 +228,10 @@ actually evaluates, per clip:
 - resolution capped at 1280 (longest side), framerate decimated to the
   analytics grid selected by the tracker config's
   `min_time_delta_process` for the given camera-class `hint`
-  (`static` | `bodycam`), I+P-only h264, audio stripped;
+  (`static` | `bodycam`), I+P-only h264, audio preserved when the
+  source has it (AAC copied, other codecs re-encoded to AAC; changed
+  2026-09-06 from audio-stripped — corpora derived before that date
+  have silent tier-2 media until re-derived);
 - the annotation subset to the retained frames, with lite provenance
   and a `source_video` pointer back to tier 1;
 - the recipe recorded in tier 2 as `derive_recipe.json`, so a bare

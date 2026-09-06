@@ -132,6 +132,13 @@ CAPABILITIES_SEED = {
                       "geometry": "detector-tight",
                       "occlusion": "n/a", "artifacts": "night_strobe",
                       "approved_uses": ["train_detector"]},
+    "antare_bwc": {"box_convention": "visible",  # eyeballed pub-garden f1 / market-halls f300: edge-clipped visible extents
+                   "completeness": "complete(human MOT labels, every frame)",
+                   "density": "per_frame",
+                   "geometry": "unaudited(loose in places)",
+                   "occlusion": "unaudited", "artifacts": None,
+                   "approved_uses": ["screen", "val", "gate_association",
+                                     "gate_detection"]},
     "raw_movies": {"box_convention": "fullbody",
                    "completeness": "derived(pure autolabel output + scene "
                                    "cuts; no human GT)",
@@ -185,6 +192,13 @@ CORPUS_INFO = {
     "bwc-videotext": {"license": "internal",
                       "source_root": "internal bwc footage",
                       "import_recipe": "autolabel-labelled (no human GT)"},
+    "antare_bwc": {"license": "internal (antare)",
+                   "source_root": "/mldata/downloaded_datasets/antare/ "
+                                  "{individuals - body camera-20260902T102854Z-1-001, "
+                                  "multiple views - body camera and fixed-20260906T050034Z-1-001}",
+                   "import_recipe": "import_antare: mp4 copied unchanged + "
+                                    "dense MOT GT (frame k == video frame k-1); "
+                                    "per-clip camera hint in metadata (bodycam/static)"},
     "raw_movies": {"license": "unlicensed movie/trailer footage — "
                               "INTERNAL EVAL ONLY, never train, never ship",
                    "source_root": "/mldata/video/youtube",
@@ -310,17 +324,24 @@ def verify(corpus):
     return True
 
 
-def derive_tracking(corpus, hint=None, max_seconds=None, hint_overrides=None):
+def derive_tracking(corpus, hint=None, max_seconds=None, hint_overrides=None,
+                    divisor=None):
     """tier 1 -> tier 2 EVAL-SPEC derivation (MB spec 2026-07-24): for
     every tier-1 video+annotation pair, produce in tier 2 the version
     track.py actually evaluates — resolution capped at 1280, framerate
     decimated to the analytics grid the tracker config's
     min_time_delta_process (per camera-class hint) selects, I+P-only
-    h264, no audio — plus the annotation subset to the retained frames
+    h264, source audio preserved (AAC) — plus the annotation subset to the retained frames
     (native-grid truth stays in tier 1; a tracker-config change only
     needs a re-derive, never a re-autolabel). No video_lite/, no
     generated_h264/, no h264 cache: the tier-2 mp4 is the one eval
     artifact, ingested directly via run_on_mp4_file.
+
+    `divisor` (optional) FORCES the framerate divisor instead of deriving
+    it from the hint (e.g. 1 = keep the native frame timing; antare_bwc
+    2026-09-06: 10 fps source kept at 10 fps by MB instruction, where the
+    bodycam gate would have halved it). Recorded in the recipe so
+    `check` judges the clip against the same grid.
 
     The recipe (hint/max_seconds) is recorded in tier 2 as
     derive_recipe.json on first use, so a bare `derive <corpus>` refresh
@@ -337,6 +358,7 @@ def derive_tracking(corpus, hint=None, max_seconds=None, hint_overrides=None):
         r = _json.load(open(recipe_path))
         hint, max_seconds = r["hint"], r.get("max_seconds")
         hint_overrides = hint_overrides or r.get("hint_overrides")
+        divisor = divisor if divisor is not None else r.get("divisor")
     if hint is None:
         print(f"{corpus}: no hint given and no {recipe_path}; "
               f"pass hint=static|bodycam", flush=True)
@@ -346,7 +368,7 @@ def derive_tracking(corpus, hint=None, max_seconds=None, hint_overrides=None):
     os.makedirs(os.path.join(dst, "annotation"), exist_ok=True)
     with open(recipe_path, "w") as f:
         _json.dump({"hint": hint, "max_seconds": max_seconds,
-                    "hint_overrides": hint_overrides}, f)
+                    "hint_overrides": hint_overrides, "divisor": divisor}, f)
     done = skipped = missing = 0
     for name in sorted(os.listdir(os.path.join(src, "annotation"))):
         if not name.endswith(".json") or name.endswith(".meta.json"):
@@ -367,16 +389,19 @@ def derive_tracking(corpus, hint=None, max_seconds=None, hint_overrides=None):
                 and os.path.getmtime(d_anno) >= os.path.getmtime(s_vid)):
             skipped += 1
             continue
-        clip_hint = hint_overrides.get(stem, hint)
+        # per-clip camera class: explicit override > tier-1 metadata.hint
+        # (importer-declared, e.g. antare_bwc mixes body-worn and fixed
+        # cameras in one corpus) > corpus default
+        d = _json.load(open(s_anno))
+        clip_hint = hint_overrides.get(stem) or (d.get("metadata") or {}).get("hint") or hint
         w, h, fps = probe(s_vid)
-        divisor = divisor_from_config(fps, clip_hint)
+        clip_div = divisor or divisor_from_config(fps, clip_hint)
         dims = scale_dims(w, h)
         tmp_vid = d_vid + f".part{os.getpid()}.mp4"
-        transcode(s_vid, tmp_vid, divisor, dims, fps / divisor, max_seconds)
+        transcode(s_vid, tmp_vid, clip_div, dims, fps / clip_div, max_seconds)
         os.replace(tmp_vid, d_vid)
-        d = _json.load(open(s_anno))
         new, kept, dropped = rewrite_annotation(
-            d, fps, divisor, dims, max_seconds, d_vid, hint=clip_hint,
+            d, fps, clip_div, dims, max_seconds, d_vid, hint=clip_hint,
             min_delta=min_delta_from_config(clip_hint))
         new["metadata"]["source_video"] = s_vid
         caps = load_capabilities(corpus)
@@ -390,8 +415,8 @@ def derive_tracking(corpus, hint=None, max_seconds=None, hint_overrides=None):
             _json.dump(new, f)
         os.replace(tmp, d_anno)
         done += 1
-        print(f"  {stem}: {w}x{h}@{fps:.2f} /{divisor} -> "
-              f"{dims[0]}x{dims[1]}@{fps / divisor:.2f} "
+        print(f"  {stem} [{clip_hint}]: {w}x{h}@{fps:.2f} /{clip_div} -> "
+              f"{dims[0]}x{dims[1]}@{fps / clip_div:.2f} "
               f"({kept} frames kept, {dropped} dropped)", flush=True)
     print(f"{corpus}: {done} derived, {skipped} current, "
           f"{missing} without video -> {dst}", flush=True)
@@ -420,6 +445,10 @@ def check_tracking(corpus, purge_legacy=False):
         return False
     problems = []
     purged = []
+    forced_div = None
+    rp = os.path.join(root, "derive_recipe.json")
+    if os.path.isfile(rp):
+        forced_div = json.load(open(rp)).get("divisor")
     # legacy artifacts at any depth
     for base, dirs, files in os.walk(root):
         for d in list(dirs):
@@ -499,10 +528,11 @@ def check_tracking(corpus, purge_legacy=False):
         L = md.get("lite") or {}
         src_fps, hint = L.get("source_fps"), md.get("hint")
         if src_fps and hint:
-            want = src_fps / divisor_from_config(src_fps, hint)
+            want = src_fps / (forced_div or divisor_from_config(src_fps, hint))
             if abs(vfps - want) > 0.15:
                 problems.append(f"{stem}: fps {vfps:.3f} != analytics grid "
-                                f"{want:.3f} (hint {hint})")
+                                f"{want:.3f} (hint {hint}"
+                                f"{f', forced divisor {forced_div}' if forced_div else ''})")
             if abs(md.get("frame_rate", 0) - want) > 0.15:
                 problems.append(f"{stem}: metadata frame_rate "
                                 f"{md.get('frame_rate')} off grid {want:.3f}")
@@ -528,8 +558,10 @@ def main():
     for corpus in args[1:]:
         if args[0] == "derive":
             ms = opts.get("max-seconds")
+            dv = opts.get("divisor")
             r = derive_tracking(corpus, hint=opts.get("hint"),
-                                max_seconds=float(ms) if ms else None)
+                                max_seconds=float(ms) if ms else None,
+                                divisor=int(dv) if dv else None)
         elif args[0] == "check":
             r = check_tracking(corpus,
                                purge_legacy="purge-legacy" in

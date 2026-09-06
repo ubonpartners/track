@@ -927,9 +927,10 @@ def _remux_to_mp4(src, dst):
     tmp = dst + ".part.mp4"
     fps = _native_fps(src)
     copy_args = ["-c", "copy"]
+    from src.dataset_lite import audio_args, probe_audio
     transcode_args = ["-vf", f"setpts=N/{fps}/TB", "-r", f"{fps}",
-                      "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-                      "-an"]
+                      "-c:v", "libx264", "-preset", "medium", "-crf", "18"
+                      ] + audio_args(probe_audio(src))
     r = None
     for args in (copy_args, transcode_args):
         cmd = ["ffmpeg", "-y", "-v", "error", "-i", src] + args + ["-movflags", "+faststart", tmp]
@@ -1056,9 +1057,11 @@ def convert_roundabouthd(
                              "-rc", "vbr", "-cq", "22", "-b:v", "0"]),
                            (["-c:v", "libx264", "-preset", "medium",
                              "-crf", "22"])):
+            from src.dataset_lite import audio_args, probe_audio
             cmd = (["ffmpeg", "-y", "-v", "error", "-i", src] + codec_args +
                    ["-g", "30", "-pix_fmt", "yuv420p",
-                    "-movflags", "+faststart", "-an", tmp])
+                    "-movflags", "+faststart"] + audio_args(probe_audio(src))
+                   + [tmp])
             if subprocess.run(cmd, capture_output=True).returncode == 0:
                 os.replace(tmp, dst)
                 return
@@ -1484,11 +1487,12 @@ def _transcode_h264(src, dst):
     crf 18) for source codecs autolabel's rfdetr worker env cannot decode
     (AV1). Temp-name write so interrupted runs can't leave a partial mp4."""
     import subprocess
+    from src.dataset_lite import audio_args, probe_audio
     tmp = f"{dst}.part{os.getpid()}.mp4"
     r = subprocess.run(
         ["ffmpeg", "-y", "-v", "error", "-i", src,
-         "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-an",
-         "-movflags", "+faststart", tmp],
+         "-c:v", "libx264", "-preset", "medium", "-crf", "18"]
+        + audio_args(probe_audio(src)) + ["-movflags", "+faststart", tmp],
         capture_output=True, text=True)
     if r.returncode != 0:
         if os.path.exists(tmp):

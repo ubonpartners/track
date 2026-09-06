@@ -1,62 +1,107 @@
-# Pure-logic tests for the antare importer: chunking, MOT parsing,
-# class mapping, retained-frame-index time mapping. No ffmpeg.
+# Pure-logic tests for the antare dense-GT importer: MOT parsing, class
+# mapping, frame -> time mapping, clipping, empty-frame emission. No ffmpeg.
+
+import os
 
 import src.import_antare as ia
 
 
-def test_chunk_spans():
-    assert ia.chunk_spans(300.3) == [(0.0, 120.0), (120.0, 240.0), (240.0, 300.3)]
-    # 46s tail kept (>=30), 20s tail dropped
-    s = ia.chunk_spans(1126.46)
-    assert len(s) == 10 and s[-1] == (1080.0, 1126.46)
-    assert ia.chunk_spans(260.0) == [(0.0, 120.0), (120.0, 240.0)]
-    assert ia.chunk_spans(90.0) == [(0.0, 90.0)]
+def test_load_gt(tmp_path):
+    (tmp_path / "labels.txt").write_text("person\nbicycle\ncar\n")
+    (tmp_path / "gt.txt").write_text(
+        "1,0,10,20,30,40,1,1,1.0\n"
+        "2,1,0.5,0.5,1,1,1,2,1.0\n"
+        "2,2,0,0,5,5,1,9,1.0\n"     # class int beyond labels -> other
+        "junk\n")
+    rows = ia.load_gt(str(tmp_path))
+    assert rows == [(1, 0, 10.0, 20.0, 30.0, 40.0, "person"),
+                    (2, 1, 0.5, 0.5, 1.0, 1.0, "bicycle"),
+                    (2, 2, 0.0, 0.0, 5.0, 5.0, "other")]
 
 
-def test_scale_dims():
-    assert ia.scale_dims(1920, 1440) == (1280, 960)
-    assert ia.scale_dims(1280, 720) == (1280, 720)
-
-
-def test_retained_positions():
-    # 10 frames at 0.5s spacing starting at pts 6.0 (justin-style offset),
-    # halved: retained = even global indices inside the window.
-    pts = [6.0 + 0.5 * n for n in range(10)]
-    pos = ia.retained_positions(pts, 6.0, 9.0, halve=True)
-    assert pos == {0: 0, 2: 1, 4: 2}          # pts 6.0, 7.0, 8.0 (8.5 odd, 9.0 out)
-    pos_all = ia.retained_positions(pts, 6.0, 9.0, halve=False)
-    assert pos_all == {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5}
-    # VFR: an extra-long gap shifts pts but positions stay index-based
-    pts_vfr = [0.0, 0.04, 0.08, 0.50, 0.54, 0.58]
-    assert ia.retained_positions(pts_vfr, 0.0, 1.0, halve=True) == {0: 0, 2: 1, 4: 2}
-
-
-def test_chunk_annotation_mapping():
-    # source: 8 frames, stride 2 (image k = frame 2k), halved -> retained
-    # even frames; out_fps = 2.0 -> tracker timeline 0.0, 0.5, 1.0, ...
-    pts = [10.0 + 0.25 * n for n in range(8)]        # stream starts at 10.0
-    pos = ia.retained_positions(pts, 10.0, 11.5, halve=True)
-    assert pos == {0: 0, 2: 1, 4: 2}                  # frames at pts 10.0 10.5 11.0
+def test_build_annotation_mapping():
     rows = [
-        (0, 1, 192.0, 144.0, 192.0, 288.0, "person"),   # image 0 -> frame 0 -> t 0.0
-        (0, 2, 0.0, 0.0, 960.0, 720.0, "car"),
-        (1, 1, 200.0, 150.0, 192.0, 288.0, "person"),   # image 1 -> frame 2 -> t 0.5
-        (1, 3, 10.0, 10.0, 50.0, 50.0, "bicycle"),
-        (2, 5, 5.0, 5.0, 20.0, 20.0, "unknown_thing"),  # image 2 -> frame 4 -> t 1.0
-        (3, 4, 0.0, 0.0, 10.0, 10.0, "truck"),          # image 3 -> frame 6: outside window
+        (1, 7, 192.0, 144.0, 192.0, 288.0, "person"),
+        (1, 8, 0.0, 0.0, 960.0, 720.0, "car"),
+        (3, 7, 200.0, 1400.0, 192.0, 100.0, "person"),   # overruns bottom edge
+        (3, 9, 5.0, 5.0, 20.0, 20.0, "unknown_thing"),
+        (5, 1, 0.0, 0.0, 10.0, 10.0, "truck"),            # beyond n_frames
     ]
-    doc = ia.chunk_annotation(rows, pos, 2, 2.0, 1920, 1440, "/v.mp4", cadence=0.5)
-    assert doc["metadata"]["classes"] == ["person", "vehicle", "other"]
-    assert doc["metadata"]["sparse_gt"]["annotation_cadence_s"] == 0.5
-    f0 = doc["frames"][0]
-    assert f0["frame_time"] == 0.0
-    assert f0["objects"]["1"]["class"] == 0                  # person
-    assert f0["objects"]["2"]["class"] == 1                  # car -> vehicle
-    assert f0["objects"]["1"]["box"] == [0.1, 0.1, 0.2, 0.3]
-    f1 = doc["frames"][1]
-    assert f1["frame_time"] == 0.5                            # retained index 1 / 2.0fps
-    assert f1["objects"]["3"]["class"] == 1                  # bicycle -> vehicle
-    f2 = doc["frames"][2]
-    assert f2["frame_time"] == 1.0
-    assert f2["objects"]["5"]["class"] == 2                  # unknown -> other
-    assert all("4" not in fr["objects"] for fr in doc["frames"])  # out-of-window excluded
+    doc, dropped = ia.build_annotation(rows, 4, 10.0, 1920, 1440, "/v.mp4")
+    assert dropped == 1
+    md = doc["metadata"]
+    assert md["classes"] == ["person", "vehicle", "other"]
+    assert md["frame_rate"] == 10.0 and (md["width"], md["height"]) == (1920, 1440)
+    assert md["original_video"] == "/v.mp4"
+    assert [f["frame_id"] for f in doc["frames"]] == [1, 2, 3, 4]
+    assert [f["frame_time"] for f in doc["frames"]] == [0.0, 0.1, 0.2, 0.3]
+    f1, f2, f3, f4 = doc["frames"]
+    assert f1["objects"]["7"]["class"] == 0
+    assert f1["objects"]["7"]["box"] == [0.1, 0.1, 0.2, 0.3]
+    assert f1["objects"]["8"]["class"] == 1                 # car -> vehicle
+    assert f2["objects"] == {}                              # dense: empty frame kept
+    assert f3["objects"]["7"]["box"][3] == 1.0              # clipped
+    assert f3["objects"]["9"]["class"] == 2                 # unknown -> other
+    assert f4["objects"] == {}
+    assert all("1" not in f["objects"] for f in doc["frames"])
+
+
+def test_class_map_covers_labels():
+    labels = ["person", "bicycle", "car", "motorbike", "bus", "truck", "other"]
+    assert all(l in ia.CLASS_MAP for l in labels)
+    assert {ia.CLASS_MAP[l] for l in labels} <= set(ia.GT_CLASSES)
+
+
+def test_camera_hint():
+    assert ia.camera_hint("antare-bwc-04") == "bodycam"
+    for cam in ("nc-cam-06", "sm-cam-09", "wh-cam-01"):
+        assert ia.camera_hint(cam) == "static"
+
+
+def _touch(p):
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    open(p, "w").close()
+
+
+def test_discover_flat_and_nested(tmp_path):
+    root = str(tmp_path)
+    _touch(f"{root}/pub-garden.mp4"); _touch(f"{root}/pub-garden/gt/gt.txt")
+    _touch(f"{root}/no-gt.mp4")                                   # no gt -> ignored
+    _touch(f"{root}/640-knife-drawn/antare-bwc-04.mp4")
+    _touch(f"{root}/640-knife-drawn/antare-bwc-04/gt/gt.txt")
+    _touch(f"{root}/640-knife-drawn/nc-cam-06.mp4")
+    _touch(f"{root}/640-knife-drawn/nc-cam-06/gt/gt.txt")
+    found = ia.discover(root)
+    assert [(f[0], f[3], f[4]) for f in found] == [
+        ("pub-garden", "bodycam", None),          # flat drop: hint from the drop
+        ("knife-drawn-bwc-04", "bodycam", "640-knife-drawn"),
+        ("knife-drawn-fixed-06", "static", "640-knife-drawn"),
+    ]
+    assert found[1][1].endswith("640-knife-drawn/antare-bwc-04.mp4")
+    assert found[1][2].endswith("640-knife-drawn/antare-bwc-04/gt")
+
+
+def test_clip_stem():
+    assert ia.clip_stem("643-repeat-offender-refused-entry-at-the-doo", "nc-cam-03") == "refused-entry-fixed-03"
+    assert ia.clip_stem("653-heavy-equipment-box-dropped-near-colleag", "antare-bwc-16") == "box-dropped-bwc-16"
+    import pytest
+    with pytest.raises(AssertionError):
+        ia.clip_stem("999-unknown-scene", "nc-cam-01")
+
+
+def test_build_annotation_hint_and_scene():
+    doc, _ = ia.build_annotation([], 2, 10.0, 100, 100, "/v.mp4",
+                                 hint="static", scene="640-x")
+    assert doc["metadata"]["hint"] == "static"
+    assert doc["metadata"]["gt_source"]["scene"] == "640-x"
+
+
+def test_default_source_layouts():
+    # only checked when the drops are present on this box
+    for src in ia.SRC_DEFAULTS:
+        if os.path.isdir(src):
+            found = ia.discover(src)
+            assert found
+            for _stem, video, gt_dir, _hint, _scene in found:
+                assert os.path.isfile(video)
+                assert os.path.isfile(os.path.join(gt_dir, "labels.txt"))
