@@ -25,11 +25,14 @@ LAYER = {
     "track_test": "eval", "eval_compare": "eval",
     "track_search": "search",
 }
+# subpackages: every module under the prefix belongs to the layer
+PREFIX_LAYER = {"formats.": "formats"}
 ALLOWED = {
     "paths": set(),
     "core": {"paths"},
+    "formats": {"paths", "core"},
     "tracker": {"paths", "core"},
-    "corpus": {"paths", "core"},
+    "corpus": {"paths", "core", "formats"},
     "eval": {"paths", "core", "tracker"},
     # search consults the corpus registry (data_tiers spec section 4), so
     # corpus is an allowed dependency of search by design.
@@ -41,8 +44,12 @@ ALLOWED = {
 def _modules():
     for dp, _d, fns in os.walk(SRC):
         for fn in fns:
-            if fn.endswith(".py") and not fn.startswith("test_") and fn != "__init__.py":
+            if fn.endswith(".py") and not fn.startswith("test_"):
                 rel = os.path.relpath(os.path.join(dp, fn), SRC)[:-3].replace(os.sep, ".")
+                if rel.endswith(".__init__"):
+                    rel = rel[:-len(".__init__")]
+                elif rel == "__init__":
+                    continue
                 yield rel, os.path.join(dp, fn)
 
 
@@ -62,15 +69,24 @@ def _src_imports(path):
                 yield a.name
 
 
+def layer_of(mod):
+    if mod in LAYER:
+        return LAYER[mod]
+    for prefix, layer in PREFIX_LAYER.items():
+        if mod.startswith(prefix) or mod == prefix.rstrip("."):
+            return layer
+    return None
+
+
 def violations():
     bad = []
     for mod, path in _modules():
-        layer = LAYER.get(mod)
+        layer = layer_of(mod)
         if layer is None:
             bad.append(f"{mod}: not assigned to a layer in LAYER")
             continue
         for dep in _src_imports(path):
-            dl = LAYER.get(dep)
+            dl = layer_of(dep)
             if dl is None:
                 bad.append(f"{mod} -> {dep}: target not in LAYER")
             elif dl != layer and dl not in ALLOWED[layer]:
@@ -89,4 +105,4 @@ def test_import_graph_check_is_live():
     # intra-package edges (name-independent so the split does not break it)
     edges = [(m, d) for m, p in _modules() for d in _src_imports(p)]
     assert len(edges) >= 8, edges
-    assert all(d in LAYER or d.split(".")[0] in LAYER for _m, d in edges), edges
+    assert all(layer_of(d) is not None for _m, d in edges), edges

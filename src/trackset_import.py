@@ -1,12 +1,11 @@
-"""Dataset importers and batch converters for TrackSet.
+"""Batch converters (tier 0 -> tier 1) for the labelled datasets.
 
-Each dataset gets a TrackSet.import_<name> method (collected here in
-TrackSetImportersMixin) that fills one TrackSet from that dataset's native
-annotation format, plus a convert_<name>() batch function that walks the
-downloaded dataset under /mldata/downloaded_datasets and writes
-MOT-equivalent trackset JSON (+ mp4 where applicable) pairs under
-/mldata/tracking/<name>/. The canonical trackset formats themselves
-(UBTRK2, yaml/json) live on TrackSet in trackset.py.
+Each dataset's native-annotation parser lives in src/formats/<name>.py
+(`read(...) -> TrackSet`); the convert_<name>() functions here walk the
+downloaded dataset under the tier-0 root and write trackset JSON (+ mp4
+where applicable) pairs under the tier-1 corpus dir. The canonical
+trackset formats themselves (UBTRK2, yaml/json) live on TrackSet in
+trackset.py.
 """
 
 import configparser
@@ -16,743 +15,9 @@ import json
 import os
 import numpy as np
 import xml.etree.ElementTree as ET
-import yaml
 from scipy.io import loadmat
 
 import stuff
-
-# libyaml-backed loader when available: ~10x faster on MEVA's multi-MB KPF
-# files, identical output to yaml.safe_load
-_YAML_SAFE_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
-
-def _yaml_safe_load(stream):
-    return yaml.load(stream, Loader=_YAML_SAFE_LOADER)
-
-
-class TrackSetImportersMixin:
-    """Dataset-specific import_* methods mixed into TrackSet."""
-
-    def import_personpath22(self, sample_uid, sample_dict, video_path):
-        """Import a single PersonPath22 sample (gluoncv-motion JSON format).
-
-        sample_uid: the key from the top-level samples dict (e.g. "uid_vid_00001.mp4")
-        sample_dict: the corresponding value with "metadata" and "entities"
-        video_path: filesystem path to the source mp4 (will be copied by export_yaml)
-        """
-        meta = sample_dict["metadata"]
-        fps = float(meta["fps"])
-        resolution = meta.get("resolution", {})
-        width = int(resolution.get("width", meta.get("width")))
-        height = int(resolution.get("height", meta.get("height")))
-        n_frames = int(meta.get("number_of_frames", meta.get("num_frames", 0)))
-        entities = sample_dict.get("entities", []) or []
-
-        # PersonPath22 annotates only sparse keyframes (~every 5th frame).
-        # We emit just those keyframes — TrackSet.objects_at_time already
-        # interpolates between bracketing frames, so dense filling here is
-        # redundant and would also leak interpolated boxes into the gt.
-        #
-        # Class scheme matches MOT (["person","vehicle","other"]) so the same
-        # downstream eval/training code works:
-        #   - person / sitting_person / standing_person / etc. → class 0
-        #   - crowd boxes (region covering an unannotated group) → class 2,
-        #     intended to be used as ignore regions during evaluation
-        #   - reflection entities are dropped entirely
-        by_frame = {}
-        for ent in entities:
-            bb = ent.get("bb")
-            if bb is None or len(bb) != 4:
-                continue
-            labels = ent.get("labels") or {}
-            if labels.get("person"):
-                out_cl = 0
-            elif labels.get("crowd"):
-                out_cl = 2
-            else:
-                # reflection or other non-person/non-crowd — drop
-                continue
-            blob = ent.get("blob") or {}
-            if "frame_idx" in blob:
-                frame_id = int(blob["frame_idx"]) + 1
-            else:
-                time_ms = ent.get("time")
-                if time_ms is None:
-                    continue
-                frame_id = int(round(float(time_ms) * fps / 1000.0)) + 1
-            if frame_id < 1:
-                frame_id = 1
-            if n_frames and frame_id > n_frames:
-                continue
-            try:
-                track_id = int(ent["id"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            x, y, w, h = (float(v) for v in bb)
-            x1 = round(x / width, 4)
-            y1 = round(y / height, 4)
-            x2 = round((x + w) / width, 4)
-            y2 = round((y + h) / height, 4)
-            confidence = ent.get("confidence", 1.0)
-            try:
-                confidence = round(float(confidence), 4)
-            except (TypeError, ValueError):
-                confidence = 1.0
-            by_frame.setdefault(frame_id, {})[track_id] = {
-                "box": [x1, y1, x2, y2],
-                "class": out_cl,
-                "conf": confidence,
-            }
-
-        self.metadata = {
-            "frame_rate": fps,
-            "width": width,
-            "height": height,
-            "classes": ["person", "vehicle", "other"],
-            "original_video": video_path,
-            "box_convention": "visible",
-        }
-        self.frames = []
-        self.frame_times = []
-        for frame_id in sorted(by_frame.keys()):
-            frame_time = (frame_id - 1) / fps
-            self.frames.append({
-                "frame_id": frame_id,
-                "frame_time": frame_time,
-                "objects": by_frame[frame_id],
-            })
-            self.frame_times.append(frame_time)
-
-    def import_meva(self, geom_path, types_path=None, video_path=None,
-                    width=None, height=None, frame_rate=30.0):
-        """Import a fully-annotated MEVA (KF1) clip from its KPF geometry.
-
-        MEVA ships per-clip KPF YAML: `<clip>.geom.yml` = per-keyframe boxes
-        (`g0: "x1 y1 x2 y2"` in pixels, `id1` = track id, `ts0` = 0-based frame
-        index), `<clip>.types.yml` = per-track object class. The annotations are
-        keyframed (not every frame); TrackSet.objects_at_time interpolates
-        between bracketing frames by track id, so a sparse ground-truth track
-        renders continuously — no per-frame filling here.
-
-        The MEVA dataset lives at /mldata/downloaded_datasets/other/MEVA
-        (annotations/ + videos/ + krtd/ + map/, alongside MOT17/MOT20/JAAD).
-
-        geom_path:  path to `<clip>.geom.yml`.
-        types_path: `<clip>.types.yml` (defaults to the sibling of geom_path).
-        video_path: the source video (mp4/avi). When given, its exact
-                    width/height/fps are read (MEVA mixes 1920x1072 and
-                    1920x1080); otherwise width/height/frame_rate are used.
-        """
-        if types_path is None:
-            cand = geom_path.replace(".geom.yml", ".types.yml").replace(".geom.yaml", ".types.yaml")
-            types_path = cand if os.path.exists(cand) else None
-
-        # Auto-locate the source video: MEVA names the clip identically across
-        # annotation and video (`<clip>.geom.yml` vs `<clip>.r13.avi`). Look
-        # beside the geom and in a sibling videos/ dir.
-        if video_path is None:
-            import glob as _glob
-            stem = os.path.basename(geom_path)
-            for suf in (".geom.yml", ".geom.yaml"):
-                if stem.endswith(suf):
-                    stem = stem[: -len(suf)]
-                    break
-            gd = os.path.dirname(os.path.abspath(geom_path))
-            for d in (gd, os.path.join(gd, "..", "videos"), os.path.join(gd, "..", "video"),
-                      os.path.join(os.path.dirname(gd), "videos")):
-                hits = _glob.glob(os.path.join(d, stem + "*.avi")) + _glob.glob(os.path.join(d, stem + "*.mp4"))
-                if hits:
-                    video_path = hits[0]
-                    break
-
-        # Exact frame geometry/rate from the video when available (the 1072 vs
-        # 1080 difference shifts every box's normalization).
-        if video_path is not None and os.path.exists(video_path):
-            cap = cv2.VideoCapture(video_path)
-            vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0
-            vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 0
-            vf = float(cap.get(cv2.CAP_PROP_FPS)) or 0.0
-            cap.release()
-            if vw: width = vw
-            if vh: height = vh
-            if vf > 0: frame_rate = vf
-        if width is None or height is None:
-            raise ValueError("import_meva: give a video_path or explicit width/height "
-                             "(MEVA clips are 1920x1072 or 1920x1080)")
-
-        # types: track id -> output class. MEVA cset3 object types map to the
-        # shared [person, vehicle, other] scheme so downstream eval/training is
-        # identical to the MOT/PersonPath importers.
-        def out_class(cset):
-            if not cset:
-                return 2
-            top = max(cset, key=cset.get)
-            if top == "person":
-                return 0
-            if top in ("vehicle", "bike"):
-                return 1
-            return 2
-
-        cls_of = {}
-        if types_path is not None:
-            for row in (_yaml_safe_load(open(types_path)) or []):
-                t = row.get("types")
-                if not t:
-                    continue
-                cls_of[t.get("id1")] = out_class(t.get("cset3") or t.get("cset2") or {})
-
-        by_frame = {}
-        for row in (_yaml_safe_load(open(geom_path)) or []):
-            g = row.get("geom")
-            if not g:
-                continue
-            g0 = g.get("g0")
-            ts0 = g.get("ts0")
-            tid = g.get("id1")
-            if g0 is None or ts0 is None or tid is None:
-                continue
-            try:
-                x1, y1, x2, y2 = (float(v) for v in str(g0).split())
-            except ValueError:
-                continue
-            frame_id = int(ts0) + 1  # 1-based, matching the MOT/PersonPath importers
-            by_frame.setdefault(frame_id, {})[int(tid)] = {
-                "box": [round(x1 / width, 4), round(y1 / height, 4),
-                        round(x2 / width, 4), round(y2 / height, 4)],
-                "class": cls_of.get(tid, 2),
-                "conf": 1.0,
-            }
-
-        self.metadata = {
-            "frame_rate": frame_rate,
-            "width": int(width),
-            "height": int(height),
-            "classes": ["person", "vehicle", "other"],
-            # MEVA KPF boxes track full actor extent through occlusion
-            "box_convention": "fullbody",
-        }
-        if video_path is not None:
-            self.metadata["original_video"] = video_path
-        self.frames = []
-        self.frame_times = []
-        for frame_id in sorted(by_frame.keys()):
-            frame_time = (frame_id - 1) / frame_rate
-            self.frames.append({
-                "frame_id": frame_id,
-                "frame_time": frame_time,
-                "objects": by_frame[frame_id],
-            })
-            self.frame_times.append(frame_time)
-
-    def import_otw(self, video_id, rows, video_path):
-        """Import a single Out the Window (OTW) clip into TrackSet format.
-
-        OTW (https://stresearch.github.io/otw/) is crowd-sourced surveillance
-        footage shot from building windows. Each collection (homes/, lots/)
-        has one annotations.csv covering all its videos, with rows:
-          video_id, activity_id, actor_id, type, frame, xmin, ymin, xmax,
-          ymax, labeled
-        Boxes are pixel xyxy at native video resolution. Object boxes are
-        keyframed at activity begin/end and machine-interpolated between
-        (labeled=False rows), so they arrive densely per-frame. A row whose
-        type is an activity name (e.g. "Opening Door") is the enclosing
-        activity region, not an object, and is skipped — as are prop objects
-        (cell phone, bags, carts, doors), which overlap the people holding
-        them and would poison person eval if kept as ignore regions.
-
-        Class scheme matches the MOT/PersonPath/MEVA importers
-        (["person", "vehicle", "other"]).
-
-        Track ids: OTW actor ids cover every object of the actor's activity —
-        actor 00039 has both a "person" and a "bicycle" box — and the same
-        actor re-appears in overlapping activities (person carrying + talking
-        on phone gives two person rows for one frame). Tracks are therefore
-        keyed by (actor id, object type) and renumbered sequentially, which
-        merges duplicate rows and keeps person/vehicle tracks separate. Where
-        a human-labeled and an interpolated row collide on the same frame,
-        the human-labeled box wins.
-
-        Note the lots/ collection annotates only vehicle activity regions
-        (actor id None, no object boxes) — importing it yields an empty
-        trackset; only homes/ carries object tracks.
-
-        video_id: the CSV video id (used only for error messages)
-        rows: this video's CSV rows, each a list of the 10 fields as strings
-        video_path: filesystem path to the source mp4
-        """
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise FileNotFoundError(f"Could not open OTW video at {video_path}")
-        fps = float(cap.get(cv2.CAP_PROP_FPS))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        cap.release()
-        if fps <= 0:
-            fps = 30.0
-        if width <= 0 or height <= 0:
-            raise ValueError(f"Could not read frame size of {video_path}")
-
-        object_classes = {
-            "person": 0,
-            "car": 1,
-            "truck": 1,
-            "vehicle": 1,
-            "motorcycle": 1,
-            "scooter": 1,
-            "motorcycle/scooter": 1,
-            "bicycle": 1,
-        }
-
-        track_id_map = {}
-        labeled_at = set()
-        by_frame = {}
-        for row in rows:
-            if len(row) < 9 or str(row[0]).startswith("#"):
-                continue
-            obj_type = str(row[3]).strip().lower()
-            out_cl = object_classes.get(obj_type)
-            if out_cl is None:
-                continue  # activity region, prop object, or unknown label
-            actor = str(row[2]).strip()
-            if actor == "" or actor.lower() == "none":
-                continue
-            try:
-                frame_zero = int(float(row[4]))
-                x1p, y1p, x2p, y2p = (float(v) for v in row[5:9])
-            except (TypeError, ValueError):
-                continue
-            frame_id = frame_zero + 1  # 1-based, matching the other importers
-            if frame_id < 1:
-                continue
-            key = (actor, obj_type)
-            if key not in track_id_map:
-                track_id_map[key] = len(track_id_map) + 1
-            track_id = track_id_map[key]
-            labeled = str(row[9]).strip().lower() == "true" if len(row) > 9 else False
-            if (frame_id, track_id) in labeled_at and not labeled:
-                continue  # keep the human-labeled box over an interpolated one
-            if labeled:
-                labeled_at.add((frame_id, track_id))
-            x1 = round(max(0.0, min(1.0, x1p / width)), 4)
-            y1 = round(max(0.0, min(1.0, y1p / height)), 4)
-            x2 = round(max(0.0, min(1.0, x2p / width)), 4)
-            y2 = round(max(0.0, min(1.0, y2p / height)), 4)
-            if x2 <= x1 or y2 <= y1:
-                continue
-            by_frame.setdefault(frame_id, {})[track_id] = {
-                "box": [x1, y1, x2, y2],
-                "class": out_cl,
-                "conf": 1.0,
-            }
-
-        self.metadata = {
-            "frame_rate": fps,
-            "width": width,
-            "height": height,
-            "classes": ["person", "vehicle", "other"],
-            # OTW keyframed boxes cover the visible extent only
-            "box_convention": "visible",
-            "original_video": video_path,
-        }
-        self.frames = []
-        self.frame_times = []
-        for frame_id in sorted(by_frame.keys()):
-            frame_time = (frame_id - 1) / fps
-            self.frames.append({
-                "frame_id": frame_id,
-                "frame_time": frame_time,
-                "objects": by_frame[frame_id],
-            })
-            self.frame_times.append(frame_time)
-
-    def import_chirla(self, annotation_json_path, video_path):
-        """Import one CHIRLA camera clip (per-frame JSON + avi).
-
-        CHIRLA (CC BY 4.0, bdager/CHIRLA on HF): indoor multi-camera
-        re-id/tracking; annotation is {frame_number(1-based, str):
-        [{"id": person_id, "BboxP": [x1,y1,x2,y2] pixels}, ...]} with
-        one key per video frame (empty list = nobody visible). Person
-        ids are globally consistent across cameras/sequences and serve
-        as track ids within a clip. Persons only.
-        """
-        with open(annotation_json_path) as fh:
-            anno = json.load(fh)
-
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise FileNotFoundError(f"Could not open {video_path}")
-        fps = float(cap.get(cv2.CAP_PROP_FPS)) or 30.0
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        cap.release()
-        if width <= 0 or height <= 0:
-            raise ValueError(f"Could not read frame size of {video_path}")
-
-        n = max(frame_count, max((int(k) for k in anno), default=0))
-        if frame_count and abs(n - frame_count) > 2:
-            raise ValueError(
-                f"annotation/video frame count mismatch: {n} keys vs "
-                f"{frame_count} frames in {video_path}")
-
-        self.metadata = {
-            "frame_rate": fps,
-            "width": width,
-            "height": height,
-            "classes": ["person", "vehicle", "other"],
-            "original_video": video_path,
-            "box_convention": "visible",
-        }
-        self.frames = []
-        for i in range(n):
-            objects = {}
-            for o in anno.get(str(i + 1), []):
-                x1, y1, x2, y2 = o["BboxP"]
-                if x2 <= x1 or y2 <= y1:
-                    continue
-                objects[str(o["id"])] = {
-                    "box": [round(x1 / width, 4), round(y1 / height, 4),
-                            round(x2 / width, 4), round(y2 / height, 4)],
-                    "class": 0,
-                    "conf": 1.0,
-                }
-            self.frames.append({"frame_id": i,
-                                "frame_time": i / fps,
-                                "objects": objects})
-
-    def import_roundabouthd(self, sct_path, video_path):
-        """Import one RoundaboutHD camera (SCT_GT.txt + 4K mp4).
-
-        RoundaboutHD (Bath research data 1574, MIT): 4 non-overlapping
-        4K@15fps cameras over a roundabout, 10 min each, human-inspected
-        vehicle tracking GT. SCT_GT rows are space-separated
-        `frame_id track_id xmin ymin xmax ymax cls` in pixels, frames
-        1-based (SCT frame 1 == video frame 0). Vehicles only.
-        """
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise FileNotFoundError(f"Could not open {video_path}")
-        fps = float(cap.get(cv2.CAP_PROP_FPS)) or 15.0
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        cap.release()
-        if width <= 0 or height <= 0:
-            raise ValueError(f"Could not read frame size of {video_path}")
-
-        by_frame = {}
-        max_frame = 0
-        with open(sct_path) as fh:
-            for line in fh:
-                parts = line.split()
-                if len(parts) < 7:
-                    continue
-                fi = int(parts[0]) - 1
-                x1, y1, x2, y2 = (float(v) for v in parts[2:6])
-                if x2 <= x1 or y2 <= y1:
-                    continue
-                by_frame.setdefault(fi, {})[parts[1]] = {
-                    "box": [round(x1 / width, 4), round(y1 / height, 4),
-                            round(x2 / width, 4), round(y2 / height, 4)],
-                    "class": 1,
-                    "conf": 1.0,
-                }
-                max_frame = max(max_frame, fi)
-
-        n = frame_count if frame_count > 0 else max_frame + 1
-        self.metadata = {
-            "frame_rate": fps,
-            "width": width,
-            "height": height,
-            "classes": ["person", "vehicle", "other"],
-            "original_video": video_path,
-            "box_convention": "visible",
-        }
-        self.frames = [{"frame_id": i,
-                        "frame_time": i / fps,
-                        "objects": by_frame.get(i, {})}
-                       for i in range(n)]
-
-    def import_uvg_vcm(self, annotation_json_path, video_path,
-                       width, height, fps):
-        """Import one UVG-VCM sequence (annotation JSON + mp4).
-
-        UVG-VCM (Tampere UVG, CC BY 4.0): 4K@60fps codec-benchmark
-        sequences with professional tracking annotations. JSON is
-        {"version": "1.0", "1": [obj, ...], ...} keyed by 1-based frame
-        number; objects carry COCO class_id, persistent track_id and
-        normalized x_min/y_min/x_max/y_max corners. COCO 1 -> person,
-        {2,3,4,6,8} (bicycle/car/motorcycle/bus/truck) -> vehicle,
-        everything else dropped. video_path is the pre-transcoded mp4
-        (the dataset ships raw YUV; see convert_uvg_vcm).
-        """
-        with open(annotation_json_path) as fh:
-            anno = json.load(fh)
-        frame_keys = sorted((int(k) for k in anno if k.isdigit()))
-        n = frame_keys[-1] if frame_keys else 0
-        class_map = {1: 0, 2: 1, 3: 1, 4: 1, 6: 1, 8: 1}
-
-        self.metadata = {
-            "frame_rate": float(fps),
-            "width": int(width),
-            "height": int(height),
-            "classes": ["person", "vehicle", "other"],
-            "original_video": video_path,
-            "box_convention": "visible",
-        }
-        self.frames = []
-        for i in range(n):
-            objects = {}
-            for o in anno.get(str(i + 1), []):
-                cl = class_map.get(int(o["class_id"]))
-                if cl is None:
-                    continue
-                x1, y1 = float(o["x_min"]), float(o["y_min"])
-                x2, y2 = float(o["x_max"]), float(o["y_max"])
-                if x2 <= x1 or y2 <= y1:
-                    continue
-                objects[str(o["track_id"])] = {
-                    "box": [round(x1, 4), round(y1, 4),
-                            round(x2, 4), round(y2, 4)],
-                    "class": cl,
-                    "conf": 1.0,
-                }
-            self.frames.append({"frame_id": i,
-                                "frame_time": i / float(fps),
-                                "objects": objects})
-
-    def import_jaad(self, annotation_xml_path, video_path):
-        """Import a single JAAD clip (XML + mp4) into TrackSet format.
-
-        JAAD has three pedestrian-like labels:
-          - pedestrian / ped: individual people
-          - people: grouped crowd region
-        We map grouped crowd regions to class "other" so they can be consumed
-        as MOT-style ignore regions during metric evaluation.
-        """
-        tree = ET.parse(annotation_xml_path)
-        root = tree.getroot()
-
-        task = root.find("meta/task")
-        xml_seq_length = 0
-        xml_width = 0
-        xml_height = 0
-        if task is not None:
-            try:
-                xml_seq_length = int(task.findtext("size") or 0)
-            except (TypeError, ValueError):
-                xml_seq_length = 0
-            original_size = task.find("original_size")
-            if original_size is not None:
-                try:
-                    xml_width = int(original_size.findtext("width") or 0)
-                except (TypeError, ValueError):
-                    xml_width = 0
-                try:
-                    xml_height = int(original_size.findtext("height") or 0)
-                except (TypeError, ValueError):
-                    xml_height = 0
-
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise FileNotFoundError(f"Could not open JAAD video at {video_path}")
-        fps = float(cap.get(cv2.CAP_PROP_FPS))
-        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        cap.release()
-
-        if fps <= 0:
-            fps = 30.0
-        if frame_width <= 0:
-            frame_width = xml_width
-        if frame_height <= 0:
-            frame_height = xml_height
-        if frame_width <= 0 or frame_height <= 0:
-            raise ValueError(f"Could not infer frame size for {annotation_xml_path}")
-
-        seq_length = xml_seq_length if xml_seq_length > 0 else frame_count
-        if seq_length <= 0:
-            seq_length = 0
-
-        label_to_class = {
-            "pedestrian": 0,
-            "ped": 0,
-            "people": 2,  # grouped pedestrians -> ignore region ("other")
-        }
-        track_id_map = {}
-        next_track_id = 1
-        by_frame = {}
-        max_frame_seen = 0
-
-        def mapped_track_id(raw_track_id):
-            nonlocal next_track_id
-            if raw_track_id not in track_id_map:
-                track_id_map[raw_track_id] = next_track_id
-                next_track_id += 1
-            return track_id_map[raw_track_id]
-
-        for track_idx, track in enumerate(root.findall("track")):
-            label = (track.attrib.get("label") or "").strip().lower()
-            out_cl = label_to_class.get(label)
-            if out_cl is None:
-                continue
-
-            boxes = track.findall("box")
-            if len(boxes) == 0:
-                continue
-
-            raw_track_key = None
-            for box in boxes:
-                for attr in box.findall("attribute"):
-                    if attr.attrib.get("name") == "id":
-                        text = (attr.text or "").strip()
-                        if text:
-                            raw_track_key = text
-                            break
-                if raw_track_key is not None:
-                    break
-            if raw_track_key is None:
-                raw_track_key = f"{label}_track_{track_idx}"
-            track_id = mapped_track_id(raw_track_key)
-
-            for box in boxes:
-                try:
-                    if int(box.attrib.get("outside", "0")) != 0:
-                        continue
-                    frame_zero = int(box.attrib["frame"])
-                    xtl = float(box.attrib["xtl"])
-                    ytl = float(box.attrib["ytl"])
-                    xbr = float(box.attrib["xbr"])
-                    ybr = float(box.attrib["ybr"])
-                except (KeyError, TypeError, ValueError):
-                    continue
-
-                frame_id = frame_zero + 1
-                if frame_id < 1:
-                    continue
-                if seq_length > 0 and frame_id > seq_length:
-                    continue
-
-                max_frame_seen = max(max_frame_seen, frame_id)
-
-                x1 = round(max(0.0, min(1.0, xtl / frame_width)), 4)
-                y1 = round(max(0.0, min(1.0, ytl / frame_height)), 4)
-                x2 = round(max(0.0, min(1.0, xbr / frame_width)), 4)
-                y2 = round(max(0.0, min(1.0, ybr / frame_height)), 4)
-                if x2 <= x1 or y2 <= y1:
-                    continue
-
-                by_frame.setdefault(frame_id, {})[track_id] = {
-                    "box": [x1, y1, x2, y2],
-                    "class": out_cl,
-                    "conf": 1.0,
-                }
-
-        if seq_length <= 0:
-            seq_length = max_frame_seen
-
-        self.metadata = {
-            "frame_rate": fps,
-            "width": frame_width,
-            "height": frame_height,
-            "classes": ["person", "vehicle", "other"],
-            "original_video": video_path,
-            "box_convention": "fullbody",
-        }
-        self.frames = []
-        self.frame_times = []
-        for frame_id in range(1, seq_length + 1):
-            frame_time = (frame_id - 1) / fps
-            self.frames.append({
-                "frame_id": frame_id,
-                "frame_time": frame_time,
-                "objects": by_frame.get(frame_id, {}),
-            })
-            self.frame_times.append(frame_time)
-
-    def import_mot(self, seqinfo_path):
-        config = configparser.ConfigParser()
-        config.read(seqinfo_path)
-
-        seq_dir = os.path.dirname(seqinfo_path)
-        frame_rate = int(config['Sequence']['frameRate'])
-        seq_length = int(config['Sequence']['seqLength'])
-        frame_height = int(config['Sequence']['imHeight'])
-        frame_width = int(config['Sequence']['imWidth'])
-        image_dir = os.path.join(seq_dir, config['Sequence']['imDir'])
-        image_ext = config['Sequence']['imExt']
-
-        # Load the ground truth annotations (gt.txt)
-        gt_path = os.path.join(seq_dir, "gt/gt.txt")
-        if not os.path.exists(gt_path):
-            raise FileNotFoundError(f"Ground truth file not found at {gt_path}")
-
-        # Parse ground truth annotations
-        data = np.loadtxt(gt_path, delimiter=',')
-        # Columns: frame_id, track_id, bb_left, bb_top, bb_width, bb_height, confidence, class, visibility
-
-        self.frames = []
-        self.metadata={
-                "frame_rate": frame_rate,
-                "width": frame_width,
-                "height": frame_height,
-                "classes": ["person", "vehicle", "other"],
-                "box_convention": "fullbody",
-            }
-
-        for frame_id in range(1, seq_length):
-            frame_time = (frame_id-1) / frame_rate
-            objects = {}
-
-            # Filter objects for the current frame
-            frame_objects = data[data[:, 0] == frame_id]
-
-            for obj in frame_objects:
-                track_id = int(obj[1])
-                bb_left = float(obj[2])
-                bb_top = float(obj[3])
-                bb_width = float(obj[4])
-                bb_height = float(obj[5])
-                confidence = 1 #round(float(obj[6]),4)
-                cl = int(obj[7])
-
-                # Convert bounding box to xyxy format in normalized coordinates
-                x1 = round(bb_left / frame_width,4)
-                y1 = round(bb_top / frame_height,4)
-                x2 = round((bb_left + bb_width) / frame_width,4)
-                y2 = round((bb_top + bb_height) / frame_height,4)
-
-                #1 Pedestrian
-                #2 Person on vehicle
-                #3 Car
-                #4 Bicycle
-                #5 Motorbike
-                #6 Non motorized vehicle
-                #7 Static person
-                #8 Distractor
-                #9 Occluder
-                #10 Occluder on the ground
-                #11 Occluder full
-                #12 Reflection
-                if cl==1 or cl==7 or cl==2:
-                    out_cl=0
-                elif cl==3 or cl==4 or cl==5 or cl==6:
-                    out_cl=1
-                else:
-                    out_cl=2
-
-                objects[track_id] = {"box": [x1, y1, x2, y2], "class":out_cl, "conf":confidence}
-
-            self.frames.append({
-                "frame_id": frame_id,
-                "frame_time": frame_time,
-                "image_path": os.path.join(image_dir, f"{(frame_id):06d}{image_ext}"),
-                "objects": objects
-            })
-
-        self.frame_times=[]
-        for f in self.frames:
-            self.frame_times.append(f["frame_time"])
 
 
 def convert_mot(lite=True):
@@ -833,7 +98,7 @@ def convert_personpath22(src_root=None, output_folder=None,
 
         print(f"Processing {uid}...")
         ts = trackset.TrackSet()
-        ts.import_personpath22(uid, sample, video_path)
+        fmt_personpath22.read_into(ts, uid, sample, video_path)
         if os.path.isfile(out_video):
             # Skip the mp4 copy; just rewrite the JSON pointing at the existing copy.
             ts.metadata["original_video"] = out_video
@@ -881,7 +146,7 @@ def convert_jaad(src_root=None, output_folder=None, lite=True):
         print(f"Processing {xml_name}...")
         ts = trackset.TrackSet()
         try:
-            ts.import_jaad(annotation_xml_path, video_path)
+            fmt_jaad.read_into(ts, annotation_xml_path, video_path)
         except Exception as e:
             print(f"  failed {xml_name}: {e}")
             skipped_failed += 1
@@ -959,7 +224,7 @@ def _convert_meva_clip(args):
     out_video = output_folder + "/video/" + stem + ".mp4"
     ts = trackset.TrackSet()
     try:
-        ts.import_meva(geom_path)
+        fmt_meva.read_into(ts, geom_path)
         if "original_video" not in ts.metadata:
             return ("missing", stem)
         if len(ts.frames) == 0:
@@ -1015,7 +280,7 @@ def convert_chirla(src_root=None, output_folder=None, lite=True):
             continue
         ts = trackset.TrackSet()
         try:
-            ts.import_chirla(anno_path, video_path)
+            fmt_chirla.read_into(ts, anno_path, video_path)
             if not any(f["objects"] for f in ts.frames):
                 # 12/70 cameras were never visited; keep them out of the
                 # corpus rather than shipping all-empty "GT"
@@ -1083,7 +348,7 @@ def convert_roundabouthd(src_root=None, output_folder=None, lite=True):
             print(f"  {stem}: missing {video} or {sct}")
             continue
         ts = trackset.TrackSet()
-        ts.import_roundabouthd(sct, video)
+        fmt_roundabouthd.read_into(ts, sct, video)
         if not os.path.isfile(out_video):
             _transcode(video, out_video)
         ts.metadata["original_video"] = out_video
@@ -1156,7 +421,7 @@ def convert_uvg_vcm(src_root=None, output_folder=None, lite=True):
                 continue
             os.replace(tmp, out_video)
         ts = trackset.TrackSet()
-        ts.import_uvg_vcm(anno_path, out_video, w, h, fps)
+        fmt_uvg_vcm.read_into(ts, anno_path, out_video, w, h, fps)
         ts.export_yaml(out_anno)
         nb = sum(len(f["objects"]) for f in ts.frames)
         print(f"  {stem}: {len(ts.frames)} frames, {nb} boxes")
@@ -1289,7 +554,7 @@ def convert_otw(src_root=None, output_folder=None,
             print(f"Processing {collection}/{stem}...")
             ts = trackset.TrackSet()
             try:
-                ts.import_otw(video_id, by_video[video_id], video_path)
+                fmt_otw.read_into(ts, video_id, by_video[video_id], video_path)
             except Exception as e:
                 print(f"  failed {video_id}: {e}")
                 skipped_failed += 1
@@ -1863,3 +1128,6 @@ def dofix():
 # attributes, both class definitions above exist.
 import src.paths as paths
 import src.trackset as trackset
+from src.formats import (chirla as fmt_chirla, jaad as fmt_jaad, meva as fmt_meva,
+                         mot as fmt_mot, otw as fmt_otw, personpath22 as fmt_personpath22,
+                         roundabouthd as fmt_roundabouthd, uvg_vcm as fmt_uvg_vcm)

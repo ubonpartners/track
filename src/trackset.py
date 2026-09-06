@@ -4,7 +4,6 @@ import os
 import bisect
 import src.track_util as tu
 import src.trackers as trackers
-from src.trackset_import import TrackSetImportersMixin
 from tqdm.auto import tqdm
 import yaml
 import json
@@ -14,7 +13,7 @@ import shutil
 import base64
 import time
 
-class TrackSet(TrackSetImportersMixin):
+class TrackSet:
     def __init__(self, path=None, decode_payloads=True, analysis_mode=False):
         self.name="No name"
         self.source_name=None
@@ -32,15 +31,13 @@ class TrackSet(TrackSetImportersMixin):
                     analysis_mode=analysis_mode,
                 )
                 return
-            if path.endswith(".ini"):
-                self.import_mot(path)
-                return
-            if path.endswith(".geom.yml") or path.endswith(".geom.yaml"):
-                self.import_meva(path)
-                return
             if path.endswith(".yml") or path.endswith(".yaml") or path.endswith(".json"):
                 self.import_yaml(path)
                 return
+            if path.endswith(".ini") or path.endswith((".geom.yml", ".geom.yaml")):
+                # native dataset formats moved to src/formats (stage 3);
+                # TrackSet only reads its own formats now
+                raise ValueError(f"{path}: use src.formats.load() for MOT/MEVA sources")
 
     def _encode_frame_objects_for_storage(self, objects):
         if objects is None:
