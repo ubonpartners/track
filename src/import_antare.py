@@ -170,13 +170,13 @@ def import_clip(stem, src_video, gt_dir, hint, scene, out_root):
     return jpath
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", action="append",
                     help="source drop(s); default: both known drops")
     ap.add_argument("--out", default=None, help="tier-1 corpus dir (default: <tier1>/antare_bwc)")
     ap.add_argument("clips", nargs="*", help="clip stems (default: all)")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     found = []
     out = a.out or t1_default()
     for src in a.src or src_defaults():

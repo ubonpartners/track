@@ -550,8 +550,9 @@ Steps
    parameter.
 5. Before deleting the shims: the autolabel repo imports
    `src.track_test` (compute_metrics, summary_string), `src.trackset`
-   (TrackSet) and `src.corpus_manifest` (set_audit); switch those files
-   first.
+   (TrackSet) and `src.corpus_manifest` (set_audit). As built: those
+   three shims were KEPT and documented (ledger 2026-09-06 Repo
+   cleanup); switching autolabel is that repo's change.
 
 Exit criteria: `vulture`-style pass (or the grep from section 1)
 reports no unreferenced top-level function. Tests green. Smoke eval

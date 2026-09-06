@@ -2,7 +2,7 @@
 
 The command line is `python -m src.cli <verb> ...` (src/cli.py). This
 file keeps every old `python track.py --flag` form working: it parses the
-old flags, prints the new spelling once, and runs the same code.
+old flags, prints the new spelling on every run, and runs the same code.
 """
 import argparse
 import sys
@@ -11,7 +11,11 @@ import src.paths as paths
 
 
 def old_parser():
-    parser = argparse.ArgumentParser(prog="track.py")
+    parser = argparse.ArgumentParser(
+        prog="track.py",
+        description="Compatibility entry point: every flag maps onto `python -m src.cli <verb>` "
+                    "(see `python -m src.cli --help` for the documented options). The mapping is "
+                    "printed on every run.")
     parser.add_argument('--logging', type=str, default='info')
     parser.add_argument('--trackset', type=str, default=paths.tier2('mot', 'annotation', 'MOT20-01.json'))
     parser.add_argument('--view', action='store_true')
@@ -80,7 +84,8 @@ def main(argv=None):
     if new is None:
         print("No option specified")
         return 0
-    print(f"note: `python track.py {' '.join(argv)}` is now `python -m src.cli {' '.join(new)}`",
+    import shlex
+    print(f"note: `python track.py {shlex.join(argv)}` is now `python -m src.cli {shlex.join(new)}`",
           file=sys.stderr)
     import src.cli as cli
     return cli.main(new)

@@ -3,7 +3,7 @@ walking the downloaded drop and writing trackset JSON (+ mp4) pairs into
 the tier-1 corpus dir, plus the autolabel-folder importer and the dataset
 reduction helpers. Parsers live in src/formats/.
 
-Moved verbatim from src/trackset_import.py (repo_cleanup.md stage 4b).
+Moved verbatim from the former src/trackset_import.py (repo_cleanup.md stage 4b).
 """
 import json
 import os

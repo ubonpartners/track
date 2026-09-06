@@ -217,6 +217,6 @@ convention is never documented and has been wrong before.
 - `python -m src.cli view <annotation.json>` plays the
   video with the GT boxes drawn.
 - `python -m src.cli eval` runs the one objective config the search
-  optimises (`--eval-split val` for search-comparable scores; compare
+  optimises (`--split val` for search-comparable scores; compare
   runs with `python -m src.eval_compare`). `search <yaml>` runs the
   parameter search over the registered datasets.

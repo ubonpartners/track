@@ -1,6 +1,6 @@
 """Tracker factory (upyc only).
 
-Moved verbatim from src/trackers.py (repo_cleanup.md stage 4c).
+Moved verbatim from the former src/trackers.py (repo_cleanup.md stage 4c).
 """
 import src.tracker.upyc as upyct
 

@@ -1,7 +1,7 @@
 """The one place that runs ffprobe/ffmpeg (repo_cleanup.md stage 5).
 
 Before this module there were four ffprobe wrappers and six ffmpeg
-recipes spread over dataset_lite, trackset_import, import_antare and a
+recipes spread over the former dataset_lite and trackset_import, import_antare and a
 closure in convert_roundabouthd. They are now:
 
   probe_video(path)        one ffprobe call -> VideoInfo (size, fps, codec,

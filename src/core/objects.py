@@ -1,7 +1,7 @@
 """Object: a detection/track record with interpolation, class remap and
 drawing.
 
-Moved verbatim from src/track_util.py (repo_cleanup.md stage 4c).
+Moved verbatim from the former src/track_util.py (repo_cleanup.md stage 4c).
 """
 import numpy as np
 import math

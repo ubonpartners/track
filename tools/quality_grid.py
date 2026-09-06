@@ -8,14 +8,14 @@ expects them. Points (see quality_table.py):
     gridm_r{2,3}_{640,512,416,320}     non-analytics frames delivered as
                                        MOTION/NVOF carry frames instead
 
-Resolution is imposed with track.py --pm; the pm index is looked up by
+Resolution is imposed with `src.cli --pm`; the pm index is looked up by
 RES CAP in the CURRENT pm_table (ubon_cstuff include/pm_controller.h rows are
 (res_cap, rate) pairs now — the index/cap mapping is no longer 1:1, so this
 table must match the header). Rate is imposed exactly with
 debug_analytics_mask ("1"=every frame, "10"=every 2nd, "100"=every 3rd),
 written into a DERIVED eval yaml (the objective config with the mask and, for
 gridm, min_time_delta_motion added). Deriving a yaml is correct here — these
-runs are deliberately NOT the objective; track.py prints its not-the-objective
+runs are deliberately NOT the objective; eval prints its not-the-objective
 warning for each, which is right.
 
 Usage:
@@ -79,9 +79,8 @@ def main():
         out = os.path.join(QTAB, name)
         ycfg = derived_yaml(OBJECTIVE, RATE_MASK[r], carry,
                             os.path.join(cfg_dir, f"{name}.yaml"))
-        cmd = [sys.executable, "track.py", "--eval", ycfg,
-               "--eval-split", "val", "--pm", str(PM_FOR_RES[res]),
-               "--results-location", out]
+        cmd = [sys.executable, "-m", "src.cli", "--pm", str(PM_FOR_RES[res]),
+               "eval", ycfg, "--split", "val", "--results-location", out]
         print("::", name, "->", " ".join(cmd), flush=True)
         if a.dry_run:
             continue

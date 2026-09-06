@@ -1,7 +1,7 @@
 """Python wrapper over the ubon_pycstuff tracker (results view, aux-output
 trimming, h264 elementary-stream cache).
 
-Moved verbatim from src/upyc_tracker/upyc_tracker.py (repo_cleanup.md
+Moved verbatim from the former src/upyc_tracker/upyc_tracker.py (repo_cleanup.md
 stage 4c).
 """
 import tempfile

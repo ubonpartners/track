@@ -597,7 +597,7 @@ def _registry_check(config, logfile):
     fails while the `tune_tracker` vocabulary decision is pending —
     derived-GT corpora (meva/otw/bwc/movies) are currently registered
     train_detector-only yet sit in the search sets."""
-    from src.corpus.manifest import load_capabilities
+    from src.corpus.manifest import allows, load_capabilities
     unapproved = {}
     for name, row in (config.get("datasets") or {}).items():
         path = row.get("path", "")
@@ -606,7 +606,7 @@ def _registry_check(config, logfile):
         caps = load_capabilities(corpus) if corpus else None
         if caps is None:
             unapproved.setdefault("UNREGISTERED:" + str(corpus), []).append(name)
-        elif not any(u in caps.get("approved_uses", [])
+        elif not any(allows(corpus, u)
                      for u in ("screen", "val", "frozen_test", "tune_tracker")):
             unapproved.setdefault(corpus, []).append(name)
     for corpus, names in sorted(unapproved.items()):

@@ -27,9 +27,12 @@ while executing it that a later reader may want to reverse:
   `src/trackset.py` (TrackSet) and `src/corpus_manifest.py`
   (set_audit). Every other shim from stages 3 to 5 was deleted in
   stage 7.
-- **`allows` and `set_file_source` are kept** although nothing in this
-  repo calls them: both are the registry API the tiers spec publishes
-  and the autolabel repo calls `allows` (eval/slices.py, tests).
+- **`allows` and `set_file_source` are kept.** Both are the registry
+  API the tiers spec publishes. `allows` now has a caller
+  (`track_search._registry_check`); `set_file_source` is the importer
+  hook the spec asks importers to call and none does yet. (The autolabel
+  repo has its own `allows` over MANIFEST.json and imports nothing of
+  this repo's registry except `set_audit`.)
 - **`_FORCE_DICT` became `FORCE_DICT_RESULTS = False`** in
   `src/eval/runner.py`. It was a debug hook read through `globals()`
   since 2026-07-23 (6f51b45, packed-results parser) and nothing ever
@@ -173,8 +176,9 @@ BDD100K MOT keyframes were extracted at 5 fps with a per-clip offset
 that the release does not record. The migration recovered each clip's
 offset by detector agreement against the autolabel caches and
 restamped `frame_time` in tier 1 (idempotent via
-`metadata.time_offset_intervals`). It ran once on `bdd100k_mot`; the
-corpus manifest carries the result. Deleted 2026-09-06 (stage 7); the
+`metadata.time_offset_intervals`). It ran once on `bdd100k_mot`; each
+annotation json's `metadata.time_offset_intervals` records the offset
+it applied (the manifest does not). Deleted 2026-09-06 (stage 7); the
 body is in git history at 69a1d55 if a re-import ever needs it.
 
 ## 2026-07-21 `fix_cevo25_vfr_times` (add2e37)
@@ -185,9 +189,10 @@ off by the end of a clip. The fix restamps GT `frame_time` from the
 video's decoded pts. It is a live step of `convert_cevo`, not a
 one-off, and lives in `src/corpus/importers.py`.
 
-## 2026-07-19 `dofix` (977da71)
+## 2026-03-25 `dofix` (341de12)
 
-cevo yaml to json annotation rewrite with `original_video` repointed
-from `/tracking/video` to `/tracking/cevo/video`, added with the move
-of the importers into trackset_import.py. Nothing called it since.
-Deleted 2026-09-06 (stage 7).
+cevo yaml to json annotation rewrite on TIER 2
+(`/mldata/tracking/cevo/annotation`) with `original_video` repointed
+from `/tracking/video` to `/tracking/cevo/video`. Present since the
+initial commit (341de12, in trackset.py; 977da71 only moved it on
+2026-07-19). Nothing called it. Deleted 2026-09-06 (stage 7).

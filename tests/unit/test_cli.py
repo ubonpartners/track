@@ -113,3 +113,57 @@ def test_paths_verb(capsys):
 def test_unknown_verb():
     with pytest.raises(SystemExit):
         cli.main(["frobnicate"])
+
+
+def test_logging_value_and_tmp_log_order(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(cli.stuff, "rmdir", lambda p: calls.append(("rmdir", p)))
+    monkeypatch.setattr(cli.stuff, "makedir", lambda p: calls.append(("makedir", p)))
+    monkeypatch.setattr(cli.stuff, "configure_root_logger", lambda cfg, log_dir=None: calls.append(("logger", cfg, log_dir)))
+    import src.track_search as ts_
+    monkeypatch.setattr(ts_, "search_track", lambda y: calls.append(("search", y)))
+    monkeypatch.chdir(tmp_path)
+    cli.main(["--logging", "debug:file", "search", "s.yaml"])
+    import os
+    assert calls == [("rmdir", os.path.join(str(tmp_path), "tmp")),
+                     ("makedir", os.path.join(str(tmp_path), "tmp/log")),
+                     ("logger", "debug:file", os.path.join(str(tmp_path), "tmp/log")),
+                     ("search", "s.yaml")]
+
+
+def test_import_and_corpus_verbs_do_not_touch_tmp(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli.stuff, "rmdir", lambda p: calls.append("rmdir"))
+    monkeypatch.setattr(cli.stuff, "configure_root_logger", lambda *a, **k: calls.append("logger"))
+    monkeypatch.setitem(cli.IMPORTERS, "mot", lambda **k: calls.append("mot"))
+    import src.corpus.manifest as manifest
+    monkeypatch.setattr(manifest, "verify", lambda c: calls.append("verify"))
+    cli.main(["import", "mot"]); cli.main(["corpus", "verify", "x"])
+    assert calls == ["mot", "verify"]
+
+
+def test_track_default_config(monkeypatch):
+    for f in ("rmdir", "makedir", "configure_root_logger"):
+        monkeypatch.setattr(cli.stuff, f, lambda *a, **k: None)
+    seen = []
+    monkeypatch.setattr(cli, "test_track", lambda *a, **k: seen.append(a))
+    import src.paths as paths
+    cli.main(["track", "g.json"])
+    assert seen == [("g.json", paths.tracker_config())]
+    assert shim.translate(["--track"]) == ["--logging", "info", "track", paths.tier2("mot", "annotation", "MOT20-01.json")]
+    assert shim.translate(["--view"]) == ["--logging", "info", "view", paths.tier2("mot", "annotation", "MOT20-01.json")]
+
+
+def test_import_antare_verb_ignores_sys_argv(monkeypatch):
+    """The blocker from the stage 6 review: the importer's own argparse must
+    never see the verb words."""
+    import src.import_antare as ia
+    seen = []
+    monkeypatch.setattr(ia, "discover", lambda src, flat_hint="bodycam": [("clip-a", "v", "g", "bodycam", None)])
+    monkeypatch.setattr(ia, "import_clip", lambda *a: seen.append(a[0]))
+    monkeypatch.setattr(ia, "src_defaults", lambda: ["/drop"])
+    monkeypatch.setattr("sys.argv", ["cli", "--logging", "debug", "import", "antare"])
+    cli.main(["--logging", "debug", "import", "antare"])
+    assert seen == ["clip-a"]
+    with pytest.raises(SystemExit):
+        cli.main(["import", "mot", "--amodal"])

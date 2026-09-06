@@ -19,7 +19,7 @@ git clone https://github.com/ubonpartners/track.git
 cd track
 conda env create -f environment.yml
 conda activate track
-python track.py --help
+python -m src.cli --help
 ```
 
 Runtime requirements:
@@ -41,7 +41,8 @@ checkout is `$AUTOLABEL_PATH`, else a sibling directory of this repo.
 
 | Path | Purpose |
 |------|---------|
-| `track.py` | CLI entry point for view/track/test/compare/search and dataset conversion helpers |
+| `src/cli.py` | The command line: `python -m src.cli <verb>` (view, track, compare, eval, search, test, import, corpus, paths) |
+| `track.py` | Compatibility shim: old `--flag` forms translate to the verbs |
 | `src/core/` | `trackset` (TrackSet: json/yaml + UBTRK2 storage, interpolation), `objects` (Object helpers, drawing), `display` (replay viewer) |
 | `src/tracker/` | `upyc` (wrapper over `ubon_pycstuff`), `factory` (tracker creation), `run` (`import_create(ts, ...)`: drive a tracker into a TrackSet) |
 | `src/formats/` | One parser per native dataset format, `read(...) -> TrackSet`; `formats.load(path)` dispatches by extension |

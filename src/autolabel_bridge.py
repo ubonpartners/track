@@ -545,26 +545,6 @@ def make_tight_consistent(anno_path, verbose=True):
     return rewritten
 
 
-def _motion_transfer(Ha, Hb, Aa, Ab, At, w):
-    """Warp lerp(Ha,Hb,w) by autolabel motion: center residual (relative
-    to autolabel's own anchor lerp) plus size ratio. Box conventions
-    cancel; zero residual == plain linear interpolation."""
-    def cs(b):
-        return ((b[0]+b[2])/2, (b[1]+b[3])/2, b[2]-b[0], b[3]-b[1])
-    hxa, hya, hwa, hha = cs(Ha); hxb, hyb, hwb, hhb = cs(Hb)
-    axa, aya, awa, aha = cs(Aa); axb, ayb, awb, ahb = cs(Ab)
-    axt, ayt, awt, aht = cs(At)
-    cx = (hxa + (hxb-hxa)*w) + (axt - (axa + (axb-axa)*w))
-    cy = (hya + (hyb-hya)*w) + (ayt - (aya + (ayb-aya)*w))
-    def size(h0, h1, a0, a1, at):
-        base = h0 + (h1-h0)*w
-        alin = a0 + (a1-a0)*w
-        return base * (at/alin) if alin > 1e-6 and at > 1e-6 else base
-    bw = size(hwa, hwb, awa, awb, awt)
-    bh = size(hha, hhb, aha, ahb, aht)
-    return [cx-bw/2, cy-bh/2, cx+bw/2, cy+bh/2]
-
-
 def densify_augmented_tracks(anno_path, max_gap=2.0, verbose=True):
     """Materialize augmentation-added tracks onto the GT frame grid IN
     PLACE. augment_trackset_file writes added tracks as sparse ~5fps

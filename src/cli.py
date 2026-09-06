@@ -5,7 +5,7 @@ Each verb's function is the existing entry point in the package; no
 logic lives here except argument handling and the two single-sequence
 drivers (compare_track, test_track) that used to sit in track.py.
 `python track.py --old-flags` still works: track.py translates to these
-verbs and prints the new spelling once.
+verbs and prints the new spelling on every run.
 """
 import argparse
 import os
@@ -31,7 +31,7 @@ IMPORTERS = {
     "bdd100k": lambda **kw: _importers().convert_bdd100k_kaggle(),
     "raw_movies": lambda **kw: _importers().convert_raw_movies(),
     "bwc_videotext": lambda **kw: _importers().convert_bwc_videotext(),
-    "antare": lambda **kw: __import__("src.import_antare", fromlist=["main"]).main(),
+    "antare": lambda **kw: __import__("src.import_antare", fromlist=["main"]).main([]),   # its own argparse: never sys.argv
 }
 
 
@@ -43,8 +43,8 @@ def _importers():
 # ---------------------------------------------------------------- drivers
 
 def compare_track(t, compare_config=None, display=True):
-    """Run several tracker configs over one GT clip and print per-frame
-    MOTA, a metrics table and a summary (moved from track.py)."""
+    # verbatim from the old track.py (repo_cleanup.md stage 6); the module
+    # imports moved inside so importing src.cli stays cheap
     import src.core.trackset as ts
     import src.core.display as core_display
     import src.eval.metrics as eval_metrics
@@ -53,89 +53,102 @@ def compare_track(t, compare_config=None, display=True):
     try:
         import ubon_pycstuff.ubon_pycstuff as upyc
         upyc.enable_file_trace("uc_compare.log")
-    except Exception:
+    except:
         print("Could not enable file tracing for upyc")
 
-    config = stuff.load_dictionary(compare_config)
+    config=stuff.load_dictionary(compare_config)
 
     assert "gt_trackset" in config
     assert "configs_to_compare" in config
 
-    trackset_gt = ts.TrackSet(config["gt_trackset"])
-    configs_to_compare = config["configs_to_compare"]
-    import_start_time = 0
-    import_end_time = 60.0
+    trackset_gt=ts.TrackSet(config["gt_trackset"])
+    configs_to_compare=config["configs_to_compare"]
+    import_start_time=0
+    import_end_time=60.0
     print("Trimming")
     trackset_gt.trim(import_start_time, import_end_time)
 
-    trackset_compare = []
-    metrics_compare = []
-    names_compare = []
-    frame_events_list = []
-    for i, c in enumerate(configs_to_compare):
-        this_config = configs_to_compare[c]
+    trackset_compare=[]
+    metrics_compare=[]
+    names_compare=[]
+    frame_events_list=[]
+    for i,c in enumerate(configs_to_compare):
+        this_config=configs_to_compare[c]
 
-        params = None
+        params=None
         if "params" in this_config:
-            params = this_config["params"]
-        track_min_interval = this_config.get("track_min_interval", 0.199)
+            params=this_config["params"]
+        track_min_interval=this_config.get("track_min_interval", 0.199)
+        #max_duration=this_config.get("max_duration", 1000.0)
         if params is None:
-            params = {}
-        params["simple"] = False
+            params={}
+        params["simple"]=False #True
 
-        trackset = ts.TrackSet()
-        start_time = time.time()
+        trackset=ts.TrackSet()
+        start_time=time.time()
         print(f"Import/create {c}....")
         tracker_run.import_create(trackset, trackset_gt,
-                                  config_file=this_config["config"],
-                                  params=params,
-                                  track_min_interval=track_min_interval,
-                                  debug=False,
-                                  debug_enable=True,
-                                  start_time=import_start_time,
-                                  end_time=import_end_time)
+                               config_file=this_config["config"],
+                               params=params,
+                               track_min_interval=track_min_interval,
+                               debug=False,
+                               debug_enable=True,
+                               start_time=import_start_time,
+                               end_time=import_end_time)
 
-        trackset.name = c
-        import_time = time.time()
+        trackset.name=c
+        import_time=time.time()
         print("Computing metrics....")
-        metrics, frame_events = eval_metrics.compute_metrics(trackset_gt, trackset,
-                                                             frame_metrics=True,
-                                                             eval_rate_divisor=1)
-        metrics_time = time.time()
-        elapsed_import = import_time - start_time
-        elapsed_metrics = metrics_time - import_time
+        metrics, frame_events=eval_metrics.compute_metrics(trackset_gt, trackset,
+                                                         frame_metrics=True,
+                                                         eval_rate_divisor=1)
+        metrics_time=time.time()
+        elapsed_import=import_time-start_time
+        elapsed_metrics=metrics_time-import_time
+        #print(frame_events)
         print(metrics)
         print("--Summary--")
-        print(eval_report.summary_string(metrics) + f"  Import: {elapsed_import:.2f}s Metrics: {elapsed_metrics:.2f}s")
+        print(eval_report.summary_string(metrics)+f"  Import: {elapsed_import:.2f}s Metrics: {elapsed_metrics:.2f}s")
         trackset_compare.append(trackset)
         metrics_compare.append(metrics)
         frame_events_list.append(frame_events)
         names_compare.append(c)
 
     print("\nPer-frame MOTA")
-    nfr = len(frame_events_list[0])
+    nfr=len(frame_events_list[0])
     for i in range(nfr):
-        s = f"{i:4d} {frame_events_list[0][i]['frame_time']:6.3f}"
-        for j, fe in enumerate(frame_events_list):
-            s += f" {fe[i]['stats']['mota']:0.6f} "
-            if j != 0:
-                delta = fe[i]['stats']['mota'] - frame_events_list[0][i]['stats']['mota']
-                if abs(delta) > 0.001:
-                    s += f" E {delta:0.6f} "
+        s=f"{i:4d} {frame_events_list[0][i]['frame_time']:6.3f}"
+        for j,fe in enumerate(frame_events_list):
+            s+=f" {fe[i]['stats']['mota']:0.6f} "
+            if j!=0:
+                delta=fe[i]['stats']['mota']-frame_events_list[0][i]['stats']['mota']
+                if (abs(delta)>0.001):
+                    s+=f" E {delta:0.6f} "
         print(s)
 
     print("\nMetrics:")
+
     keys = list(metrics_compare[0].keys())
+
+    # Prepare table headers: "Metric" followed by "Run 1", "Run 2", ...
     headers = ["Metric"] + names_compare
+
+    # Build table rows
     rows = []
     for key in keys:
         row = [key]
         for run in metrics_compare:
             val = run.get(key, "")
-            row.append(f"{val:.4f}" if isinstance(val, float) else str(val))
+            if isinstance(val, float):
+                row.append(f"{val:.4f}")
+            else:
+                row.append(str(val))
         rows.append(row)
+
+    # Print table
     col_widths = [max(len(str(cell)) for cell in col) for col in zip(*([headers] + rows))]
     row_format = "  ".join(f"{{:<{w}}}" for w in col_widths)
+
     print(row_format.format(*headers))
     print("-" * (sum(col_widths) + 2 * (len(col_widths) - 1)))
     for row in rows:
@@ -145,50 +158,48 @@ def compare_track(t, compare_config=None, display=True):
     for i, x in enumerate(trackset_compare):
         print(f"{i} {names_compare[i]:20s}) {eval_report.summary_string(metrics_compare[i])}")
     if display:
-        core_display.display_trackset(trackset_list=trackset_compare, trackset_gt=trackset_gt,
-                                      frame_events_list=frame_events_list, output=None)
+        core_display.display_trackset(trackset_list=trackset_compare, trackset_gt=trackset_gt, frame_events_list=frame_events_list, output=None)
 
 
 def test_track(t, config_file, display=False, output=None, proxy=None, save_trackset=None):
-    """Track one GT clip with one config, print metrics, optionally save
-    or display the run (moved from track.py)."""
+    # verbatim from the old track.py (repo_cleanup.md stage 6); the module
+    # imports moved inside so importing src.cli stays cheap
     import src.core.trackset as ts
     import src.core.display as core_display
     import src.eval.metrics as eval_metrics
     import src.eval.report as eval_report
     import src.tracker.run as tracker_run
-    trackset_gt = ts.TrackSet(t)
-    trackset = ts.TrackSet()
-    start_time = time.time()
-    params = None
+    trackset_gt=ts.TrackSet(t)
+    trackset=ts.TrackSet()
+    start_time=time.time()
+    params=None
     if proxy is not None:
-        params = {"proxy": proxy}
+        params={"proxy":proxy}
     tracker_run.import_create(trackset, trackset_gt,
-                              track_min_interval=0.199,
-                              debug=False,
-                              config_file=config_file,
-                              debug_enable=True,
-                              params=params)
+                           track_min_interval=0.199,
+                           debug=False,
+                           config_file=config_file,
+                           debug_enable=True,
+                           params=params)
 
-    import_time = time.time()
-    metrics, frame_events = eval_metrics.compute_metrics(trackset_gt,
-                                                         trackset,
-                                                         frame_metrics=True,
-                                                         eval_rate_divisor=1,
-                                                         show_pbar=True,
-                                                         eval_min_framerate=5)
-    metrics_time = time.time()
-    elapsed_import = import_time - start_time
-    elapsed_metrics = metrics_time - import_time
+    import_time=time.time()
+    metrics, frame_events=eval_metrics.compute_metrics(trackset_gt,
+                                                     trackset,
+                                                     frame_metrics=True,
+                                                     eval_rate_divisor=1,
+                                                     show_pbar=True,
+                                                     eval_min_framerate=5)
+    metrics_time=time.time()
+    elapsed_import=import_time-start_time
+    elapsed_metrics=metrics_time-import_time
     print(metrics)
     print("--Summary--")
-    print(eval_report.summary_string(metrics) + f"  Import: {elapsed_import:.2f}s Metrics: {elapsed_metrics:.2f}s")
+    print(eval_report.summary_string(metrics)+f"  Import: {elapsed_import:.2f}s Metrics: {elapsed_metrics:.2f}s")
     if save_trackset is not None:
         trackset.export_track_file(save_trackset)
         print(f"Saved tracked run to {save_trackset}")
     if display:
-        core_display.display_trackset(trackset_list=[trackset], trackset_gt=trackset_gt,
-                                      frame_events_list=[frame_events], output=output)
+        core_display.display_trackset(trackset_list=[trackset], trackset_gt=trackset_gt, frame_events_list=[frame_events], output=output)
 
 
 # ---------------------------------------------------------------- parser
@@ -235,7 +246,7 @@ def build_parser():
     s.add_argument("yaml", help="search config yaml (the objective)")
 
     x = sub.add_parser("test", help="benchmark tracker configs over datasets (test yaml)")
-    x.add_argument("yaml")
+    x.add_argument("yaml", help="test yaml: tests + datasets (+ optional results_location)")
 
     i = sub.add_parser("import", help="tier 0 -> tier 1 import of a labelled dataset")
     i.add_argument("corpus", choices=sorted(IMPORTERS))
@@ -253,19 +264,29 @@ def build_parser():
     return p
 
 
+LOGGED_VERBS = {"view", "track", "compare", "eval", "search", "test"}
+
+
 def dispatch(ns):
     if ns.verb == "paths":
         for k, v in paths.describe().items():
             print(f"{k:16s} {v}")
         return 0
-    # per-run log dir, as track.py always did, before any logging happens
-    stuff.rmdir(os.path.join(os.getcwd(), "tmp"))
-    log_dir = os.path.join(os.getcwd(), "tmp/log")
-    stuff.makedir(log_dir)
-    stuff.configure_root_logger(ns.logging, log_dir=log_dir)
+    if ns.verb in LOGGED_VERBS:
+        # per-run log dir, as track.py always did for these actions, before
+        # any logging happens (import/corpus never had it: their old CLIs
+        # did not wipe ./tmp, so they still do not)
+        stuff.rmdir(os.path.join(os.getcwd(), "tmp"))
+        log_dir = os.path.join(os.getcwd(), "tmp/log")
+        stuff.makedir(log_dir)
+        stuff.configure_root_logger(ns.logging, log_dir=log_dir)
     if ns.pm is not None:
+        # read only by the eval runner's _resolve_pm (eval/search/test);
+        # harmless for the other verbs, so set unconditionally
         import src.eval.runner as eval_runner
         eval_runner.PM_OVERRIDE = ns.pm
+    if ns.verb == "import" and ns.amodal and ns.corpus != "personpath22":
+        raise SystemExit("--amodal is a personpath22 option")
     if ns.verb == "view":
         import src.core.display as core_display
         core_display.display_trackset(trackset_gt=ns.trackset)

@@ -36,7 +36,6 @@ import sys
 from src.corpus.manifest import load_capabilities
 import src.paths as paths
 import src.corpus.media as media
-from src.corpus.media import MP4_COPY_AUDIO, audio_args, probe_audio  # noqa: F401 (re-exported for the dataset_lite shim)
 from src.corpus.media import has_backward_pts, scale_dims  # noqa: F401 (used here and re-exported)
 
 
