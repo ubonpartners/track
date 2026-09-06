@@ -93,6 +93,7 @@ def probe(video):
     the container's nb_frames tag. Refuses VFR sources: frame k -> t=(k-1)/fps
     is only true on a constant-rate stream."""
     i = media.probe_video(video, count=True)
+    assert i.fps > 0, f"{video}: ffprobe cannot express the frame rate"
     assert i.fps == i.r_fps, f"{video}: VFR ({i.fps} avg vs {i.r_fps} r) — not importable as-is"
     return i.width, i.height, i.fps, i.n_frames
 

@@ -78,6 +78,8 @@ def divisor_from_config(src_fps, hint, config_path=None):
 def probe(video):
     """(width, height, fps) of the first video stream."""
     i = media.probe_video(video)
+    if i.fps <= 0:
+        raise ValueError(f"{video}: ffprobe cannot express the frame rate ({i.fps}); refusing to derive on it")
     return i.width, i.height, i.fps
 
 

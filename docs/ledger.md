@@ -38,6 +38,20 @@ while executing it that a later reader may want to reverse:
   callers use `search_test_batch`), `result_string`,
   `object_class_remap`, `densify_sparse_gt` (see the antare entry
   below), `T2()` in the registry, and the two migrations below.
+- **Media unification side effects** (stage 5, from its review): a
+  probe that cannot express the frame rate (`0/0`) now raises in
+  `derive.probe` and the antare importer instead of propagating
+  `fps=0.0`; `native_fps` raises on an unreadable file where it used to
+  return OpenCV's 0.0 (the only caller reports the clip as FAIL);
+  `probe_audio` on an audio-only file raises (no caller passes one);
+  an encoder falling back to the next one prints a one-line note with
+  ffmpeg's last stderr line, since `check_call`'s live stderr is gone.
+  Old-vs-new outputs compared by ffprobe signature (codec, packet
+  counts, duration, first/last pts): bwc video92 through
+  derive.transcode /4 (451 video + 2818 aac packets, 60.0 s) and with a
+  20 s cap (154 + 967, 20.512 s), transcode_h264 (1803 + 2818), remux
+  and the roundabouthd recipe on a synthetic clip (12 frames): all
+  identical.
 - **Smoke eval tolerance**: two runs of identical code differed by one
   ulp in one clip's MOTP (summation order). `tests/smoke_eval.py
   --compare` treats float differences under 1e-9 relative as noise and

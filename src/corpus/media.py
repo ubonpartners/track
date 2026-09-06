@@ -102,7 +102,9 @@ def probe_video(video, count=False):
 
 
 def probe_audio(video):
-    """codec name of the first audio stream, or None."""
+    """codec name of the first audio stream, or None. Goes through
+    probe_video, so an audio-only file raises ValueError (no caller
+    passes one)."""
     return probe_video(video).audio_codec
 
 
@@ -128,11 +130,12 @@ def scale_dims(w, h, max_edge=1280):
 
 
 def frame_pts(video):
-    """Display-order frame timestamps (seconds) of the first video stream."""
+    """Display-order frame timestamps (seconds) of the first video stream.
+    Raises CalledProcessError when ffprobe cannot read the file."""
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
          "-show_entries", "frame=pts_time", "-of", "csv=p=0", video],
-        capture_output=True, text=True).stdout
+        capture_output=True, text=True, check=True).stdout
     return [float(x.rstrip(",")) for x in out.split() if x.rstrip(",")]
 
 
@@ -226,7 +229,11 @@ def transcode(src, dst, encoders, *, tmp=".part{pid}.mp4", check=None,
     for i, cmd in enumerate(cmds):
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
-            err = r.stderr[-300:]
+            err = r.stderr[-600:]
+            if i + 1 < len(cmds):
+                print(f"  {os.path.basename(src)}: {' '.join(encoders[i][:2])} failed "
+                      f"(exit {r.returncode}: {err.strip().splitlines()[-1] if err.strip() else '?'}); "
+                      f"falling back to {' '.join(encoders[i + 1][:2])}", flush=True)
             continue
         if check is not None and not check(out):
             err = "output rejected by check"

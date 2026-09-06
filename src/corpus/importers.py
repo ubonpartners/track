@@ -199,7 +199,7 @@ def convert_chirla(src_root=None, output_folder=None, lite=True):
     Output stems: chirla_<seq>_<camera>_<timestamp> with ':' -> '-'
     (colons break too many downstream tools). mpeg4-in-avi sources are
     remuxed to mp4 (transcode fallback on broken pts, see
-    _remux_to_mp4). Existing outputs are not redone.
+    media.remux_to_mp4). Existing outputs are not redone.
     """
     src_root = src_root or paths.downloads("other", "chirla")
     output_folder = output_folder or paths.tier1("chirla")
@@ -269,7 +269,6 @@ def convert_roundabouthd(src_root=None, output_folder=None, lite=True):
     """
     src_root = src_root or paths.downloads("other", "bath_1574", "RoundaboutHD")
     output_folder = output_folder or paths.tier1("roundabouthd")
-    import subprocess
     stuff.makedir(output_folder + "/annotation/")
     stuff.makedir(output_folder + "/video/")
 
@@ -319,7 +318,6 @@ def convert_uvg_vcm(src_root=None, output_folder=None, lite=True):
     src_root = src_root or paths.downloads("other", "uvg_vcm")
     output_folder = output_folder or paths.tier1("uvg_vcm")
     import re
-    import subprocess
     stuff.makedir(output_folder + "/annotation/")
     stuff.makedir(output_folder + "/video/")
 
@@ -386,7 +384,7 @@ def convert_meva(src_root=None, output_folder=None,
     MEVA drop may be partial (the current one is a single 5-minute
     two-camera-set fixture) — re-run after adding clips; existing outputs
     are not redone. MEVA ships h264-in-avi; output videos are losslessly
-    remuxed to mp4 (see _remux_to_mp4).
+    remuxed to mp4 (see media.remux_to_mp4).
     """
     src_root = src_root or paths.downloads("other", "MEVA")
     output_folder = output_folder or paths.tier1("meva")
@@ -525,7 +523,7 @@ def convert_otw(src_root=None, output_folder=None,
     if lite:
         # tier 2 eval-spec derive AFTER augmentation (native-fps
         # invariant; broken-pts sources are already handled at tier-1
-        # import via the pts-checked _remux_to_mp4)
+        # import via the pts-checked media.remux_to_mp4)
         from src.corpus.derive import derive_tracking
         derive_tracking(os.path.basename(output_folder.rstrip("/")),
                         hint="static")
@@ -633,7 +631,6 @@ def convert_bdd100k_kaggle(src_root=None, output_folder=None, limit=0, lite=True
     src_root = src_root or paths.downloads("other", "BDD100k_kaggle")
     output_folder = output_folder or paths.tier1("bdd100k_mot")
     import csv as _csv
-    import subprocess
     person_cats = {"pedestrian", "rider"}
     vehicle_cats = {"car", "truck", "bus", "train", "motorcycle",
                     "bicycle", "trailer", "other vehicle"}

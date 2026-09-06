@@ -460,6 +460,11 @@ Review checklist
 ### Stage 5. One media module
 
 Goal: one ffprobe wrapper, one transcode function, one remux function.
+As built: `probe_video(path, count=False) -> VideoInfo`,
+`transcode(src, dst, encoders, ...)` with an encoder fallback list and
+an audio policy, `remux_to_mp4`, `transcode_h264`; six recipes (the
+plan's four plus the uvg raw-yuv and bdd inline commands), each pinned
+to its old command line in `tests/unit/test_media.py`.
 
 Steps
 

@@ -41,6 +41,7 @@ def test_derive_transcode_recipe():
                  "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23", "-g", "30", "-bf", "0", "out.mp4"]
     old_x264 = old_nvenc[:old_nvenc.index("-c:v")] + ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
                                                        "-g", "30", "-bf", "0", "out.mp4"]
+    assert len(cmds) == 2
     for new, old in zip(cmds, (old_nvenc, old_x264)):
         assert _opts(new)[1:] == _opts(old)[1:]
         assert new[:2] == ["ffmpeg", "-y"] and new[4:8] == old[4:8]      # -v error == -loglevel error
@@ -96,9 +97,12 @@ def test_uvg_and_bdd_recipes():
 
 
 def test_audio_policy():
+    # exact lists: the recipe tests substitute audio_args on both sides, so
+    # this is the one place that pins what "audio kept" means
     assert media.audio_args(None) == ["-an"]
-    assert media.audio_args("aac")[-2:] == ["-c:a", "copy"]
-    assert media.audio_args("ac3")[-4:] == ["-c:a", "aac", "-b:a", "160k"]
+    assert media.audio_args("aac") == ["-map", "0:v:0", "-map", "0:a:0", "-c:a", "copy"]
+    assert media.audio_args("ac3") == ["-map", "0:v:0", "-map", "0:a:0", "-c:a", "aac", "-b:a", "160k"]
+    assert media.audio_args("opus") == media.audio_args("ac3")
     (c,) = media.transcode("a", "b", [media.STREAM_COPY], keep_audio=False, dry_run=True)
     assert c[-2:] == ["-an", f"b.part{os.getpid()}.mp4"]
 
@@ -125,6 +129,9 @@ def test_probe_and_real_transcode(tiny_mp4, tmp_path):
     assert info.codec == "mpeg4" and info.audio_codec is None and info.r_fps == FPS
     assert media.probe_audio(tiny_mp4) is None and media.video_codec(tiny_mp4) == "mpeg4"
     assert media.native_fps(tiny_mp4) == FPS
+    import subprocess
+    with pytest.raises(subprocess.CalledProcessError):
+        media.frame_pts("/nonexistent/file.mp4")
     assert not media.has_backward_pts(tiny_mp4) and media.frame_pts_monotonic(tiny_mp4, FPS)
     assert derive.probe(tiny_mp4) == (W, H, FPS)
     out = str(tmp_path / "out.mp4")
@@ -134,6 +141,16 @@ def test_probe_and_real_transcode(tiny_mp4, tmp_path):
     assert not os.path.exists(out + f".part{os.getpid()}.mp4")
     with pytest.raises(RuntimeError):
         media.transcode(tiny_mp4, str(tmp_path / "x.mp4"), [["-c:v", "no_such_encoder"]])
+
+
+def test_probe_rejects_zero_fps(monkeypatch):
+    fake = media.VideoInfo(64, 48, 0.0, 0.0, 1.0, "h264", None, 0, 5)
+    monkeypatch.setattr(media, "probe_video", lambda v, count=False: fake)
+    with pytest.raises(ValueError):
+        derive.probe("x.mp4")
+    import src.import_antare as ia
+    with pytest.raises(AssertionError):
+        ia.probe("x.mp4")
 
 
 def test_video_codec_missing_file():

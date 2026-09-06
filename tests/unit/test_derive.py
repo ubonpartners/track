@@ -64,6 +64,5 @@ def test_rewrite_annotation_time_cap():
 def test_audio_args():
     import src.corpus.derive as dl
     assert dl.audio_args(None) == ["-an"]
-    assert dl.audio_args("aac")[-2:] == ["-c:a", "copy"]
-    assert "-map" in dl.audio_args("aac")
-    assert dl.audio_args("ac3")[-4:] == ["-c:a", "aac", "-b:a", "160k"]
+    assert dl.audio_args("aac") == ["-map", "0:v:0", "-map", "0:a:0", "-c:a", "copy"]
+    assert dl.audio_args("ac3") == ["-map", "0:v:0", "-map", "0:a:0", "-c:a", "aac", "-b:a", "160k"]
