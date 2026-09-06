@@ -1,6 +1,7 @@
 import src.trackset as ts
 import src.trackset_import as tsi
 import src.track_test as track_test
+import src.paths as paths
 import src.track_search as track_search
 import os
 import stuff
@@ -154,7 +155,7 @@ def test_track(t, config_file, display=False, output=None, proxy=None, save_trac
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='view.py')
     parser.add_argument('--logging', type=str, default='info', help="Logging config: level[:console|file]")
-    parser.add_argument('--trackset', type=str, default='/mldata/tracking/mot/annotation/MOT20-01.json')
+    parser.add_argument('--trackset', type=str, default=paths.tier2('mot', 'annotation', 'MOT20-01.json'))
     parser.add_argument('--view', action='store_true', help='view a trackset')
     parser.add_argument('--mot', action='store_true', help='make MOT sequences')
     parser.add_argument('--personpath22', action='store_true', help='make PersonPath22 sequences')
@@ -191,11 +192,16 @@ if __name__ == '__main__':
     parser.add_argument('--track', action='store_true', help='test tracker on a single sequence')
     parser.add_argument('--compare', type=str, default=None, help='compare multiple sets of tracking results')
     parser.add_argument('--display', action='store_true', help='visualise results')
-    parser.add_argument('--config', type=str, default="/mldata/config/track/trackers/uc_v11.yaml", help="config")
+    parser.add_argument('--config', type=str, default=paths.tracker_config(), help="config")
+    parser.add_argument('--paths', action='store_true', help='print every filesystem root the package resolves (src/paths.py) and exit')
     parser.add_argument('--output', type=str, default=None, help='output mp4 name')
     parser.add_argument('--save-trackset', type=str, default=None, help='save tracked run as UBTRK2 trackset file')
     parser.add_argument('--proxy', type=str, default=None, help='proxy addr:port remote jetson e.g. 192.168.1.35:18861')
     opt = parser.parse_args()
+    if opt.paths:
+        for k, v in paths.describe().items():
+            print(f"{k:16s} {v}")
+        exit()
     stuff.rmdir(os.path.join(os.getcwd(), "tmp"))
     log_dir = os.path.join(os.getcwd(), "tmp/log")
     stuff.makedir(log_dir)

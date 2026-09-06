@@ -50,6 +50,8 @@ import subprocess
 import sys
 from fractions import Fraction
 
+import src.paths as paths
+
 
 def choose_divisor(src_fps, min_fps):
     """Largest integer N with src_fps/N >= min_fps (N>=1) — the LOWEST
@@ -59,17 +61,16 @@ def choose_divisor(src_fps, min_fps):
     return max(1, int(math.floor(src_fps / float(min_fps) + 1e-9)))
 
 
-DEFAULT_TRACKER_CONFIG = "/mldata/config/track/trackers/uc_v11.yaml"
 
 
-def min_delta_from_config(hint, config_path=DEFAULT_TRACKER_CONFIG):
+def min_delta_from_config(hint, config_path=None):
     """min_time_delta_process for a camera class, read from the production
     tracker config. hint='bodycam' (any moving camera) reads the
     `(hint:bodycam)` variant when present; 'static' (or a hint with no
     variant) reads the base key. Imports derive their decimation from
     THIS so a config change only requires re-running the import."""
     import yaml
-    cfg = yaml.safe_load(open(config_path))
+    cfg = yaml.safe_load(open(config_path or paths.tracker_config()))
     key = "min_time_delta_process"
     if hint and hint != "static":
         v = cfg.get(f"{key}(hint:{hint})")
@@ -78,7 +79,7 @@ def min_delta_from_config(hint, config_path=DEFAULT_TRACKER_CONFIG):
     return float(cfg[key])
 
 
-def divisor_from_config(src_fps, hint, config_path=DEFAULT_TRACKER_CONFIG):
+def divisor_from_config(src_fps, hint, config_path=None):
     """Smallest integer N with N/src_fps >= min_time_delta_process: the
     decimated grid is then exactly the frame set the tracker's
     min-interval gate selects from the native stream (assuming clean CFR
@@ -242,7 +243,7 @@ def transcode(src, dst, divisor, dims, out_fps, max_seconds):
 
 def process_dataset(root, min_fps=None, max_seconds=None, drop_jitter=False,
                     max_edge=1280, hint=None,
-                    config_path=DEFAULT_TRACKER_CONFIG):
+                    config_path=None):
     """hint mode (preferred): divisor per clip from the tracker config's
     min_time_delta_process for that camera class (analytics-equivalent
     decimation; re-run after a config change). min_fps mode (legacy):
@@ -326,7 +327,7 @@ def main():
                         "config change)")
     g.add_argument("--min-fps", type=float,
                    help="legacy fixed framerate floor")
-    ap.add_argument("--config", default=DEFAULT_TRACKER_CONFIG,
+    ap.add_argument("--config", default=None,
                     help="tracker config for --hint mode")
     ap.add_argument("--max-seconds", type=float, default=None)
     ap.add_argument("--drop-jitter", action="store_true")

@@ -756,9 +756,9 @@ class TrackSetImportersMixin:
 
 
 def convert_mot(lite=True):
-    output_folder="/mldata/tracking_original/mot"
-    folders=["/mldata/downloaded_datasets/other/MOT20/train",
-             "/mldata/downloaded_datasets/other/MOT17/train"]
+    output_folder=paths.tier1("mot")
+    folders=[paths.downloads("other", "MOT20", "train"),
+             paths.downloads("other", "MOT17", "train")]
     stuff.makedir(output_folder+"/annotation/")
     stuff.makedir(output_folder+"/video/")
     for f in folders:
@@ -781,9 +781,10 @@ def convert_mot(lite=True):
                                         "MOT17-13": "bodycam"})
 
 
-def convert_personpath22(src_root="/mldata/downloaded_datasets/other/personpath22/dataset/personpath22",
-                         output_folder="/mldata/tracking_original/personpath22",
+def convert_personpath22(src_root=None, output_folder=None,
                          anno_variant="visible", lite=True):
+    src_root = src_root or paths.downloads("other", "personpath22", "dataset", "personpath22")
+    output_folder = output_folder or paths.tier1("personpath22")
     """Convert PersonPath22 (gluoncv-motion format) into MOT-equivalent
     JSON+mp4 pairs under output_folder/{annotation,video}/.
 
@@ -848,9 +849,10 @@ def convert_personpath22(src_root="/mldata/downloaded_datasets/other/personpath2
         derive_tracking("personpath22", hint="bodycam")
 
 
-def convert_jaad(src_root="/mldata/downloaded_datasets/other/JAAD",
-                 output_folder="/mldata/tracking_original/jaad", lite=True):
+def convert_jaad(src_root=None, output_folder=None, lite=True):
     """Convert JAAD XML + mp4 clips into MOT-like JSON+mp4 tracksets."""
+    src_root = src_root or paths.downloads("other", "JAAD")
+    output_folder = output_folder or paths.tier1("jaad")
     annotations_dir = os.path.join(src_root, "annotations")
     videos_dir = os.path.join(src_root, "JAAD_clips")
 
@@ -971,9 +973,9 @@ def _convert_meva_clip(args):
         return ("failed", stem)
     return ("done", stem)
 
-def convert_chirla(src_root="/mldata/downloaded_datasets/other/chirla",
-                   output_folder="/mldata/tracking_original/chirla",
-                   lite=True):
+def convert_chirla(src_root=None, output_folder=None, lite=True):
+    src_root = src_root or paths.downloads("other", "chirla")
+    output_folder = output_folder or paths.tier1("chirla")
     """Convert CHIRLA camera clips into trackset JSON + mp4 pairs.
 
     Output stems: chirla_<seq>_<camera>_<timestamp> with ':' -> '-'
@@ -1037,9 +1039,7 @@ def convert_chirla(src_root="/mldata/downloaded_datasets/other/chirla",
         derive_tracking("chirla", hint="static")
 
 
-def convert_roundabouthd(
-        src_root="/mldata/downloaded_datasets/other/bath_1574/RoundaboutHD",
-        output_folder="/mldata/tracking_original/roundabouthd", lite=True):
+def convert_roundabouthd(src_root=None, output_folder=None, lite=True):
     """Convert the 4 RoundaboutHD cameras into trackset JSON + mp4.
 
     Source videos are 4K MPEG-4 Part 2 (Simple Profile) — no desktop
@@ -1047,6 +1047,8 @@ def convert_roundabouthd(
     they are transcoded to h264 (NVENC when available, else x264,
     crf/cq 22, 2s keyframes) rather than copied.
     """
+    src_root = src_root or paths.downloads("other", "bath_1574", "RoundaboutHD")
+    output_folder = output_folder or paths.tier1("roundabouthd")
     import subprocess
     stuff.makedir(output_folder + "/annotation/")
     stuff.makedir(output_folder + "/video/")
@@ -1095,9 +1097,9 @@ def convert_roundabouthd(
         derive_tracking("roundabouthd", hint="static")
 
 
-def convert_uvg_vcm(src_root="/mldata/downloaded_datasets/other/uvg_vcm",
-                    output_folder="/mldata/tracking_original/uvg_vcm",
-                    lite=True):
+def convert_uvg_vcm(src_root=None, output_folder=None, lite=True):
+    src_root = src_root or paths.downloads("other", "uvg_vcm")
+    output_folder = output_folder or paths.tier1("uvg_vcm")
     """Convert downloaded UVG-VCM sequences into trackset JSON + mp4.
 
     Only sequences with BOTH a raw YUV on disk and a tracking-schema
@@ -1165,9 +1167,10 @@ def convert_uvg_vcm(src_root="/mldata/downloaded_datasets/other/uvg_vcm",
         derive_tracking("uvg_vcm", hint="static")
 
 
-def convert_meva(src_root="/mldata/downloaded_datasets/other/MEVA",
-                 output_folder="/mldata/tracking_original/meva",
+def convert_meva(src_root=None, output_folder=None,
                  workers=8, augment=True, augment_limit=0, lite=True):
+    src_root = src_root or paths.downloads("other", "MEVA")
+    output_folder = output_folder or paths.tier1("meva")
     """Convert MEVA (KF1) KPF clips into trackset JSON + video pairs under
     output_folder/{annotation,video}/.
 
@@ -1231,9 +1234,10 @@ def convert_meva(src_root="/mldata/downloaded_datasets/other/MEVA",
         derive_tracking(os.path.basename(output_folder.rstrip("/")),
                         hint="static", max_seconds=120)
 
-def convert_otw(src_root="/mldata/downloaded_datasets/other/otw/otw",
-                output_folder="/mldata/tracking_original/otw",
+def convert_otw(src_root=None, output_folder=None,
                 augment=True, augment_limit=0, lite=True):
+    src_root = src_root or paths.downloads("other", "otw", "otw")
+    output_folder = output_folder or paths.tier1("otw")
     """Convert Out the Window (OTW) into MOT-equivalent JSON+mp4 pairs
     under output_folder/{annotation,video}/.
 
@@ -1320,8 +1324,8 @@ def convert_otw(src_root="/mldata/downloaded_datasets/other/otw/otw",
 
 
 def convert_cevo(lite=True):
-    output_folder="/mldata/tracking_original/cevo_april25"
-    folder="/mldata/downloaded_datasets/IndiaOfficeFrontDoor"
+    output_folder=paths.tier1("cevo_april25")
+    folder=paths.downloads("IndiaOfficeFrontDoor")
     stuff.makedir(output_folder+"/annotation/")
     stuff.makedir(output_folder+"/video/")
     seqs=os.listdir(folder)
@@ -1346,10 +1350,7 @@ def convert_cevo(lite=True):
         derive_tracking("cevo_april25", hint="static")
 
 
-def convert_bdd100k_kaggle(
-        src_root="/mldata/downloaded_datasets/other/BDD100k_kaggle",
-        output_folder="/mldata/tracking_original/bdd100k_mot",
-        limit=0, lite=True):
+def convert_bdd100k_kaggle(src_root=None, output_folder=None, limit=0, lite=True):
     """Convert the 50-video Kaggle BDD100K MOT subset (original 30fps
     .mov clips + flattened scalabel CSV) into JSON+mp4 tracksets.
 
@@ -1365,6 +1366,8 @@ def convert_bdd100k_kaggle(
     occluded objects carry estimated full extents (visually verified on
     overlapping pedestrians/vehicles), matching MOT/JAAD semantics.
     """
+    src_root = src_root or paths.downloads("other", "BDD100k_kaggle")
+    output_folder = output_folder or paths.tier1("bdd100k_mot")
     import csv as _csv
     import subprocess
     person_cats = {"pedestrian", "rider"}
@@ -1577,9 +1580,9 @@ def convert_autolabel_folder(src_folder, output_folder, shard="",
     print(f"convert_autolabel_folder: {done} videos -> {output_folder}")
 
 
-def convert_raw_movies(src_folder="/mldata/video/youtube",
-                       output_folder="/mldata/tracking_original/raw_movies",
-                       shard="", lite=True):
+def convert_raw_movies(src_folder=None, output_folder=None, shard="", lite=True):
+    src_folder = src_folder or paths.video("youtube")
+    output_folder = output_folder or paths.tier1("raw_movies")
     """Raw movie/trailer mp4s, fully autolabelled. Edited multi-shot
     content, so autolabel's scene-cut detection (TransNetV2) is enabled:
     tracks must not survive or merge across cuts. Moving camera: the
@@ -1592,12 +1595,10 @@ def convert_raw_movies(src_folder="/mldata/video/youtube",
                         hint="bodycam")
 
 
-def convert_bwc_videotext(
-        src_folder="/mldata/downloaded_datasets/other/BWC-VideoText-359/"
-                   "eval_videos",
-        output_folder="/mldata/tracking_original/bwc-videotext", shard="",
-        lite=True):
+def convert_bwc_videotext(src_folder=None, output_folder=None, shard="", lite=True):
     """Body-worn-camera eval videos, fully autolabelled (use case 2)."""
+    src_folder = src_folder or paths.downloads("other", "BWC-VideoText-359", "eval_videos")
+    output_folder = output_folder or paths.tier1("bwc-videotext")
     convert_autolabel_folder(src_folder, output_folder, shard=shard)
     if lite:
         from src.corpus_manifest import derive_tracking
@@ -1721,10 +1722,10 @@ def estimate_bdd_time_offsets(detector_cache_root=None):
     metadata.time_offset_intervals. Alignment recovery of an acquisition
     artifact — boxes are never modified."""
     import sys as _sys
-    _sys.path.insert(0, os.path.expanduser("~/stuff/ubonpartners/autolabel"))
+    _sys.path.insert(0, paths.autolabel_repo())
     from autolabel.pipeline import cache_dir_for
     from autolabel.detect import load_detections
-    folder = "/mldata/tracking_original/bdd100k_mot"
+    folder = paths.tier1("bdd100k_mot")
     anno = sorted(f for f in os.listdir(folder + "/annotation")
                   if f.endswith(".json"))
     for name in anno:
@@ -1787,7 +1788,8 @@ def estimate_bdd_time_offsets(detector_cache_root=None):
         print(f"  {name}: offset {bo} (agreement {max(scores.values()):.2f})")
 
 
-def fix_cevo25_vfr_times(folder="/mldata/tracking_original/cevo_april25"):
+def fix_cevo25_vfr_times(folder=None):
+    folder = folder or paths.tier1("cevo_april25")
     """Restamp cevo_april25 GT frame_times from the video's real decoded
     PTS. Most of these cameras record variable frame rate (intervals
     0.03-0.13s) but the annotations carried synthetic times from a
@@ -1843,7 +1845,7 @@ def fix_cevo25_vfr_times(folder="/mldata/tracking_original/cevo_april25"):
 
 
 def dofix():
-    dr="/mldata/tracking/cevo/annotation"
+    dr=paths.tier2("cevo", "annotation")
     seqs=os.listdir(dr)
     for s in seqs:
         d=stuff.load_dictionary(dr+"/"+s)
@@ -1859,4 +1861,5 @@ def dofix():
 # Imported at module bottom so the circular dependency with trackset.py is
 # safe in either import order: by the time either module needs the other's
 # attributes, both class definitions above exist.
+import src.paths as paths
 import src.trackset as trackset

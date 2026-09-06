@@ -29,8 +29,15 @@ import os
 import sys
 import time
 
-T1 = "/mldata/tracking_original"
-T2 = "/mldata/tracking"
+from src import paths
+
+
+def T1():
+    return paths.tier1()
+
+
+def T2():
+    return paths.tier2()
 
 # GT quality/capability registry — the SHARED authority both repos read
 # (autolabel: eval/gt_manifest.py loader; track: load_capabilities).
@@ -154,10 +161,10 @@ CORPUS_INFO = {
             "source_root": "legacy import (MOTChallenge release zips)",
             "import_recipe": "convert_mot: seq images/video -> mp4 copy + GT"},
     "personpath22": {"license": "Apache-2.0 (dataset terms)",
-                     "source_root": "/mldata/downloaded_datasets/other/personpath22",
+                     "source_root": paths.downloads("other", "personpath22"),
                      "import_recipe": "import_personpath22: mp4 copy + keyframe GT"},
     "jaad": {"license": "MIT (JAAD terms)",
-             "source_root": "/mldata/downloaded_datasets/other/JAAD",
+             "source_root": paths.downloads("other", "JAAD"),
              "import_recipe": "import_jaad: mp4 copy + CVAT XML GT"},
     "bdd100k_mot": {"license": "BSD-3 (BDD100K terms)",
                     "source_root": "kaggle bdd100k-mot drop",
@@ -167,41 +174,41 @@ CORPUS_INFO = {
     "cevo_april25": {"license": "internal", "source_root": "internal capture",
                      "import_recipe": "internal import"},
     "meva": {"license": "Apache-2.0 (MEVA)",
-             "source_root": "/mldata/downloaded_datasets/other/MEVA",
+             "source_root": paths.downloads("other", "MEVA"),
              "import_recipe": "import_meva: h264-avi remux -> mp4 (x264 crf18 "
                               "fallback on broken pts) + KPF GT",
              "gt_passes": ["tighten (2026-07-23)", "consistency (2026-07-23)",
                            "densify (2026-07-23)", "augment (2026-07-23)"]},
     "otw": {"license": "research (OTW terms)",
-            "source_root": "/mldata/downloaded_datasets/other/otw",
+            "source_root": paths.downloads("other", "otw"),
             "import_recipe": "import_otw",
             "gt_passes": ["densify (2026-07-23)", "augment (2026-07-23)"]},
     "chirla": {"license": "CC BY 4.0",
-               "source_root": "/mldata/downloaded_datasets/other/chirla",
+               "source_root": paths.downloads("other", "chirla"),
                "import_recipe": "import_chirla: mpeg4-avi remux -> mp4 "
                                 "(bit-identical stream) + per-frame GT"},
     "roundabouthd": {"license": "MIT (Bath 1574)",
-                     "source_root": "/mldata/downloaded_datasets/other/bath_1574",
+                     "source_root": paths.downloads("other", "bath_1574"),
                      "import_recipe": "import_roundabouthd: mpeg4-SP 4K -> "
                                       "h264 nvenc cq22 (no desktop hw decode "
                                       "for source codec) + SCT GT"},
     "uvg_vcm": {"license": "CC BY 4.0",
-                "source_root": "/mldata/downloaded_datasets/other/uvg_vcm",
+                "source_root": paths.downloads("other", "uvg_vcm"),
                 "import_recipe": "import_uvg_vcm: raw yuv444p16 -> x264 crf18 "
                                  "yuv420p + COCO-class track GT"},
     "bwc-videotext": {"license": "internal",
                       "source_root": "internal bwc footage",
                       "import_recipe": "autolabel-labelled (no human GT)"},
     "antare_bwc": {"license": "internal (antare)",
-                   "source_root": "/mldata/downloaded_datasets/antare/ "
-                                  "{individuals - body camera-20260902T102854Z-1-001, "
-                                  "multiple views - body camera and fixed-20260906T050034Z-1-001}",
+                   "source_root": paths.downloads("antare") + " {individuals - body camera-"
+                                  "20260902T102854Z-1-001, multiple views - body camera and "
+                                  "fixed-20260906T050034Z-1-001}",
                    "import_recipe": "import_antare: mp4 copied unchanged + "
                                     "dense MOT GT (frame k == video frame k-1); "
                                     "per-clip camera hint in metadata (bodycam/static)"},
     "raw_movies": {"license": "unlicensed movie/trailer footage — "
                               "INTERNAL EVAL ONLY, never train, never ship",
-                   "source_root": "/mldata/video/youtube",
+                   "source_root": paths.video("youtube"),
                    "import_recipe": "convert_raw_movies: autolabel with "
                                     "scene cuts (AV1 sources h264-transcoded)"},
 }
@@ -228,7 +235,7 @@ def _files(root):
 
 
 def build(corpus):
-    root = os.path.join(T1, corpus)
+    root = os.path.join(T1(), corpus)
     mpath = os.path.join(root, "MANIFEST.json")
     old = json.load(open(mpath)) if os.path.isfile(mpath) else {"files": {}}
     info = CORPUS_INFO.get(corpus, {})
@@ -264,7 +271,7 @@ def build(corpus):
 
 def load_capabilities(corpus):
     """Read a corpus's capabilities block (both repos' entry point)."""
-    mp = os.path.join(T1, corpus, "MANIFEST.json")
+    mp = os.path.join(T1(), corpus, "MANIFEST.json")
     if not os.path.isfile(mp):
         return None
     return json.load(open(mp)).get("capabilities")
@@ -278,7 +285,7 @@ def allows(corpus, use):
 def set_audit(corpus, audit):
     """Autolabel's gt_audit write-back: merge measured numbers into
     capabilities.audit without rehashing files."""
-    mp = os.path.join(T1, corpus, "MANIFEST.json")
+    mp = os.path.join(T1(), corpus, "MANIFEST.json")
     man = json.load(open(mp))
     caps = man.setdefault("capabilities", {})
     caps["audit"] = dict(caps.get("audit", {}), **audit)
@@ -291,7 +298,7 @@ def set_file_source(corpus, rel, source):
     """Importer hook: record a tier-1 file's tier-0 origin
     ({path,url,sha256|bytes,status: present|deleted-refetchable|
     unknown-legacy})."""
-    mp = os.path.join(T1, corpus, "MANIFEST.json")
+    mp = os.path.join(T1(), corpus, "MANIFEST.json")
     man = json.load(open(mp))
     if rel not in man["files"]:
         raise KeyError(f"{corpus}/{rel} not in manifest — build first")
@@ -302,7 +309,7 @@ def set_file_source(corpus, rel, source):
 
 
 def verify(corpus):
-    root = os.path.join(T1, corpus)
+    root = os.path.join(T1(), corpus)
     man = json.load(open(os.path.join(root, "MANIFEST.json")))
     bad = []
     for rel, rec in man["files"].items():
@@ -351,8 +358,8 @@ def derive_tracking(corpus, hint=None, max_seconds=None, hint_overrides=None,
     from src.dataset_lite import (divisor_from_config, min_delta_from_config,
                                   scale_dims, probe, transcode,
                                   rewrite_annotation)
-    src = os.path.join(T1, corpus)
-    dst = os.path.join(T2, corpus)
+    src = os.path.join(T1(), corpus)
+    dst = os.path.join(T2(), corpus)
     recipe_path = os.path.join(dst, "derive_recipe.json")
     if hint is None and os.path.isfile(recipe_path):
         r = _json.load(open(recipe_path))
@@ -439,7 +446,7 @@ def check_tracking(corpus, purge_legacy=False):
     import shutil as _shutil
     import subprocess as _sp
     from src.dataset_lite import divisor_from_config
-    root = os.path.join(T2, corpus)
+    root = os.path.join(T2(), corpus)
     if not os.path.isdir(root):
         print(f"{corpus}: no tier-2 dir")
         return False
@@ -490,7 +497,7 @@ def check_tracking(corpus, purge_legacy=False):
         sv = md.get("source_video", "")
         if sv and not os.path.isfile(sv):
             problems.append(f"{stem}: source_video missing on disk: {sv}")
-        if sv and not sv.startswith(T1 + "/"):
+        if sv and not sv.startswith(T1() + "/"):
             problems.append(f"{stem}: source_video not tier-1: {sv}")
         ov = md.get("original_video", "")
         if not (ov.startswith(os.path.join(root, "video") + "/")

@@ -5,6 +5,7 @@ import os
 
 import stuff
 
+import src.paths as paths
 import src.track_test as track_test
 
 
@@ -410,7 +411,6 @@ def search_test(
 # CLI override. History: two configs both called "canonical" (this and a
 # 205-clip eval_ship_baseline.yaml with 2 unweighted groups) disagreed by
 # 0.003-0.005 on the same runs and invalidated results three times.
-CANONICAL_SEARCH_YAML = "/mldata/config/track/search/track_search_v11_mc.yaml"
 
 
 def eval_track(yaml_file=None, split=None, convention_permissive=None,
@@ -440,16 +440,17 @@ def eval_track(yaml_file=None, split=None, convention_permissive=None,
 
     Returns the aggregated results list (_overall + per-clip).
     """
+    canonical = paths.search_yaml()
     if yaml_file is None:
-        yaml_file = CANONICAL_SEARCH_YAML
-    elif os.path.realpath(yaml_file) != os.path.realpath(CANONICAL_SEARCH_YAML):
+        yaml_file = canonical
+    elif os.path.realpath(yaml_file) != os.path.realpath(canonical):
         # Not fatal -- one-off probes are legitimate -- but it must be
         # impossible to do accidentally and then quote the number as if it
         # were the objective.
         print("!" * 100)
         print("!! NOT THE OBJECTIVE CONFIG. You passed:")
         print(f"!!     {yaml_file}")
-        print(f"!! The objective is {CANONICAL_SEARCH_YAML}")
+        print(f"!! The objective is {canonical}")
         print("!! Numbers from this run are NOT comparable to search scores and must not be")
         print("!! quoted as an A/B result. Run `track.py --eval` with no path to use the objective.")
         print("!" * 100)

@@ -32,7 +32,6 @@ def literal_paths():
     return hits
 
 
-@pytest.mark.xfail(strict=True, reason="stage 2 of repo_cleanup.md: literals not yet routed through paths.py")
 def test_no_literal_paths():
     hits = literal_paths()
     assert not hits, "\n".join(hits)

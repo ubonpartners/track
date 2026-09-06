@@ -54,14 +54,23 @@ import subprocess
 import sys
 from fractions import Fraction
 
-T1_DEFAULT = "/mldata/tracking_original/antare_bwc"
-SRC_DEFAULTS = [
-    "/mldata/downloaded_datasets/antare/individuals - body camera-"
-    "20260902T102854Z-1-001/individuals - body camera",
-    "/mldata/downloaded_datasets/antare/multiple views - body camera and fixed-"
-    "20260906T050034Z-1-001/multiple views - body camera and fixed",
-]
-SRC_DEFAULT = SRC_DEFAULTS[0]
+import src.paths as paths
+
+
+
+def t1_default():
+    return paths.tier1("antare_bwc")
+
+
+def src_defaults():
+    """The two tier-0 drops this importer knows."""
+    return [
+        paths.downloads("antare", "individuals - body camera-20260902T102854Z-1-001",
+                        "individuals - body camera"),
+        paths.downloads("antare", "multiple views - body camera and fixed-20260906T050034Z-1-001",
+                        "multiple views - body camera and fixed"),
+    ]
+
 
 # scene folder id -> short incident slug (the folders are truncated titles:
 # "641-physical-scuffle-in-queue-results-in-eje"). Add a line per new scene;
@@ -239,18 +248,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", action="append",
                     help="source drop(s); default: both known drops")
-    ap.add_argument("--out", default=T1_DEFAULT)
+    ap.add_argument("--out", default=None, help="tier-1 corpus dir (default: <tier1>/antare_bwc)")
     ap.add_argument("clips", nargs="*", help="clip stems (default: all)")
     a = ap.parse_args()
     found = []
-    for src in a.src or SRC_DEFAULTS:
+    out = a.out or t1_default()
+    for src in a.src or src_defaults():
         found += discover(src)
     stems = [f[0] for f in found]
     assert len(stems) == len(set(stems)), "duplicate clip stems across sources"
     for stem, video, gt_dir, hint, scene in found:
         if a.clips and stem not in a.clips:
             continue
-        import_clip(stem, video, gt_dir, hint, scene, a.out)
+        import_clip(stem, video, gt_dir, hint, scene, out)
 
 
 if __name__ == "__main__":

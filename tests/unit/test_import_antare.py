@@ -98,7 +98,7 @@ def test_build_annotation_hint_and_scene():
 
 def test_default_source_layouts():
     # only checked when the drops are present on this box
-    for src in ia.SRC_DEFAULTS:
+    for src in ia.src_defaults():
         if os.path.isdir(src):
             found = ia.discover(src)
             assert found

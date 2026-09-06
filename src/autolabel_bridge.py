@@ -20,6 +20,8 @@ spawns its own conda env internally).
 import json
 import os
 import sys
+
+import src.paths as paths
 import time
 import traceback
 
@@ -35,9 +37,7 @@ _HELP = (
 
 
 def _autolabel_root():
-    cand = [os.environ.get("AUTOLABEL_PATH")]
-    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    cand.append(os.path.join(os.path.dirname(here), "autolabel"))
+    cand = [paths.autolabel_repo()]          # $AUTOLABEL_PATH, else sibling of this repo
     for c in cand:
         if c and os.path.isfile(os.path.join(c, "autolabel", "pipeline.py")):
             return c
@@ -140,8 +140,7 @@ def augment_trackset_file(anno_path, video_path=None, min_conf=0.55,
     # the same annotation stem.
     dataset = os.path.basename(os.path.dirname(
         os.path.dirname(os.path.abspath(anno_path))))
-    wd = work_dir or os.path.join("/mldata/autolabel_cache/v1/augment",
-                                  dataset)
+    wd = work_dir or paths.autolabel_cache("v1", "augment", dataset)
     al_json = os.path.join(
         wd, os.path.splitext(os.path.basename(anno_path))[0]
         + ".autolabel.json")
@@ -354,8 +353,7 @@ def tighten_trackset_file(anno_path, match_iou=0.4, min_conf=0.5,
 
     dataset = os.path.basename(os.path.dirname(
         os.path.dirname(os.path.abspath(anno_path))))
-    wd = work_dir or os.path.join("/mldata/autolabel_cache/v1/augment",
-                                  dataset)
+    wd = work_dir or paths.autolabel_cache("v1", "augment", dataset)
     al_json = os.path.join(
         wd, os.path.splitext(os.path.basename(anno_path))[0]
         + ".autolabel.json")
