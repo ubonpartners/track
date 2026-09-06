@@ -45,7 +45,7 @@ tier 1   /mldata/tracking_original/<corpus>/
 
 tier 2   /mldata/tracking/<corpus>/
          This repo's derived EVAL-SPEC view, produced by
-         `corpus_manifest derive` (§6). Mutable, disposable,
+         `src.corpus.manifest derive` (§6). Mutable, disposable,
          re-derivable at any time. NEVER an autolabel input.
 ```
 
@@ -144,9 +144,9 @@ autolabel itself — `train_detector` only; BDD gates detection only
 
 Enforcement:
 
-- `corpus_manifest build` REFUSES a corpus with no capabilities block —
+- `src.corpus.manifest build` REFUSES a corpus with no capabilities block —
   nothing enters tier 1 unclassified.
-- `corpus_manifest verify` flags a missing block.
+- `src.corpus.manifest verify` flags a missing block.
 - Autolabel's test suite fails if any eval-set clip belongs to an
   unregistered corpus or one not approved for that set's use, and its
   tools consume the registry directly (e.g. the export-confidence

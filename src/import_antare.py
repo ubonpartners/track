@@ -28,7 +28,7 @@
 #
 # Import (per clip):
 #   - video copied UNCHANGED into tier 1 (the source is the truth; the
-#     eval copy is made by `corpus_manifest derive`: 1280 long edge, I+P,
+#     eval copy is made by `src.corpus.manifest derive`: 1280 long edge, I+P,
 #     and — by tier-2 spec — decimated to the tracker's analytics grid);
 #   - camera class recorded as metadata.hint: "bodycam" for antare-bwc-*
 #     cameras, "static" for the fixed ones. `derive` reads it per clip, so

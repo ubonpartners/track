@@ -7,8 +7,8 @@ Layout contract:
       video/ annotation/ MANIFEST.json  manifest). Append-only: re-imports
                                         bump `version` per clip, never
                                         overwrite silently.
-  /mldata/tracking/<corpus>/           tier 2: tracker's derived copies
-                                        (hardlinks by default, see
+  /mldata/tracking/<corpus>/           tier 2: tracker's derived eval-spec
+                                        copies (src/corpus/derive.py
                                         derive_tracking) — mutable, never
                                         an autolabel input.
 

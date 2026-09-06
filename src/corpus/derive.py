@@ -1,56 +1,29 @@
 """Tier-2 derivation (repo_cleanup.md stage 4d): the eval-spec transcode +
-annotation rewrite that was src/dataset_lite.py, and derive_tracking /
-check_tracking that were in src/corpus_manifest.py. Bodies moved
-verbatim; the only stitching is that derive_tracking/check_tracking no
-longer import the lite helpers from another module and read the tier
-roots from src.paths directly.
+annotation rewrite (was src/dataset_lite.py) and derive_tracking /
+check_tracking (were in src/corpus_manifest.py).
 
---- original dataset_lite.py header ---
-Lite dataset import (MB spec 2026-07-23): re-encode a labelled-track
-dataset's videos for cheap eval decode, keeping frame-time truth intact.
-
+Eval-spec view of a corpus (MB spec 2026-07-23/24):
   - longest side capped at 1280 (never upscaled; boxes are normalized so
     annotations are resolution-free — only metadata w/h changes);
-  - framerate reduced by an INTEGER divisor N (keep every Nth frame):
-    static cameras -> lowest resulting fps >= 5, moving -> >= 12. The
-    retained frames keep their EXACT original PTS (ffmpeg select + vfr
-    passthrough), so nothing downstream re-times anything;
-  - annotations are subset to exactly the retained frames
-    (round(frame_time*src_fps) % N == 0) — annotated frames always
-    correspond to retained frames. BDD's sparse 5fps GT lands on the
-    retained cadence for any N dividing 6;
-  - no B-frames, I+P only, GOP ~2s of output frames;
-  - audio PRESERVED when the source has it (AAC copied, else re-encoded
-    to AAC; the tracker runs audio analytics on the same file);
-  - optional hard duration cap (MEVA: 120s);
+  - framerate reduced by an INTEGER divisor N (keep every Nth frame) to the
+    analytics grid the tracker config's min_time_delta_process selects for
+    the camera hint (or a forced --divisor); retained frames restamped to
+    an exact N/fps grid and the annotation subset to them
+    (rewrite_annotation);
+  - no B-frames, I+P only, GOP ~2s; audio preserved when the source has it;
+  - optional hard duration cap (MEVA: 120s), plus <root>/video_autolabel/
+    stream-copied native-rate clips for autolabel input when capped;
+  - optional quarantine of clips with backward pts (OTW doorbell jitter)
+    into <root>/dropped_jitter/.
 
-AUTOLABEL ORDERING (the invariant that keeps GT quality): auto-annotation
-ALWAYS runs on the NATIVE-framerate source — its own tracking would
-degrade badly at 5fps — and the fps drop is applied to the RESULTING
-annotation by cadence subsetting here. Time-trimming is safe, rate-drop
-input is not. For time-capped sets this tool therefore also emits
-<root>/video_autolabel/<name>.mp4: a stream-copied (native fps/res)
-duration-trimmed clip that is the ONLY correct autolabel input; the lite
-clip is for EVAL DECODE ONLY.
-  - optionally DROP clips whose source timestamps are broken (backward
-    PTS jitter, the OTW doorbell disease): video+annotation are moved to
-    <root>/dropped_jitter/, never deleted.
+AUTOLABEL ORDERING: auto-annotation always runs on the NATIVE-framerate
+source; the fps drop is applied to the resulting annotation here. Time-
+trimming is safe, rate-drop input is not.
 
-Output: <root>/video_lite/<name>.mp4; the annotation json is updated in
-place (metadata.original_video repointed, frame_rate/width/height updated,
-a `lite:` provenance block added — the tool skips clips that already have
-one) with a one-time <name>.json.orig backup beside it.
-
-Usage:
-  python -m src.dataset_lite --root /mldata/tracking/meva  --min-fps 5 --max-seconds 120
-  python -m src.dataset_lite --root /mldata/tracking/otw   --min-fps 5 --drop-jitter
-  python -m src.dataset_lite --root /mldata/tracking/bwc-videotext --min-fps 12
-
-ffmpeg IS allowed here: this is offline dataset preparation tooling, not
-the ai-node runtime.
-audio codecs that can be stream-copied into mp4 and that the tracker's
-mp4 demuxer hands on (ubon_cstuff mp4_demux.h: audio comes out as raw
-AAC). Anything else present is re-encoded to AAC; no audio -> -an.
+CLIs: `python -m src.corpus.manifest derive|check <corpus>` is the tier
+pipeline; `python -m src.corpus.derive --root <dir> --hint ...` is the
+legacy in-place lite pass (process_dataset) on a <root>/annotation tree.
+ffmpeg IS allowed here: offline dataset preparation, not the ai-node runtime.
 """
 import argparse
 import json
@@ -269,7 +242,7 @@ def process_dataset(root, min_fps=None, max_seconds=None, drop_jitter=False,
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = argparse.ArgumentParser(description="In-place lite pass over <root>/annotation (legacy; the tier pipeline is src.corpus.manifest derive).")
     ap.add_argument("--root", required=True)
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--hint", choices=["static", "bodycam"],

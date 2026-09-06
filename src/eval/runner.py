@@ -67,7 +67,7 @@ def _clip_meta(json_path):
     md = json.load(open(json_path)).get("metadata") or {}
     m = {"original_video": md.get("original_video"),
          "frame_rate": md.get("frame_rate"),
-         # lite provenance == guaranteed I+P encoding (dataset_lite -bf 0),
+         # lite provenance == guaranteed I+P encoding (src.corpus.derive transcodes -bf 0),
          # the precondition for the B-frame-skipping mp4-direct ingest
          "lite": bool(md.get("lite")),
          "_mtime": os.path.getmtime(json_path)}
@@ -252,7 +252,7 @@ def run_single_shared(config, tests_to_run, desc, max_streams):
                     cap = item.get("max_duration", 100000)
                     cap = cap if cap < 9000 else None
                 video = meta["original_video"]
-                # mp4-direct only for lite-provenance clips: dataset_lite
+                # mp4-direct only for lite-provenance clips: src.corpus.derive
                 # encodes I+P-only, so the ingest's B-frame skip is a no-op.
                 # Non-lite mp4s (mot/personpath22 full-rate) are B-framed
                 # and keep the h264 path until they get a lite pass.

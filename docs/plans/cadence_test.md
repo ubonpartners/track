@@ -116,7 +116,7 @@ New `tools/cadence_test.py` (builder + manifest emitter):
 - **Layout**: `/mldata/tracking/cadence_test/<variant>/{video,annotation}/`
   — experiment data, tier-2-class (regenerable from tier 1 + this plan),
   NOT registered in the corpus registry (it is not a corpus; the eval
-  config points at it directly). `corpus_manifest check` does not cover it;
+  config points at it directly). `src.corpus.manifest check` does not cover it;
   the builder runs its own verification: per clip × variant, frame count,
   PTS set == expected grid, annotation frames == video frames.
 

@@ -123,7 +123,7 @@ def display_results(config, results, columns, sort_key):
     # and poisons every rollup containing it (jaad selected-subjects clips
     # with no pedestrian; meva clips emptied by the duration cap). Such
     # clips carry no signal for any objective — drop them from rollups,
-    # loudly. `corpus_manifest check` flags them at the data layer too.
+    # loudly. `src.corpus.manifest check` flags them at the data layer too.
     _empty=[r["params"]["ds_key"] for r in results
             if r["result"].get("num_objects", 1) == 0]
     if _empty:
