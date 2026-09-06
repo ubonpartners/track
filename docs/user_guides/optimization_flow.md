@@ -14,7 +14,7 @@ manual.
 | tracker config | `/mldata/config/track/trackers/uc_v11.yaml` | the production config being tuned. Shared by every deployed box. Never edit it without explicit approval. |
 | search yaml | `/mldata/config/track/search/track_search_v11_mc.yaml` | THE objective: which clips, how they are weighted, which parameters move and by how much. There is exactly one. |
 | results dir | `/mldata/results/track_v11_mc/` (`result_log_file_path` in the yaml) | per-run text log, jsonl journal and live HTML report |
-| eval | `python track.py --eval` | runs the same yaml once, no search, for before/after comparisons |
+| eval | `python -m src.cli eval` | runs the same yaml once, no search, for before/after comparisons |
 | comparator | `python -m src.eval_compare` | prints two eval runs side by side |
 
 Search and eval read the same yaml, so they cannot describe different
@@ -120,7 +120,7 @@ day. Plan for that. Only one heavy job at a time on this machine.
 ## Running it
 
 ```
-python track.py --search /mldata/config/track/search/track_search_v11_mc.yaml
+python -m src.cli search /mldata/config/track/search/track_search_v11_mc.yaml
 ```
 
 Before launching:
@@ -133,9 +133,9 @@ Before launching:
   validates on val. Setting it false uses every clip for both, which
   gives no overfitting signal at all.
 
-Optional overrides: `--pm N` sets the detector performance tier for
+Optional overrides: `--pm N` (before the verb) sets the detector performance tier for
 every eval stream (0 is full resolution). `--tracker-config <path>`
-on `--eval` substitutes a tracker config without editing the yaml.
+on `eval` substitutes a tracker config without editing the yaml.
 
 To resume a crashed run, add `resume_from: <path to search_journal_*.jsonl>`
 to the yaml. Every candidate already scored is loaded into the cache
@@ -181,13 +181,13 @@ noise. Do not "fix" the spread. Replicate instead.
 2. Establish the baseline first:
 
    ```
-   python track.py --eval --eval-split val --results-location /mldata/results/eval/before
+   python -m src.cli eval --split val --results-location /mldata/results/eval/before
    ```
 
 3. Apply the change to the tracker config, then:
 
    ```
-   python track.py --eval --eval-split val --results-location /mldata/results/eval/after
+   python -m src.cli eval --split val --results-location /mldata/results/eval/after
    python -m src.eval_compare /mldata/results/eval/before /mldata/results/eval/after
    ```
 
@@ -196,9 +196,9 @@ noise. Do not "fix" the spread. Replicate instead.
    for deltas.
 
 4. For a tracker A/B that should not touch the production file, pass
-   `--tracker-config <candidate.yaml>` to `--eval` instead.
+   `--tracker-config <candidate.yaml>` to `eval` instead.
 
-`--eval` with no yaml path runs the objective config. Passing a path
+`eval` with no yaml path runs the objective config. Passing a path
 is allowed for one-off probes and prints a loud warning that the
 numbers are not comparable with search scores.
 

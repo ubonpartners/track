@@ -15,7 +15,7 @@ working summary.
 
 These are the defaults. The code resolves every root through
 `src/paths.py`, which reads `TRACK_MLDATA`, `TRACK_TIER1`, `TRACK_TIER2`
-and friends from the environment; `python track.py --paths` shows what
+and friends from the environment; `python -m src.cli paths` shows what
 is in effect.
 
 **Tier 0** is whatever you fetched: zips, AVIs, PNG sequences, MOT text
@@ -38,7 +38,7 @@ tier 1.
 
 ## What the tier-2 derive does
 
-`python -m src.corpus.manifest derive <corpus> --hint=static|bodycam`
+`python -m src.cli corpus derive <corpus> --hint static|bodycam`
 walks every tier-1 clip and produces the eval-spec version:
 
 - longest side capped at 1280, never upscaled;
@@ -52,8 +52,8 @@ walks every tier-1 clip and produces the eval-spec version:
   the `hint`, the corpus `box_convention`, and a `source_video` pointer
   back to tier 1.
 
-Pass `--divisor=N` to force the divisor instead (for example
-`--divisor=1` keeps the native frame timing untouched; antare_bwc is
+Pass `--divisor N` to force the divisor instead (for example
+`--divisor 1` keeps the native frame timing untouched; antare_bwc is
 derived this way). The choice is recorded in `derive_recipe.json`, so a
 bare `derive <corpus>` later reuses it and `check` judges against it.
 
@@ -132,15 +132,15 @@ Points that matter when writing an importer:
    undeclared corpus.
 
 4. **Build the manifest**:
-   `python -m src.corpus.manifest build <corpus>`
+   `python -m src.cli corpus build <corpus>`
    hashes every file and stamps the capabilities.
 
 5. **Derive tier 2**:
-   `python -m src.corpus.manifest derive <corpus> --hint=bodycam`
+   `python -m src.cli corpus derive <corpus> --hint bodycam`
    (or `static`).
 
 6. **Check it**:
-   `python -m src.corpus.manifest check <corpus>`
+   `python -m src.cli corpus check <corpus>`
    verifies resolution, B-frames, frame grid, and that every annotation
    carries the provenance fields. Run `verify <corpus>` for a full
    tier-1 hash check.
@@ -192,10 +192,10 @@ the importer and NN the source camera number. All clips are 10 fps
 constant-rate with a label on every frame.
 
 ```
-python -m src.import_antare                                   # copies mp4, writes json
-python -m src.corpus.manifest build antare_bwc
-python -m src.corpus.manifest derive antare_bwc --hint=bodycam --divisor=1
-python -m src.corpus.manifest check antare_bwc
+python -m src.cli import antare                               # copies mp4, writes json
+python -m src.cli corpus build antare_bwc
+python -m src.cli corpus derive antare_bwc --hint bodycam --divisor 1
+python -m src.cli corpus check antare_bwc
 ```
 
 The corpus mixes moving and fixed cameras, so the importer writes the
@@ -214,9 +214,9 @@ convention is never documented and has been wrong before.
 
 ## Looking at what you imported
 
-- `python track.py --view --trackset <annotation.json>` plays the
+- `python -m src.cli view <annotation.json>` plays the
   video with the GT boxes drawn.
-- `python track.py --eval` runs the one objective config the search
+- `python -m src.cli eval` runs the one objective config the search
   optimises (`--eval-split val` for search-comparable scores; compare
-  runs with `python -m src.eval_compare`). `--search <yaml>` runs the
+  runs with `python -m src.eval_compare`). `search <yaml>` runs the
   parameter search over the registered datasets.

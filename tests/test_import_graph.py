@@ -23,6 +23,7 @@ LAYER = {
     "autolabel_bridge": "corpus",
     "track_test": "eval", "eval_compare": "eval",
     "track_search": "search",
+    "cli": "cli",
 }
 # subpackages: every module under the prefix belongs to the layer
 PREFIX_LAYER = {"formats.": "formats", "eval.": "eval", "corpus.": "corpus",

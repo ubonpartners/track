@@ -34,7 +34,7 @@ Every `/mldata` root the code uses is resolved in `src/paths.py` from
 `TRACK_*` environment variables (`TRACK_MLDATA`, `TRACK_TIER1`,
 `TRACK_TIER2`, `TRACK_CONFIG_DIR`, `TRACK_TRACKER_CONFIG`,
 `TRACK_SEARCH_YAML`, ...) with the dev-box layout as the default;
-`python track.py --paths` prints the resolved values. The autolabel
+`python -m src.cli paths` prints the resolved values. The autolabel
 checkout is `$AUTOLABEL_PATH`, else a sibling directory of this repo.
 
 ## Repository Layout
@@ -148,11 +148,30 @@ For low-level container and payload wrapper documentation, see the
 
 ## CLI Workflows
 
+The command line is `python -m src.cli <verb> ...` (`--help` lists the
+verbs: view, track, compare, eval, search, test, import, corpus, paths).
+The old `python track.py --flag` forms still work and print the new
+spelling:
+
+| old | new |
+|---|---|
+| `python track.py --eval [yaml] --eval-split val --results-location D` | `python -m src.cli eval [yaml] --split val --results-location D` |
+| `python track.py --search s.yaml` | `python -m src.cli search s.yaml` |
+| `python track.py --test t.yaml` | `python -m src.cli test t.yaml` |
+| `python track.py --track --trackset g.json --config c.yaml --display` | `python -m src.cli track g.json --config c.yaml --display` |
+| `python track.py --view --trackset x` | `python -m src.cli view x` |
+| `python track.py --compare c.yaml` | `python -m src.cli compare c.yaml` |
+| `python track.py --mot` (and `--jaad`, `--meva`, ...) | `python -m src.cli import mot` |
+| `python -m src.corpus.manifest build\|verify\|derive\|check <corpus>` | `python -m src.cli corpus build\|verify\|derive\|check <corpus>` |
+| `python track.py --paths` | `python -m src.cli paths` |
+
+`--pm N` and `--logging` go before the verb.
+
 ### View a sequence or tracked run
 
 ```bash
-python track.py --view --trackset /path/to/input.json
-python track.py --view --trackset /path/to/run.ubtrk2
+python -m src.cli view /path/to/input.json
+python -m src.cli view /path/to/run.ubtrk2
 ```
 
 The viewer accepts:
@@ -163,10 +182,8 @@ The viewer accepts:
 ### Run tracking, evaluate, and save a tracked run
 
 ```bash
-python track.py \
-  --track \
-  --trackset /mldata/tracking/mot/annotation/MOT17-05.json \
-  --config /mldata/config/track/trackers/uc_v10.yaml \
+python -m src.cli track /mldata/tracking/mot/annotation/MOT17-05.json \
+  --config /mldata/config/track/trackers/uc_v11.yaml \
   --save-trackset /tmp/MOT17-05.ubtrk2 \
   --display
 ```
@@ -182,19 +199,19 @@ This will:
 ### Benchmark suites
 
 ```bash
-python track.py --test configs/tests.yaml
+python -m src.cli test configs/tests.yaml
 ```
 
 ### Compare configs
 
 ```bash
-python track.py --compare compare.yaml --trackset /mldata/.../annotation.json
+python -m src.cli compare compare.yaml
 ```
 
 ### Parameter search
 
 ```bash
-python track.py --search configs/search.yaml
+python -m src.cli search configs/search.yaml
 ```
 
 Search now assumes `upyc`-style configs only. Parameters are found by key name

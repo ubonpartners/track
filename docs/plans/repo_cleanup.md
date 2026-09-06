@@ -506,7 +506,9 @@ Steps
    no logic moves.
 2. `track.py` becomes a shim that maps old flags to subcommands and
    prints a one-line deprecation pointing at the new form.
-3. Console script `track` in `pyproject.toml`.
+3. Console script `track` in `pyproject.toml` — deferred: the package is
+   still `src` (see section 2), so `python -m src.cli <verb>` is the
+   spelling until the rename.
 4. Update both user guides and the README to the new commands, keeping
    the old forms in a short "if you have an old note" table.
 
