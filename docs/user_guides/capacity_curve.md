@@ -36,7 +36,7 @@ show MOTION frames in its log / a lower quality delta vs its `grid_*` twin at
 # on the Jetson, in ubon_cstuff (build rt_benchmark first — older binaries
 # emit only 4 of the 6 pm columns):
 cmake --build build --target rt_benchmark -j6
-./tools/jetson_pm_sweep.sh rt_new.csv                      # current config
+<track repo>/tools/jetson_pm_sweep.sh rt_new.csv           # current config (run from the ubon_cstuff checkout; the script is in this repo)
 ./tools/jetson_pm_sweep.sh rt_old.csv /tmp/old_policy.yaml # optional comparison policy
 ```
 

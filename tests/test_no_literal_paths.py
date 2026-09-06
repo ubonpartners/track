@@ -11,15 +11,16 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "src")
 PATTERN = re.compile(r"[\"'](/mldata|/home/|~/)")
-ALLOWED_FILES = {"paths.py"}
+ALLOWED = {os.path.join(SRC, "paths.py")}      # the one module that may name a root
 
 
 def _files():
     yield os.path.join(ROOT, "track.py")          # the CLI is part of the package
     for dp, _d, fns in os.walk(SRC):
         for fn in fns:
-            if fn.endswith(".py") and fn not in ALLOWED_FILES:
-                yield os.path.join(dp, fn)
+            p = os.path.join(dp, fn)
+            if fn.endswith(".py") and p not in ALLOWED:
+                yield p
 
 
 def literal_paths():

@@ -214,7 +214,7 @@ numbers are not comparable with search scores.
   a log line or counter before spending a day searching it.
 - **Regulated quantities.** Real-time capacity and GPU seconds per
   frame are pinned by the controller and are not A/B material. The
-  capacity curve tooling in `docs/capacity_curve.md` is the path for
+  capacity curve tooling in `docs/user_guides/capacity_curve.md` is the path for
   those.
 - **Comparing with production numbers.** Search and eval use exact
   detector batching and disable faces, CLIP and audio. Production
