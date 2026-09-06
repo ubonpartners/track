@@ -14,7 +14,6 @@ import stuff
 from src.eval.metrics import fitness_multi_score, fitness_score
 
 
-
 def summary_string(r):
     s=f" MOTA:{r['mota']:6.5f}"
     if 'idf1' in r:
@@ -65,27 +64,6 @@ def summary_string(r):
     return s
 
 
-
-def result_string(result, columns):
-    rh=""
-    rs=""
-    for c in columns:
-        cs=c.split(",")
-        key=cs[0]
-        hd=cs[1]
-        fmt=cs[2]
-        if key in result:
-            if fmt=="seconds_ago":
-                rs+=(f"{stuff.format_seconds_ago(result[key]):>6s}")
-            else:
-                rs+=(f"{fmt.format(result[key])}")
-            rh+=hd
-        #else:
-        #    print(f"{key}: Key not found in dictionary")
-    return rs,rh
-
-
-
 def get_avg_scores(results, test, param, group=None):
     t=0.0
     n=0
@@ -101,7 +79,6 @@ def get_avg_scores(results, test, param, group=None):
         return t
     else:
         return 0
-
 
 
 def display_results(config, results, columns, sort_key):
@@ -350,7 +327,6 @@ def display_results(config, results, columns, sort_key):
     return results2
 
 
-
 def _summary_metric_keys():
     """Float keys exposed in the per-test summary JSON sidecar. Per-class
     namespaced variants (multi_class_and_hints.md §2) ride along for every
@@ -370,7 +346,6 @@ def _summary_metric_keys():
     return out
 
 
-
 def _result_subset(result, keys):
     out = {}
     for k in keys:
@@ -380,7 +355,6 @@ def _result_subset(result, keys):
                 v = v.item()
             out[k] = v
     return out
-
 
 
 def _write_eval_summary_json(config, output_results, rollups, elapsed):
@@ -462,7 +436,6 @@ def _write_eval_summary_json(config, output_results, rollups, elapsed):
         import traceback
         sys.stderr.write("eval html report failed: "
                          + traceback.format_exc() + "\n")
-
 
 
 def _write_eval_summary_html(path, summary):

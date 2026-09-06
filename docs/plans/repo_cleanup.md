@@ -414,10 +414,9 @@ own sub-stage with the full protocol.
    inline in `convert_roundabouthd`; stage 5 lifts it with the rest).
 2. `corpus/importers.py`: every `convert_*`, `convert_autolabel_folder`,
    `reduce_dataset`, `apply_reduction`.
-3. `corpus/migrations.py`: `estimate_bdd_time_offsets`,
-   `fix_cevo25_vfr_times`, `dofix`, each with a docstring stating the
-   date it ran and the corpus it touched. Candidates for deletion in
-   stage 7 once ledgered.
+3. `corpus/migrations.py`: `estimate_bdd_time_offsets` and `dofix`
+   (ledgered and deleted in stage 7; `fix_cevo25_vfr_times` turned out
+   to be a live step of `convert_cevo` and moved to importers).
 4. `trackset_import.py` becomes re-exports.
 
 4c. `trackset.py` to `core/`

@@ -1,4 +1,5 @@
-"""Compatibility shim (repo_cleanup.md stage 4a; delete in stage 7).
+"""Compatibility shim, KEPT for the autolabel repo (ledger 2026-09-06
+Repo cleanup): delete once autolabel imports src.eval.* directly.
 
 The eval engine now lives in src/eval/{matching,metrics,runner,report}.
 Everything is re-exported here so old imports keep working, EXCEPT the
@@ -42,7 +43,6 @@ from src.eval.runner import (  # noqa: F401
 )
 from src.eval.report import (  # noqa: F401
     summary_string,
-    result_string,
     get_avg_scores,
     display_results,
     _summary_metric_keys,

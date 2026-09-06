@@ -170,6 +170,9 @@ def _single_metrics_worker(args):
 # `pm:` in a test entry does the same for one test; this overrides all of them.
 # See ubon_cstuff/docs/design/nrt_pm_and_detection_lanes.md.
 PM_OVERRIDE = None
+# debug switch: force the dict-based results harvest instead of the packed
+# blob (ledger 2026-09-06 Repo cleanup: was a globals() hook nothing set)
+FORCE_DICT_RESULTS = False
 
 
 
@@ -241,7 +244,7 @@ def run_single_shared(config, tests_to_run, desc, max_streams):
             # Stream create/run/destroy hold the GIL (pybind default) so
             # those calls stay serialized — no concurrent-create question.
             packed = (hasattr(upyc.c_track_stream, "get_results_packed")
-                      and not globals().get("_FORCE_DICT", False))
+                      and not FORCE_DICT_RESULTS)
             skip_rt = int(upyc.TRACK_FRAME_SKIP_FRAMERATE)
             from concurrent.futures import ThreadPoolExecutor
 

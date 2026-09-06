@@ -386,26 +386,6 @@ def search_test_batch(
     return out
 
 
-def search_test(
-    config,
-    params,
-    param_vec,
-    param_is_int,
-    param_min,
-    param_max,
-    all_results,
-    split="train",
-    logfile=None,
-    desc="search result",
-):
-    """Single-candidate wrapper over search_test_batch (kept for callers
-    and tests; the search loop batches)."""
-    (score, full_result, _groups) = search_test_batch(
-        config, params, [param_vec], param_is_int, param_min, param_max,
-        all_results, split=split, logfile=logfile, desc=desc)[0]
-    return score, full_result
-
-
 # THE objective config. There is exactly one, and search and eval BOTH read
 # it, so they cannot describe different datasets. Do not add a second file and
 # do not copy this one to change a field -- every knob an eval run needs is a

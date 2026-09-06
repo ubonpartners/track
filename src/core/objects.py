@@ -65,19 +65,6 @@ def object_interpolate(a, b, frac):
         obj.clip_embedding=b.clip_embedding
     return obj
 
-def object_class_remap(objects, initial_classes, target_classes):
-    if initial_classes==target_classes:
-        return objects
-    if target_classes is None:
-        return objects
-    remap=stuff.make_class_remap_table(initial_classes, target_classes)
-    ret=copy.deepcopy(objects)
-    for r in ret:
-        if r.cl in remap:
-            r.cl=remap[r.cl]
-        else:
-            r.cl=None
-    return [o for o in ret if o.cl is not None]
 
 class Object:
     def to_det(self):

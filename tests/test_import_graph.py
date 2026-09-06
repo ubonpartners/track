@@ -16,9 +16,7 @@ SRC = os.path.join(ROOT, "src")
 # and fail the test so a new file has to be placed deliberately.
 LAYER = {
     "paths": "paths",
-    "trackset": "core", "track_util": "core",
-    "upyc_tracker.upyc_tracker": "tracker", "trackers": "tracker",
-    "trackset_import": "corpus", "dataset_lite": "corpus",
+    "trackset": "core",
     "corpus_manifest": "corpus", "import_antare": "corpus",
     "autolabel_bridge": "corpus",
     "track_test": "eval", "eval_compare": "eval",

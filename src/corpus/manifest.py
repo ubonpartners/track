@@ -39,10 +39,6 @@ def T1():
     return paths.tier1()
 
 
-def T2():
-    return paths.tier2()
-
-
 # GT quality/capability registry — the SHARED authority both repos read
 # (autolabel: eval/gt_manifest.py loader; track: load_capabilities).
 # Declared at import, audit numbers written back by autolabel's
