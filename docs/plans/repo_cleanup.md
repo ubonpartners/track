@@ -604,6 +604,13 @@ Steps
 2. A documented manual command for the `gpu` and `data` suites on this
    box, in `docs/user_guides/`.
 
+As built: `.github/workflows/tests.yml` has a hosted `structure` job
+(graph, literal-path, comment-hygiene and paths tests; nothing else in
+the package imports without the private `stuff` and `ubon_pycstuff`)
+and a `unit` job on a self-hosted runner labelled `track`, enabled by
+the repository variable `TRACK_SELF_HOSTED=true` once a runner exists
+on the dev box. `docs/user_guides/testing.md` is the ladder.
+
 Review checklist
 
 - Does the CI environment have `stuff` and `ubon_pycstuff` importable?

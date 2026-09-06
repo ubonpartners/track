@@ -12,6 +12,8 @@ top of each before trusting a figure.
 - `import_and_annotation.md` — the three data tiers, what derive does, the annotation json format, importing a new dataset step by step, autolabel for unlabelled footage.
 - `optimization_flow.md` — tuning tracker parameters with `--search`: the objective, the algorithm, running and watching a search, reading the result, applying it via `--eval` and `eval_compare`.
 - `capacity_curve.md` — remaking the quality-vs-concurrent-streams chart: the x86 quality grid, the Jetson performance-mode sweep, the join and plot.
+- `testing.md` — the unit suite, the smoke eval and the by-hand corpus/eval checks; what CI can and cannot run.
+- `testing.md` — the unit suite, the smoke eval and the by-hand corpus/eval checks; what CI can and cannot run.
 
 ## specs/ — contracts
 

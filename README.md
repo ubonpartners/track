@@ -219,7 +219,7 @@ within the loaded config tree, and ambiguous repeated keys are rejected.
 
 ## Testing And Validation
 
-- `python -m pytest` runs the unit suite (`tests/`; no GPU or data needed)
+- `python -m pytest` runs the unit suite (`tests/`; no GPU or data needed); `docs/user_guides/testing.md` has the full ladder; `docs/user_guides/testing.md` has the full ladder
 - `python tests/smoke_eval.py --out DIR` runs a three-clip eval through the objective config; `--compare A B` diffs two runs exactly
 - `--test` benchmarks tracker configs over datasets with caching and summary tables
 - the replay viewer can inspect saved UBTRK2 runs directly
@@ -237,6 +237,8 @@ See also:
 
 - `docs/specs/TRACKER_DEBUG.md`
 - `docs/user_guides/import_and_annotation.md` — how video and GT are imported (tiers, derive, annotation format)
+- `docs/user_guides/testing.md` — unit suite, smoke eval, by-hand checks, CI
+- `docs/user_guides/testing.md` — unit suite, smoke eval, by-hand checks, CI
 - `docs/user_guides/optimization_flow.md` — tuning tracker parameters with `--search`, reading the result, applying it via `--eval` + eval_compare
 
 ## License

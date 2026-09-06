@@ -1,0 +1,42 @@
+# Two jobs (repo_cleanup.md stage 9):
+#
+#   structure  hosted runner, no private deps: the layering, literal-path
+#              and comment-hygiene tests plus the paths module. Everything
+#              else in the package imports `stuff` (private) and the eval
+#              runner imports `ubon_pycstuff` (compiled, private), so the
+#              unit suite cannot run on a hosted runner.
+#   unit       a self-hosted runner on a box with the dev environment
+#              (conda env dataset-processor2 with stuff + ubon_pycstuff).
+#              Register the runner with the labels [self-hosted, track];
+#              until one exists this job is skipped, not failed.
+#
+# The gpu and data suites (tracker runtime, /mldata corpora) are run by
+# hand on the dev box: see docs/user_guides/testing.md.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  structure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest pyyaml
+      - run: >
+          python -m pytest -q
+          tests/test_import_graph.py
+          tests/test_no_literal_paths.py
+          tests/test_comment_hygiene.py
+          tests/unit/test_paths.py
+
+  unit:
+    if: ${{ vars.TRACK_SELF_HOSTED == 'true' }}
+    runs-on: [self-hosted, track]
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m pytest -q -m "not gpu and not data"
