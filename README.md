@@ -49,7 +49,7 @@ checkout is `$AUTOLABEL_PATH`, else a sibling directory of this repo.
 | `src/eval/` | The eval engine: `matching` (IoU, conventions), `metrics` (MOT metrics, fitness), `runner` (work queue, shared-stream runner, `track_test`), `report` (rollups, json/html) |
 | `src/track_search.py` | Parameter search over `ubon_cstuff` config values |
 | `src/eval_compare.py` | Canonical comparator for two eval runs |
-| `src/trackset_import.py`, `src/import_antare.py` | Dataset importers: tier 0 -> tier 1 |
+| `src/corpus/importers.py`, `src/import_antare.py` | Dataset importers: tier 0 -> tier 1 (`src/formats/` holds the parsers, `src/corpus/media.py` the ffmpeg helpers) |
 | `src/corpus_manifest.py`, `src/dataset_lite.py` | Tier-1 manifest/registry and tier-2 eval-spec derivation |
 | `src/autolabel_bridge.py` | Optional bridge to the autolabel repo (auto-labelling, GT augmentation) |
 | `tools/` | Research and one-off tooling (cadence tests, capacity curve, quality grid, GPU attribution); not part of the package |

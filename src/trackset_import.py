@@ -27,9 +27,9 @@ from src.corpus.importers import (  # noqa: F401
     convert_bwc_videotext,
     reduce_dataset,
     apply_reduction,
+    fix_cevo25_vfr_times,
 )
 from src.corpus.migrations import (  # noqa: F401
     estimate_bdd_time_offsets,
-    fix_cevo25_vfr_times,
     dofix,
 )

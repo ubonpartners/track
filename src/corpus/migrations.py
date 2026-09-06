@@ -1,14 +1,15 @@
 """One-off data migrations that ran once against tier 1 (kept for the
 record until the ledger has their entries; deletion candidates,
-repo_cleanup.md stage 7): BDD100K time-offset restamp, cevo_april25 VFR
-restamp, the cevo yaml->json fix.
+repo_cleanup.md stage 7): the BDD100K time-offset restamp (added
+2026-07-22, git 69a1d55) and the cevo yaml->json fix (added 2026-07-19,
+git 977da71). Neither is called by any importer; the runs themselves
+were never ledgered.
 
 Moved verbatim from src/trackset_import.py (repo_cleanup.md stage 4b).
 """
 import json
 import os
 
-import numpy as np
 import stuff
 
 import src.paths as paths
@@ -92,63 +93,10 @@ def estimate_bdd_time_offsets(detector_cache_root=None):
         print(f"  {name}: offset {bo} (agreement {max(scores.values()):.2f})")
 
 
-def fix_cevo25_vfr_times(folder=None):
-    """Restamp cevo_april25 GT frame_times from the video's real decoded
-    PTS. Most of these cameras record variable frame rate (intervals
-    0.03-0.13s) but the annotations carried synthetic times from a
-    ROUNDED integer frame_rate, drifting seconds off video time by end of
-    clip (time-based scoring then matches tracker output against stale
-    GT). Frame ids are 0-based and dense, one per decoded frame, so frame
-    k's true time is the k-th display-ordered frame's PTS.
-
-    B-frame caveat: two clips were muxed with pts=dts (decode-order
-    stamps), so the decoder — which emits display order via picture-
-    order-count — yields locally swapped stamps. The stamp multiset is
-    still the display timeline (one frame per coded picture); sorting
-    reconstructs it exactly. Idempotent; safe to re-run."""
-    folder = folder or paths.tier1("cevo_april25")
-    import av
-    import numpy as np
-    for name in sorted(os.listdir(folder + "/annotation")):
-        if not name.endswith(".json"):
-            continue
-        ap = folder + "/annotation/" + name
-        vp = folder + "/video/" + name[:-5] + ".mp4"
-        if not os.path.isfile(vp):
-            print("fix_cevo25_vfr_times: no video for", name)
-            continue
-        d = json.load(open(ap))
-        times = []
-        with av.open(vp) as c:
-            stream = c.streams.video[0]
-            tb = float(stream.time_base)
-            for fr in c.decode(stream):
-                t = fr.pts if fr.pts is not None else fr.dts
-                times.append(float(t) * tb if t is not None else np.nan)
-        pts = np.asarray(times, np.float64)
-        if len(pts) > 1 and np.any(np.diff(pts) < 0):
-            pts = np.sort(pts)  # broken pts=dts muxing (see docstring)
-        pts = pts - pts[0]
-        if len(pts) != len(d["frames"]):
-            print(f"fix_cevo25_vfr_times: SKIP {name} "
-                  f"(pts {len(pts)} != frames {len(d['frames'])})")
-            continue
-        dt = np.diff(pts)
-        vfr = bool(len(dt) and np.median(dt) > 0
-                   and np.max(np.abs(dt - np.median(dt)))
-                   > 0.02 * np.median(dt))
-        for f in d["frames"]:
-            f["frame_time"] = round(float(pts[f["frame_id"]]), 6)
-        d["metadata"]["frame_rate"] = round(
-            float((len(pts) - 1) / max(pts[-1] - pts[0], 1e-9)), 6)
-        d["metadata"]["vfr"] = vfr
-        with open(ap, "w") as fh:
-            json.dump(d, fh, indent=4)
-        print("fix_cevo25_vfr_times: fixed", name, "vfr", vfr,
-              "frame_rate ->", d["metadata"]["frame_rate"])
-
-
 def dofix():
+    """cevo yaml -> json annotation fix: repoints original_video from the
+    old /tracking/video layout to /tracking/cevo/video and rewrites each
+    yaml as json. Added 2026-07-19 (git 977da71); nothing calls it."""
     dr=paths.tier2("cevo", "annotation")
     seqs=os.listdir(dr)
     for s in seqs:

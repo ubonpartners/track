@@ -118,7 +118,7 @@ Points that matter when writing an importer:
 2. **Write the importer.** Two parts: a parser in `src/formats/<name>.py`
    exposing `read(...) -> TrackSet` (one module per source format, unit
    tested on a tiny fixture in `tests/unit/test_formats.py`), and a
-   `convert_<name>` driver in `src/trackset_import.py` (or a standalone
+   `convert_<name>` driver in `src/corpus/importers.py` (or a standalone
    file such as `src/import_antare.py`) that walks the drop. The driver
    reads tier 0, copies or remuxes video into
    `/mldata/tracking_original/<corpus>/video/` and writes annotation
@@ -166,7 +166,7 @@ Points that matter when writing an importer:
 ## Videos with no labels: autolabel
 
 For footage with no GT at all, `convert_autolabel_folder` in
-`src/trackset_import.py` runs the autolabel pipeline over every mp4 in
+`src/corpus/importers.py` runs the autolabel pipeline over every mp4 in
 a folder and writes the result straight into tier 1 in the annotation
 format above. It needs the autolabel checkout next to this repo and a
 GPU environment. Autolabel always runs at the native frame rate; the

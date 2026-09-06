@@ -6,8 +6,6 @@ Moved verbatim from src/trackset_import.py (repo_cleanup.md stage 4b).
 """
 import os
 
-import cv2
-
 
 def _frame_pts_monotonic(path, fps):
     """True if decoded frame pts sit on a ~uniform 1/fps grid. Catches

@@ -410,7 +410,8 @@ own sub-stage with the full protocol.
 
 1. `corpus/media.py`: `_frame_pts_monotonic`, `_remux_to_mp4`,
    `_video_codec`, `_native_fps`, `_transcode_h264`, and the
-   roundabouthd `_transcode` closure. Stage 5 dedups them.
+   roundabouthd `_transcode` closure (in practice the closure stayed
+   inline in `convert_roundabouthd`; stage 5 lifts it with the rest).
 2. `corpus/importers.py`: every `convert_*`, `convert_autolabel_folder`,
    `reduce_dataset`, `apply_reduction`.
 3. `corpus/migrations.py`: `estimate_bdd_time_offsets`,

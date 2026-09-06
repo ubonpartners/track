@@ -1,6 +1,6 @@
 """Native-annotation parsers, one module per source format, each exposing
 `read(...) -> TrackSet` (repo_cleanup.md stage 3). Nothing here writes
-files; the tier-0 -> tier-1 converters in src/trackset_import.py call
+files; the tier-0 -> tier-1 converters in src/corpus/importers.py call
 these and do the copying.
 
 `load(path)` is the extension dispatch that TrackSet(path) used to do
