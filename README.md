@@ -1,251 +1,302 @@
 # Track
 
-`track` is now a thin Python tool around the `ubon_cstuff` / `ubon_pycstuff`
-tracking pipeline. It is responsible for:
+`track` is the evaluation, tuning and dataset harness for the Ubon
+tracking pipeline (`ubon_cstuff` / `ubon_pycstuff`). It answers three
+questions:
 
-- loading input sequence metadata files such as MOT-style JSON/INI annotations
-- running the `upyc` tracker on those inputs
-- evaluating results with MOT metrics
-- replaying tracked runs with debug overlays
-- comparing configs and searching parameters
-- reading and writing the canonical UBTRK2 tracker-run format
+- **How good is this tracker config?** Run it over a fixed set of
+  labelled clips and score it with MOT metrics against one agreed
+  objective (`eval`).
+- **Which parameter values make it better?** Coordinate-descent search
+  over the tracker config, scored on the same objective (`search`).
+- **Where do the labelled clips come from?** Importers that turn raw
+  dataset drops into a canonical corpus, and a derivation step that
+  produces the copies the tracker actually evaluates (`import`, `corpus`).
 
-The repo no longer supports `utrack`, `bytetrack`, or `botsort`.
+It also replays ground truth and tracked runs with overlays (`view`) and
+reads and writes the UBTRK2 tracker-run format shared with the other
+repos.
 
-## Getting Started
+The tracker itself lives in `ubon_cstuff`; this repo only drives it.
+Older trackers (`utrack`, `bytetrack`, `botsort`) are no longer supported.
+
+## Quick start
 
 ```bash
 git clone https://github.com/ubonpartners/track.git
 cd track
-conda env create -f environment.yml
+conda env create -f environment.yml      # or: pip install -r requirements.txt
 conda activate track
+python -m src.cli paths                  # where the code will look for data and configs
+python -m pytest -q                      # unit suite, a few seconds, no GPU or data
 python -m src.cli --help
 ```
 
-Runtime requirements:
+You need, beyond the Python environment:
 
-- `ubon_pycstuff` / `ubon_cstuff` for tracking and optional C metrics
-- `ffmpeg` on `PATH` for MP4 → H.264 conversion in the `upyc` path
-- datasets reachable under `/mldata/...` or via equivalent local layout
+- `ubon_pycstuff` importable (the compiled tracker runtime) for anything
+  that runs the tracker: `track`, `compare`, `eval`, `search`, `test`.
+- `ffmpeg` and `ffprobe` on `PATH` for imports and corpus derivation.
+- The data tree under `/mldata` (or your own layout, see
+  [Filesystem roots](#filesystem-roots)).
+- The `autolabel` repo checked out beside this one only for the
+  importers that auto-label unlabelled footage.
 
-## Filesystem roots
+The five commands you will use most:
 
-Every `/mldata` root the code uses is resolved in `src/paths.py` from
-`TRACK_*` environment variables (`TRACK_MLDATA`, `TRACK_TIER1`,
-`TRACK_TIER2`, `TRACK_CONFIG_DIR`, `TRACK_TRACKER_CONFIG`,
-`TRACK_SEARCH_YAML`, ...) with the dev-box layout as the default;
-`python -m src.cli paths` prints the resolved values. The autolabel
-checkout is `$AUTOLABEL_PATH`, else a sibling directory of this repo.
+```bash
+python -m src.cli eval --split val --results-location /mldata/results/eval/<name>   # score the current tracker config
+python -m src.eval_compare /mldata/results/eval/<before> /mldata/results/eval/<after>  # compare two eval runs
+python -m src.cli search /mldata/config/track/search/track_search_v11_mc.yaml       # tune parameters (about a day)
+python -m src.cli view /mldata/tracking/antare_bwc/annotation/pub-garden.json       # look at a clip's GT
+python tests/smoke_eval.py --out /mldata/results/cleanup/<name>                     # 15-second end-to-end check
+```
 
-## Repository Layout
+## Concepts
 
-| Path | Purpose |
-|------|---------|
-| `src/cli.py` | The command line: `python -m src.cli <verb>` (view, track, compare, eval, search, test, import, corpus, paths) |
-| `track.py` | Compatibility shim: old `--flag` forms translate to the verbs |
-| `src/core/` | `trackset` (TrackSet: json/yaml + UBTRK2 storage, interpolation), `objects` (Object helpers, drawing), `display` (replay viewer) |
-| `src/tracker/` | `upyc` (wrapper over `ubon_pycstuff`), `factory` (tracker creation), `run` (`import_create(ts, ...)`: drive a tracker into a TrackSet) |
-| `src/formats/` | One parser per native dataset format, `read(...) -> TrackSet`; `formats.load(path)` dispatches by extension |
-| `src/paths.py` | Every filesystem root, env-overridable |
-| `src/eval/` | The eval engine: `matching` (IoU, conventions), `metrics` (MOT metrics, fitness), `runner` (work queue, shared-stream runner, `track_test`), `report` (rollups, json/html) |
-| `src/track_search.py` | Parameter search over `ubon_cstuff` config values |
-| `src/eval_compare.py` | Canonical comparator for two eval runs |
-| `src/corpus/importers.py`, `src/import_antare.py` | Dataset importers: tier 0 -> tier 1 (`src/formats/` holds the parsers, `src/corpus/media.py` the ffmpeg helpers) |
-| `src/corpus/manifest.py`, `src/corpus/derive.py` | Tier-1 manifest/registry and tier-2 eval-spec derivation + check |
-| `src/autolabel_bridge.py` | Optional bridge to the autolabel repo (auto-labelling, GT augmentation) |
-| `tools/` | Research and one-off tooling (cadence tests, capacity curve, quality grid, GPU attribution); not part of the package |
-| `tests/` | pytest suite (`python -m pytest`); `tests/smoke_eval.py` is the three-clip eval smoke |
-| `docs/` | Guides, specs, plans, research logs; start at `docs/README.md` |
+### Data tiers
 
-## Supported Formats
+```
+/mldata/downloaded_datasets/        tier 0   raw drops, never modified
+/mldata/tracking_original/<corpus>/ tier 1   canonical import: video + GT + MANIFEST.json
+/mldata/tracking/<corpus>/          tier 2   derived eval copies: what eval and search read
+```
 
-### Input sequence metadata
+Tier 1 is the source of truth and the only input the autolabel repo
+reads. Tier 2 is disposable: every clip is the tier-1 clip capped at
+1280 on the long side, decimated to the tracker's analytics frame grid,
+re-encoded I+P with audio preserved, with the annotation subset to the
+retained frames. `python -m src.cli corpus derive <corpus>` regenerates
+it; `corpus check` verifies it is on spec. Full contract:
+`docs/specs/data_tiers_and_corpus_registry.md`.
 
-These remain supported as tracking inputs:
+### Annotations
 
-- MOT `seqinfo.ini` + `gt/gt.txt` and the other native dataset formats, via `src.formats.load()` (one parser per format under `src/formats/`)
-- JSON/YAML annotation files used as input sequence metadata, for example `/mldata/tracking/mot/annotation/MOT17-05.json`
-- Caltech `.vbb`
+One json per clip, the same shape in every tier and for tracked output:
 
-These are input formats, not the canonical stored tracker-result format.
+```jsonc
+{"metadata": {"frame_rate": 10.0, "width": 1280, "height": 960,
+              "classes": ["person", "vehicle", "other"],
+              "original_video": "/mldata/tracking/antare_bwc/video/pub-garden.mp4",
+              "box_convention": "visible", "hint": "bodycam", "lite": {...}},
+ "frames": [{"frame_id": 1, "frame_time": 0.0,
+             "objects": {"0": {"box": [x1, y1, x2, y2], "class": 0, "conf": 1.0}}}]}
+```
 
-### Stored tracker-result format
+Boxes are normalised to the frame, so a resolution change never touches
+the GT. `frame_time` is seconds on the timeline the tracker sees; eval
+interpolates GT between frames, so sparse keyframe GT is fine. Class
+`other` is an ignore region: neither a false negative when missed nor a
+false positive when matched.
 
-Tracked runs are stored in the canonical UBTRK2 container implemented in
-`stuff.ubtrk2`.
+### Corpora and the registry
 
-Container layout:
+Every tier-1 corpus carries a `MANIFEST.json` with file hashes and a
+capability block: box convention, completeness, and what the corpus may
+be used for. The registry is shared with the autolabel repo.
 
-1. top-level `ubtf` box (file header/version)
-2. top-level `meta` box (UTF-8 YAML metadata payload)
-3. repeated top-level `fram` boxes (one frame per processed frame)
+| corpus | camera | box convention | notes |
+|---|---|---|---|
+| mot (MOT17, MOT20) | static and moving | fullbody | crowd scenes, CC BY-NC-SA |
+| personpath22 | handheld | visible | keyframe GT |
+| jaad | dashcam | fullbody | selected subjects only |
+| cevo, cevo_april25 | static indoor | visible | internal captures |
+| chirla | static indoor | visible | multi-camera re-id |
+| uvg_vcm | static 4K | visible | professional labels |
+| antare_bwc | body-worn and fixed | visible | 25 staged-incident clips, dense GT, kept at native 10 fps |
+| bdd100k_mot | dashcam | fullbody | detection gating only |
+| roundabouthd | static 4K | visible | vehicles only |
+| meva, otw | static | fullbody / visible | actor GT augmented by autolabel; training only |
+| bwc-videotext, raw_movies | body-worn / movies | fullbody | autolabel output, no human GT |
 
-The same frame-record schema is intended for:
+### The objective
 
-- disk persistence
-- network transport
-- offline tracker-component analysis
+There is exactly one objective config:
+`/mldata/config/track/search/track_search_v11_mc.yaml`. `eval` with no
+path and `search` both read it, so they cannot describe different
+datasets. It lists 565 clips (339 train, 226 val), tags each with a
+`group` (`static`, `moving`, `movie`, plus cadence-test groups) and a
+`stream_hint`, names the 20 parameters the search may move, and names
+the score:
 
-### Metadata (`meta` box)
+- per clip and class, `fitness = MOTA - 0.35 * honest_fp_tracks_per_second - 0.002 * fp_per_frame`,
+  combined over classes as `fitness_multi` (person weight 1.0, vehicle 0.3);
+- summed within each group with a cap on any one clip's weight;
+- averaged across groups with `group_weights` into the `_groupmean` row.
 
-The metadata payload is UTF-8 YAML with stable string keys. Current keys written by `track` include:
+`_groupmean` is the number to quote. `_overall` is box-count weighted
+and is not the objective. Do not copy the yaml to change a field; every
+knob an eval needs is a command-line option. Details and history:
+`docs/user_guides/optimization_flow.md`.
 
-- `schema_version`
-- `kind`
-- `source_video`
-- `frame_rate`
-- `width`
-- `height`
-- `classes`
-- `payload_encoding`
+Eval output columns, in order: frames, unique objects, mostly / partially
+tracked and mostly lost fractions, missed fraction, false-positive
+tracks (raw and honest), FP per frame, FN per object, switches and
+fragmentations per object, IDF1, MOTA, MOTP, fitness, the vehicle
+variants, and `fitness_multi`.
 
-### Frame record
+## Command line
 
-Each `fram` box contains typed child boxes. Current frame payload includes:
+`python -m src.cli <verb> ...`. `--logging level[:console|file]` and
+`--pm N` (detector performance tier for eval/search/test streams, 0 is
+full resolution) go before the verb.
 
-- `fhdr`: frame header (`frame_time`, `result_type`, `motion_score`, `motion_roi`, `inference_roi`)
-- `trks`: tracked objects map
-- `dets`: optional detector output list
-- `dbug`: debug entry map
-- `imgp`: source image path (optional)
-- `xtra`: extension map for forward-compatible fields
+| verb | what it does | main options |
+|---|---|---|
+| `eval [yaml]` | the measurement path; no yaml means the objective config | `--split train\|val\|both`, `--results-location DIR`, `--tracker-config YAML` (A/B a tracker without editing the objective), `--permissive auto\|on\|off` |
+| `search YAML` | coordinate-descent parameter search | see the optimisation guide |
+| `test YAML` | benchmark several tracker configs over datasets from a test yaml | |
+| `track GT.json` | track one clip with one config and print metrics | `--config`, `--display`, `--output mp4`, `--save-trackset run.ubtrk2`, `--proxy addr:port` |
+| `compare YAML` | several configs over one clip with per-frame MOTA | `--no-display` |
+| `view PATH` | replay a GT json or a `.ubtrk2` run with boxes | |
+| `import CORPUS` | tier 0 to tier 1 for a known dataset (`mot`, `jaad`, `meva`, `antare`, ...) | `--amodal` (personpath22) |
+| `corpus build\|verify\|derive\|check CORPUS...` | manifest, hash check, tier-2 derivation, conformance check | `--hint static\|bodycam`, `--divisor N`, `--max-seconds S`, `--purge-legacy` |
+| `paths` | print every filesystem root in effect | |
 
-### Objects
+`python track.py --flag` forms from before the CLI rewrite still work
+and print the equivalent verb.
 
-`objects` is a map keyed by `track_id`.
+`python -m src.eval_compare DIR [DIR ...]` prints two or more eval runs
+side by side: both objective rows, the group breakdown and the biggest
+per-clip movers. The first directory is the baseline.
 
-Current stored object fields use detector-aligned names:
+## Workflows
 
-- `class`
-- `confidence`
-- `box`
-- `subbox`
-- `subbox_conf`
-- `face_points`
-- `pose_points`
-- `attrs`
-- `reid_vector`
-- `face_embedding`
-- `clip_embedding`
-- `face_jpeg`
-- `clip_jpeg`
-- `fiqa_score`
+**Evaluate a tracker change.** Run the objective on val before and
+after, compare, and quote the group-mean row. Eval runs use exact-shape
+detector batching and disable faces, CLIP and audio, so their scores
+are comparable with each other but not with production numbers. Repeat
+runs of the same code agree to about 0.0003.
 
-### Debug
+```bash
+python -m src.cli eval --split val --results-location /mldata/results/eval/before
+python -m src.cli eval --split val --results-location /mldata/results/eval/after --tracker-config /path/candidate.yaml
+python -m src.eval_compare /mldata/results/eval/before /mldata/results/eval/after
+```
 
-`debug` is a map of named debug entries. Viewer-supported typed entries currently include:
+**Tune parameters.** One iteration probes one parameter up and down
+over the train split, about three minutes; a full search over the
+current parameter set is roughly a day. The results directory gets a
+text log, a live HTML report and a journal that `resume_from` can
+continue. Apply the winning values to the production config only with
+explicit approval. Guide: `docs/user_guides/optimization_flow.md`.
 
-- `detections`
-- `roi`
-- `box_prediction`
-- `motion_field`
-- `cost_map`
+**Import a dataset.** Write a parser in `src/formats/<name>.py`
+(`read(...) -> TrackSet`, unit-tested on a five-line fixture) and a
+`convert_<name>` driver in `src/corpus/importers.py`, declare the corpus
+in `src/corpus/manifest.py`, then build, derive, check and register the
+clips in the objective yaml. Check the frame-index convention of every
+new source by drawing its boxes on extracted frames; it has been wrong
+before. Guide: `docs/user_guides/import_and_annotation.md`.
 
-Large arrays, vectors, embeddings, and JPEG blobs are stored inline as typed
-payload wrappers rather than in sidecar files.
+**Debug one clip.** `view` for the GT, `track --display --save-trackset`
+to watch and keep a run, `view run.ubtrk2` to replay it later with the
+debug overlays (detections, ROI, box prediction, motion field, cost
+map).
 
-For low-level container and payload wrapper documentation, see the
-`stuff` repo README and its `ubtrk2` module.
+## Repository layout
 
-## CLI Workflows
-
-The command line is `python -m src.cli <verb> ...` (`--help` lists the
-verbs: view, track, compare, eval, search, test, import, corpus, paths).
-The old `python track.py --flag` forms still work and print the new
-spelling:
-
-| old | new |
+| path | contents |
 |---|---|
-| `python track.py --eval [yaml] --eval-split val --results-location D` | `python -m src.cli eval [yaml] --split val --results-location D` |
-| `python track.py --search s.yaml` | `python -m src.cli search s.yaml` |
-| `python track.py --test t.yaml` | `python -m src.cli test t.yaml` |
-| `python track.py --track --trackset g.json --config c.yaml --display` | `python -m src.cli track g.json --config c.yaml --display` |
-| `python track.py --view --trackset x` | `python -m src.cli view x` |
-| `python track.py --compare c.yaml` | `python -m src.cli compare c.yaml` |
-| `python track.py --mot` (and `--jaad`, `--meva`, ...) | `python -m src.cli import mot` |
-| `python -m src.corpus.manifest build\|verify\|derive\|check <corpus>` | `python -m src.cli corpus build\|verify\|derive\|check <corpus>` |
-| `python track.py --paths` | `python -m src.cli paths` |
+| `src/cli.py` | the command line; `track.py` at the root is the compatibility shim |
+| `src/paths.py` | every filesystem root, read from `TRACK_*` variables |
+| `src/core/` | `trackset` (TrackSet: json/yaml and UBTRK2 storage, time interpolation), `objects` (Object, drawing), `display` (viewer) |
+| `src/formats/` | one parser per dataset format; `formats.load(path)` dispatches by extension |
+| `src/corpus/` | `importers` (tier 0 to 1), `manifest` (registry, build, verify), `derive` (tier 2 and check), `media` (every ffprobe/ffmpeg call) |
+| `src/tracker/` | `upyc` (wrapper over `ubon_pycstuff`), `factory`, `run` (`import_create(ts, ...)` drives a tracker into a TrackSet) |
+| `src/eval/` | `matching` (IoU, box conventions), `metrics` (MOT metrics, honest FP, fitness), `runner` (work queue and shared-stream runner), `report` (rollups, json and html) |
+| `src/track_search.py`, `src/eval_compare.py` | the search loop and the run comparator |
+| `src/autolabel_bridge.py`, `src/import_antare.py` | the autolabel bridge and the antare importer |
+| `src/track_test.py`, `src/trackset.py`, `src/corpus_manifest.py` | re-export shims kept for the autolabel repo; do not import them |
+| `tools/` | research tooling outside the package: cadence tests, capacity curve, quality grid, GPU attribution |
+| `tests/` | pytest suite; `tests/smoke_eval.py` is the end-to-end smoke |
+| `docs/` | guides, specs, plans, research logs and the decision ledger; start at `docs/README.md` |
 
-`--pm N` and `--logging` go before the verb.
+Layering is enforced by `tests/test_import_graph.py`: `core` imports
+only `paths`; `formats` imports `core`; `corpus` imports `core` and
+`formats`; `eval` imports `core` and `tracker`; `search` imports `eval`
+and `corpus`; `cli` imports everything. `tests/test_no_literal_paths.py`
+keeps every `/mldata` literal inside `paths.py`, and
+`tests/test_comment_hygiene.py` keeps dated stories out of code comments
+and in `docs/ledger.md`.
 
-### View a sequence or tracked run
+## Configuration
+
+### Filesystem roots
+
+`src/paths.py` resolves every root at call time from the environment,
+defaulting to the dev-box layout:
+
+| variable | default |
+|---|---|
+| `TRACK_MLDATA` | `/mldata` |
+| `TRACK_DOWNLOADS` | `$TRACK_MLDATA/downloaded_datasets` |
+| `TRACK_TIER1` | `$TRACK_MLDATA/tracking_original` |
+| `TRACK_TIER2` | `$TRACK_MLDATA/tracking` |
+| `TRACK_RESULTS` | `$TRACK_MLDATA/results` |
+| `TRACK_CONFIG_DIR` | `$TRACK_MLDATA/config/track` |
+| `TRACK_TRACKER_CONFIG` | `$TRACK_CONFIG_DIR/trackers/uc_v11.yaml` |
+| `TRACK_SEARCH_YAML` | `$TRACK_CONFIG_DIR/search/track_search_v11_mc.yaml` |
+| `AUTOLABEL_PATH` | the `autolabel` directory beside this repo |
+
+`python -m src.cli paths` prints what is in effect.
+
+### The tracker config
+
+`/mldata/config/track/trackers/uc_v11.yaml` is the production tracker
+config, shared by every deployed box. Nothing in this repo edits it.
+Eval-time changes go into the objective yaml's `main_config_override`
+block or into `--tracker-config`; production changes need explicit
+per-change approval.
+
+## Stored run format (UBTRK2)
+
+Tracked runs are stored in the UBTRK2 container implemented in the
+`stuff` repo (`stuff.ubtrk2`): a `ubtf` header box, a `meta` box with a
+UTF-8 YAML payload (`schema_version`, `kind`, `source_video`,
+`frame_rate`, `width`, `height`, `classes`, `payload_encoding`), then one
+`fram` box per processed frame holding `fhdr` (frame time, result type,
+motion score, motion and inference ROIs), `trks` (objects by track id
+with detector-aligned fields: class, confidence, box, subbox, face and
+pose points, attributes, re-id, face and CLIP embeddings, JPEG crops),
+optional `dets`, `dbug` and `imgp`, and an `xtra` extension map. Large
+arrays and blobs are stored inline as typed payloads. The container is
+documented and tested in `stuff`; how this repo uses it for replay,
+metrics and analysis is `docs/specs/TRACKER_DEBUG.md`.
+
+## Testing
 
 ```bash
-python -m src.cli view /path/to/input.json
-python -m src.cli view /path/to/run.ubtrk2
+python -m pytest -q                                   # unit suite, seconds, no GPU or data
+python tests/smoke_eval.py --out /mldata/results/cleanup/<name>          # 3 clips through the objective, ~15 s
+python tests/smoke_eval.py --compare <previous dir> /mldata/results/cleanup/<name>
+python -m src.cli corpus verify antare_bwc && python -m src.cli corpus check antare_bwc
 ```
 
-The viewer accepts:
+The smoke compare must report every cell identical; differences under
+1e-9 relative are summation noise and reported as such. CI
+(`.github/workflows/tests.yml`) runs the structure tests on a hosted
+runner and the full unit suite on a self-hosted one, since the package
+needs the private `stuff` and `ubon_pycstuff`. The full ladder is in
+`docs/user_guides/testing.md`.
 
-- input sequence metadata files
-- UBTRK2 tracked-run files
+## Documentation
 
-### Run tracking, evaluate, and save a tracked run
-
-```bash
-python -m src.cli track /mldata/tracking/mot/annotation/MOT17-05.json \
-  --config /mldata/config/track/trackers/uc_v11.yaml \
-  --save-trackset /tmp/MOT17-05.ubtrk2 \
-  --display
-```
-
-This will:
-
-- load the input sequence metadata
-- run the `upyc` tracker
-- compute metrics
-- optionally display the run
-- optionally save the full tracked run in UBTRK2 format
-
-### Benchmark suites
-
-```bash
-python -m src.cli test configs/tests.yaml
-```
-
-### Compare configs
-
-```bash
-python -m src.cli compare compare.yaml
-```
-
-### Parameter search
-
-```bash
-python -m src.cli search configs/search.yaml
-```
-
-Search now assumes `upyc`-style configs only. Parameters are found by key name
-within the loaded config tree, and ambiguous repeated keys are rejected.
-
-## Testing And Validation
-
-- `python -m pytest` runs the unit suite (`tests/`; no GPU or data needed); `docs/user_guides/testing.md` has the full ladder; `docs/user_guides/testing.md` has the full ladder
-- `python tests/smoke_eval.py --out DIR` runs a three-clip eval through the objective config; `--compare A B` diffs two runs exactly
-- `--test` benchmarks tracker configs over datasets with caching and summary tables
-- the replay viewer can inspect saved UBTRK2 runs directly
-- the UBTRK2 run format is tested in the shared `stuff` repo
-
-## Format Documentation
-
-Format documentation is intentionally split by ownership:
-
-- `stuff`: authoritative low-level UBTRK2 container and payload encoding docs
-- `track`: how tracker runs use that format for replay, metrics, and analysis
-- `ubon_cstuff`: runtime result/debug schema emitted before serialization
-
-See also:
-
-- `docs/specs/TRACKER_DEBUG.md`
-- `docs/user_guides/import_and_annotation.md` — how video and GT are imported (tiers, derive, annotation format)
-- `docs/user_guides/testing.md` — unit suite, smoke eval, by-hand checks, CI
-- `docs/user_guides/testing.md` — unit suite, smoke eval, by-hand checks, CI
-- `docs/user_guides/optimization_flow.md` — tuning tracker parameters with `--search`, reading the result, applying it via `--eval` + eval_compare
+- `docs/README.md` — index of everything below.
+- `docs/user_guides/import_and_annotation.md` — tiers, derive, the annotation format, importing a dataset.
+- `docs/user_guides/optimization_flow.md` — the objective, the search algorithm, running and reading a search, applying the result.
+- `docs/user_guides/testing.md` — the test ladder and CI.
+- `docs/user_guides/capacity_curve.md` — quality versus concurrent streams.
+- `docs/specs/data_tiers_and_corpus_registry.md` — the tier contract and the registry shared with autolabel.
+- `docs/specs/TRACKER_DEBUG.md` — the UBTRK2 result and debug format.
+- `docs/ledger.md` — dated decisions and incidents; code comments point here.
+- `docs/plans/repo_cleanup.md` — the 2026-09 restructuring and its reviews.
 
 ## License
 
 Dual license:
-- **AGPL** (non-commercial)
-- **Ubon Cooperative License** ([https://github.com/ubonpartners/license/blob/main/LICENSE](https://github.com/ubonpartners/license/blob/main/LICENSE))
 
-Questions? contact bernandocribbenza@gmail.com (subject `yolo-dpa question`).
+- **AGPL** (non-commercial)
+- **Ubon Cooperative License** (https://github.com/ubonpartners/license/blob/main/LICENSE)
+
+Questions: bernandocribbenza@gmail.com (subject `yolo-dpa question`).
