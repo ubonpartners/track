@@ -39,7 +39,7 @@ Runtime requirements:
 | `src/upyc_tracker/` | Python wrapper over `ubon_pycstuff` tracking results |
 | `src/track_test.py` | MOT metrics, detection metrics, benchmark/test orchestration |
 | `src/track_search.py` | Parameter search over `ubon_cstuff` config values |
-| `TRACKER_DEBUG.md` | Detailed tracker-result/debug format and migration/design notes |
+| `docs/specs/TRACKER_DEBUG.md` | Detailed tracker-result/debug format and migration/design notes |
 
 ## Supported Formats
 
@@ -202,7 +202,9 @@ Format documentation is intentionally split by ownership:
 
 See also:
 
-- `TRACKER_DEBUG.md`
+- `docs/specs/TRACKER_DEBUG.md`
+- `docs/user_guides/import_and_annotation.md` — how video and GT are imported (tiers, derive, annotation format)
+- `docs/user_guides/optimization_flow.md` — tuning tracker parameters with `--search`, reading the result, applying it via `--eval` + eval_compare
 
 ## License
 

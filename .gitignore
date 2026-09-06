@@ -4,12 +4,6 @@ __pycache__/
 *.pyo
 .pytest_cache/
 
-# The ml/ subproject: ~11 GB of weights/datasets alongside its source. Untracked
-# wholesale so `git add -A` cannot walk it (it hung on exactly that). If its
-# SOURCE should be versioned, track it deliberately rather than by unignoring
-# this — the data underneath must never enter the history.
-/ml/
-
 # Scratch dirs that hold run output only
 /tmp/
 /runs/
@@ -17,12 +11,6 @@ __pycache__/
 # IDE / agent state
 .claude/
 .vscode/
-
-# Existing scratch
-results/
-REVIEW.md
-tss.py
-wc
 
 # track_analysis.py run output trees
 runs/track_analysis/
