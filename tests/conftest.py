@@ -51,5 +51,5 @@ def tiny_trackset_json(tmp_path):
 @pytest.fixture
 def tiny_trackset(tiny_trackset_json):
     """The same clip loaded as a TrackSet."""
-    import src.trackset as ts
+    import src.core.trackset as ts
     return ts.TrackSet(tiny_trackset_json)

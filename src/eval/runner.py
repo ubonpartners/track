@@ -11,7 +11,8 @@ import os
 import pickle
 import time
 import stuff
-import src.trackset as ts
+import src.core.trackset as ts
+import src.tracker.run as tracker_run
 
 from src.eval.metrics import score_tracksets
 from src.eval.report import _write_eval_summary_json, display_results
@@ -23,7 +24,7 @@ def track_test_work_fn(params, mpwq_context, mpwq_progress_fn):
     trackset=ts.TrackSet()
     trackset_gt=ts.TrackSet(params["ds_path"])
     logging.debug(f"import create")
-    trackset.import_create(trackset_gt,
+    tracker_run.import_create(trackset, trackset_gt,
                            track_min_interval=params["min_interval"],
                            display=params["display"],
                            config_file=params["config"],
@@ -141,12 +142,12 @@ def _single_metrics_worker(args):
     """CPU pool worker for the single-shared-state path: GT load + results
     conversion + scoring. No GPU, no CUDA context."""
     (params, track_results, class_names, attr_names) = args
-    from src.upyc_tracker.upyc_tracker import upyc_results_view
+    from src.tracker.upyc import upyc_results_view
     target_classes = params.get("target_classes", ["person", "face"])
     view = upyc_results_view(track_results, class_names, attr_names, target_classes)
     trackset_gt = ts.TrackSet(params["ds_path"])
     trackset = ts.TrackSet()
-    trackset.import_create(trackset_gt,
+    tracker_run.import_create(trackset, trackset_gt,
                            track_min_interval=params["min_interval"],
                            display=params["display"],
                            config_file=None,
@@ -189,10 +190,10 @@ def run_single_shared(config, tests_to_run, desc, max_streams):
     pump never waits on metrics. Replaces 8 processes x 8 engine copies
     with 1 x 1 and much higher stream concurrency."""
     import ubon_pycstuff.ubon_pycstuff as upyc
-    from src.upyc_tracker.upyc_tracker import trim_aux_outputs, h264_for_video
+    from src.tracker.upyc import trim_aux_outputs, h264_for_video
     from multiprocessing import Pool
     from collections import deque
-    import src.trackset as _  # noqa: ensure module import before workers fork
+    import src.core.trackset as _  # noqa: ensure module import before workers fork
 
     by_test = {}
     for p in tests_to_run:

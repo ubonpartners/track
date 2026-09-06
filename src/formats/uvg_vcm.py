@@ -6,7 +6,7 @@ stage 3): `read_into(ts, ...)` is the original body with `self` renamed
 """
 import json
 
-from src.trackset import TrackSet
+from src.core.trackset import TrackSet
 
 
 def read(annotation_json_path, video_path, width, height, fps):

@@ -1,9 +1,8 @@
 """The allowed intra-package import graph (repo_cleanup.md section 2).
 
 Each module is assigned a layer; an import is allowed only along the
-listed edges. xfail(strict) until the split in stage 4/5 lands: the test
-runs the real check today and must FAIL for the right reason (the god
-modules violate the layering), then flip to a plain test.
+listed edges. Live since stage 4c (the last violation, trackset ->
+trackers, went with import_create into src/tracker/run.py).
 """
 import ast
 import os
@@ -26,7 +25,8 @@ LAYER = {
     "track_search": "search",
 }
 # subpackages: every module under the prefix belongs to the layer
-PREFIX_LAYER = {"formats.": "formats", "eval.": "eval", "corpus.": "corpus"}
+PREFIX_LAYER = {"formats.": "formats", "eval.": "eval", "corpus.": "corpus",
+                "core.": "core", "tracker.": "tracker"}
 ALLOWED = {
     "paths": set(),
     "core": {"paths"},
@@ -94,7 +94,6 @@ def violations():
     return bad
 
 
-@pytest.mark.xfail(strict=True, reason="stage 4/5 of repo_cleanup.md: god modules still cross layers")
 def test_import_graph():
     bad = violations()
     assert not bad, "\n".join(bad)

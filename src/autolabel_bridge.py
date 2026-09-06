@@ -124,7 +124,7 @@ def augment_trackset_file(anno_path, video_path=None, min_conf=0.55,
     None if the file was already augmented.
     """
     import numpy as np
-    import src.trackset as trackset
+    import src.core.trackset as trackset
 
     doc = json.load(open(anno_path))
     meta = doc.get("metadata", {})

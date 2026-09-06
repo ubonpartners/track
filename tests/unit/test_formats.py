@@ -68,7 +68,7 @@ def test_mot(tmp_path):
 
 
 def test_trackset_no_longer_parses_native_formats(tmp_path):
-    import src.trackset as tsmod
+    import src.core.trackset as tsmod
     p = tmp_path / "seqinfo.ini"
     p.write_text("[Sequence]\n")
     with pytest.raises(ValueError, match="src.formats.load"):

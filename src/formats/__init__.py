@@ -9,7 +9,7 @@ only reads track's own formats (UBTRK2, json/yaml).
 """
 import stuff
 
-from src.trackset import TrackSet
+from src.core.trackset import TrackSet
 
 
 def load(path, **kw):

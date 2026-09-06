@@ -5,7 +5,7 @@
 
 import json
 
-import src.trackset as ts
+import src.core.trackset as ts
 import src.eval.metrics as eval_metrics
 import src.eval.report as eval_report
 

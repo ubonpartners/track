@@ -4,7 +4,7 @@ Moved verbatim from TrackSetImportersMixin.import_personpath22 (repo_cleanup.md
 stage 3): `read_into(ts, ...)` is the original body with `self` renamed
 `ts`; `read(...)` builds a fresh TrackSet and fills it.
 """
-from src.trackset import TrackSet
+from src.core.trackset import TrackSet
 
 
 def read(sample_uid, sample_dict, video_path):

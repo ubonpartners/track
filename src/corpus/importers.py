@@ -15,7 +15,7 @@ from src.corpus.media import _native_fps, _remux_to_mp4, _transcode_h264, _video
 from src.corpus.migrations import fix_cevo25_vfr_times
 from src.formats import chirla as fmt_chirla, jaad as fmt_jaad, meva as fmt_meva, mot as fmt_mot, otw as fmt_otw, personpath22 as fmt_personpath22, roundabouthd as fmt_roundabouthd, uvg_vcm as fmt_uvg_vcm
 import src.paths as paths
-import src.trackset as trackset
+import src.core.trackset as trackset
 
 
 def convert_mot(lite=True):

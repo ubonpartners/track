@@ -10,7 +10,7 @@ import json
 
 import numpy as np
 
-import src.trackset as ts
+import src.core.trackset as ts
 import src.eval.matching as eval_matching
 import src.eval.metrics as eval_metrics
 from stuff import coord

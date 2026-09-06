@@ -8,7 +8,7 @@ import configparser
 import os
 import numpy as np
 
-from src.trackset import TrackSet
+from src.core.trackset import TrackSet
 
 
 def read(seqinfo_path):

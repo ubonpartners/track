@@ -7,7 +7,7 @@ stage 3): `read_into(ts, ...)` is the original body with `self` renamed
 import cv2
 import xml.etree.ElementTree as ET
 
-from src.trackset import TrackSet
+from src.core.trackset import TrackSet
 
 
 def read(annotation_xml_path, video_path):

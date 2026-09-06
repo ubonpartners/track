@@ -7,7 +7,7 @@ stage 3): `read_into(ts, ...)` is the original body with `self` renamed
 import json
 import cv2
 
-from src.trackset import TrackSet
+from src.core.trackset import TrackSet
 
 
 def read(annotation_json_path, video_path):

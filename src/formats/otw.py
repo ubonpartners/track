@@ -6,7 +6,7 @@ stage 3): `read_into(ts, ...)` is the original body with `self` renamed
 """
 import cv2
 
-from src.trackset import TrackSet
+from src.core.trackset import TrackSet
 
 
 def read(video_id, rows, video_path):

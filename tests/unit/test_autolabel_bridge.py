@@ -201,7 +201,7 @@ def test_autolabel_export_contract_reads():
     if not os.path.isfile(golden):
         import pytest
         pytest.skip("autolabel repo not present")
-    import src.trackset as trackset
+    import src.core.trackset as trackset
     ts = trackset.TrackSet(golden)
     assert ts.metadata["classes"] == ["person", "vehicle", "other"]
     # TrackSet normalizes away frame_id; the contract surface here is
